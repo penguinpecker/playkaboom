@@ -1,73 +1,102 @@
 "use client";
 import { Grid } from "@/components/game/Grid";
 import { BetControls } from "@/components/game/BetControls";
-import { useGameStore } from "@/stores/game-store";
-import { useVault } from "@/hooks/use-vault";
+import { useGame } from "@/hooks/useGame";
+import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
+import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 
 export default function PlayPage() {
-  const sessionPnl = useGameStore((s) => s.sessionPnl);
-  const sessionGames = useGameStore((s) => s.sessionGames);
-  const { data: vault } = useVault();
-
+  const { state } = useGame();
+  const { data: vaultBal } = useVaultBalance();
+  const { data: vaultHealth } = useVaultHealth();
+  const { data: gameCount } = useGameCounter();
   return (
-    <div className="kinetic-grid min-h-screen px-6 pb-16 lg:px-8">
-      <div className="mb-10 flex items-end justify-between">
+    <div className="px-6 lg:px-8 pb-16 min-h-screen kinetic-grid">
+      <div className="flex justify-between items-end mb-10">
         <div>
-          <h1 className="mb-2 font-headline text-4xl font-black italic uppercase tracking-tighter">
-            Tactical grid <span className="text-primary-container">v0.1</span>
+          <h1 className="font-headline text-4xl font-black italic tracking-tighter uppercase text-on-surface mb-2">
+            Tactical Grid <span className="text-primary-container">v0.1</span>
           </h1>
-          <p className="flex items-center gap-2 font-headline text-xs uppercase tracking-[0.3em] text-on-surface-variant">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-tertiary-container" />
-            SYSTEM ACTIVE
+          <p className="font-headline text-xs tracking-[0.3em] text-on-surface-variant flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-tertiary-container animate-pulse" />
+            SYSTEM_ACTIVE // {CLUSTER_LABEL[CLUSTER].toUpperCase()}
           </p>
         </div>
-        <div className="hidden gap-4 lg:flex">
-          <KPI
-            label="Session PnL"
-            value={`${sessionPnl >= 0 ? "+" : ""}${sessionPnl.toFixed(3)} SOL`}
-            color={sessionPnl >= 0 ? "text-primary" : "text-error"}
-          />
-          <KPI label="Games" value={sessionGames.toString()} color="text-secondary" />
-          <KPI label="Vault" value={`${vault?.healthPct ?? "—"}%`} color="text-tertiary" />
+        <div className="hidden lg:flex gap-4">
+          <div className="bg-surface-container-high p-4 stealth-card border-l-2 border-primary">
+            <div className="font-headline text-[10px] tracking-widest text-on-surface-variant uppercase mb-1">
+              Session PnL
+            </div>
+            <div
+              className={`font-headline text-2xl font-bold ${state.sessionPnl >= 0 ? "text-primary" : "text-error"}`}
+            >
+              {state.sessionPnl >= 0 ? "+" : ""}
+              {state.sessionPnl.toFixed(3)} SOL
+            </div>
+          </div>
+          <div className="bg-surface-container-high p-4 stealth-card border-l-2 border-secondary">
+            <div className="font-headline text-[10px] tracking-widest text-on-surface-variant uppercase mb-1">
+              Games Played
+            </div>
+            <div className="font-headline text-2xl font-bold text-secondary">
+              {state.sessionGames}
+            </div>
+          </div>
+          <div className="bg-surface-container-high p-4 stealth-card border-l-2 border-tertiary">
+            <div className="font-headline text-[10px] tracking-widest text-on-surface-variant uppercase mb-1">
+              Vault Health
+            </div>
+            <div className="font-headline text-2xl font-bold text-tertiary">
+              {vaultHealth ? vaultHealth.toString() : "—"}%
+            </div>
+          </div>
         </div>
       </div>
-
       <div className="grid grid-cols-12 gap-8">
-        <div className="col-span-12 space-y-6 lg:col-span-4">
+        <div className="col-span-12 lg:col-span-4 space-y-6">
           <BetControls />
-          <section className="stealth-card border border-outline-variant/10 bg-surface-container-low p-6">
-            <h2 className="mb-4 font-headline text-xs font-bold uppercase tracking-widest text-on-surface">
-              On-chain stats
+          <section className="bg-surface-container-low p-6 stealth-card border border-outline-variant/10">
+            <h2 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-4">
+              On-Chain Stats
             </h2>
-            <Row label="Vault balance" value={`${vault?.balanceSol.toFixed(2) ?? "—"} SOL`} color="text-primary" />
-            <Row label="Total games" value={`${vault?.config?.totalGames.toString() ?? "—"}`} color="text-secondary" />
-            <Row label="Health" value={`${vault?.healthPct ?? "—"}%`} color="text-emerald" />
+            <div className="space-y-3">
+              <div className="flex justify-between items-center py-2 border-b border-outline-variant/10">
+                <span className="font-headline text-[10px] text-on-surface-variant">
+                  Vault Balance
+                </span>
+                <span className="font-headline text-[10px] text-primary">
+                  {vaultBal ? Number((Number(vaultBal) / 1e9).toFixed(2)).toFixed(2) : "—"} SOL
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-outline-variant/10">
+                <span className="font-headline text-[10px] text-on-surface-variant">
+                  Total Games
+                </span>
+                <span className="font-headline text-[10px] text-secondary">
+                  {gameCount ? gameCount.toString() : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-outline-variant/10">
+                <span className="font-headline text-[10px] text-on-surface-variant">
+                  Vault Health
+                </span>
+                <span className="font-headline text-[10px] text-emerald">
+                  {vaultHealth ? vaultHealth.toString() : "—"}%
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2">
+                <span className="font-headline text-[10px] text-on-surface-variant">Chain</span>
+                <span className="font-headline text-[10px] text-on-surface-variant">
+                  {CLUSTER_LABEL[CLUSTER]}
+                </span>
+              </div>
+            </div>
           </section>
         </div>
         <div className="col-span-12 lg:col-span-8">
           <Grid />
         </div>
       </div>
-    </div>
-  );
-}
-
-function KPI({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="stealth-card border-l-2 border-primary bg-surface-container-high p-4">
-      <div className="mb-1 font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
-        {label}
-      </div>
-      <div className={`font-headline text-2xl font-bold ${color}`}>{value}</div>
-    </div>
-  );
-}
-
-function Row({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div className="flex items-center justify-between border-b border-outline-variant/10 py-2">
-      <span className="font-headline text-[10px] text-on-surface-variant">{label}</span>
-      <span className={`font-headline text-[10px] ${color}`}>{value}</span>
     </div>
   );
 }

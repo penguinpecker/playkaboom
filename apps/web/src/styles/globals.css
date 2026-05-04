@@ -1,72 +1,98 @@
+@import '@fontsource/space-grotesk/300.css';
+@import '@fontsource/space-grotesk/400.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/600.css';
+@import '@fontsource/space-grotesk/700.css';
+@import '@fontsource/inter/300.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import 'material-symbols/outlined.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --surface: 12 14 18;
-  --surface-bright: 30 34 42;
-  --surface-container-lowest: 8 10 14;
-  --surface-container-low: 16 18 24;
-  --surface-container: 22 25 33;
-  --surface-container-high: 28 32 42;
-  --surface-container-highest: 36 40 52;
-  --on-surface: 230 232 238;
-  --on-surface-variant: 156 162 178;
-  --outline-variant: 70 76 92;
-  --primary: 164 201 255;
-  --primary-container: 116 156 220;
-  --on-primary: 6 24 56;
-  --secondary: 196 168 240;
-  --secondary-container: 128 96 188;
-  --tertiary: 252 130 122;
-  --tertiary-container: 200 80 80;
-  --emerald: 76 200 142;
-  --amber: 240 180 80;
-  --error: 240 100 96;
-}
+:root { color-scheme: dark; }
 
-html,
 body {
-  background: rgb(var(--surface));
-  color: rgb(var(--on-surface));
+  background: #1b0639;
+  color: #ecdcff;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+}
+
+::selection { background: #a4c9ff; color: #00315d; }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: #160234; }
+::-webkit-scrollbar-thumb { background: #414751; border-radius: 2px; }
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  font-feature-settings: 'liga';
   -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+.mi {
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-@layer components {
-  .stealth-card {
-    @apply shadow-[0_2px_18px_rgba(0,0,0,0.4)];
-  }
-  .glow-primary {
-    box-shadow: 0 0 32px rgba(164, 201, 255, 0.18);
-  }
-  .gem-glow {
-    box-shadow: inset 0 0 24px rgba(164, 201, 255, 0.18);
-  }
-  .boom-glow {
-    box-shadow: inset 0 0 24px rgba(252, 130, 122, 0.22);
-  }
-  .status-dot {
-    @apply inline-block h-1.5 w-1.5 rounded-full bg-emerald;
-    box-shadow: 0 0 6px rgba(76, 200, 142, 0.7);
-  }
-  .modal-backdrop {
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(6px);
-  }
-  .kinetic-grid {
-    background-image:
-      radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
-      linear-gradient(180deg, transparent 0, rgb(var(--surface)) 100%);
-    background-size: 28px 28px, 100% 100%;
-  }
+.kinetic-grid {
+  background-image:
+    linear-gradient(to right, rgba(164,201,255,.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(164,201,255,.05) 1px, transparent 1px);
+  background-size: 40px 40px;
 }
 
-@layer utilities {
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: rgb(var(--outline-variant) / 0.5);
-    border-radius: 3px;
-  }
+.stealth-card {
+  clip-path: polygon(0 0, 95% 0, 100% 5%, 100% 100%, 5% 100%, 0 95%);
+}
+
+.tile {
+  transition: all 0.2s ease;
+  perspective: 600px;
+}
+.tile:not(.revealed):hover {
+  transform: scale(1.03);
+  border-color: rgba(164, 201, 255, 0.3) !important;
+}
+.tile.revealed {
+  pointer-events: none;
+}
+.gem-glow {
+  box-shadow: 0 0 24px rgba(96,165,250,.3), inset 0 0 20px rgba(96,165,250,.1);
+}
+.boom-glow {
+  box-shadow: 0 0 24px rgba(242,106,255,.45), inset 0 0 20px rgba(242,106,255,.15);
+}
+
+.status-dot {
+  @apply w-2 h-2 rounded-full bg-emerald;
+  animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.modal-backdrop {
+  background: rgba(11, 2, 25, 0.88);
+  backdrop-filter: blur(14px);
+}
+
+.glow-primary {
+  box-shadow: 0 0 30px rgba(164, 201, 255, 0.3);
 }
