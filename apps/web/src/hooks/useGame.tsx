@@ -4,7 +4,7 @@
  * Lets the original page code use `useGame()` without changes.
  */
 import { usePrivy } from "@privy-io/react-auth";
-import { useWallets } from "@privy-io/react-auth/solana";
+import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { useGameActions } from "./use-game-actions";
 import { useGameStore, type GameStatus, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";

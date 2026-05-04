@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { sessionEncKey } from "./env.js";
+import { sessionEncKey } from "./env";
 
 const VERSION = 1;
 const PREFIX = `pk${VERSION}:`;

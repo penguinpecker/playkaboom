@@ -1,3 +1,3 @@
-export * from "./constants.js";
-export * from "./schemas.js";
-export * from "./multiplier.js";
+export * from "./constants";
+export * from "./schemas";
+export * from "./multiplier";

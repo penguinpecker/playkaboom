@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ZodSchema } from "zod";
-import { logger } from "./logger.js";
+import { logger } from "./logger";
 import { extractKaboomError } from "@playkaboom/sdk";
 
 export async function parseBody<T>(req: Request, schema: ZodSchema<T>): Promise<T> {

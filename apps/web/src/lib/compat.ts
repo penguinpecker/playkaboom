@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useWallets } from "@privy-io/react-auth/solana";
+import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 
 /** Drop-in for wagmi's formatEther — lamports → SOL string. */
 export function formatEther(value: bigint | number | undefined): string {

@@ -1,5 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-import { accountDiscriminator } from "./discriminator.js";
+import { accountDiscriminator } from "./discriminator";
 
 const VAULT_DISC = accountDiscriminator("Vault");
 const GAME_DISC = accountDiscriminator("GameSession");

@@ -1,6 +1,6 @@
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
-import { logger } from "./logger.js";
+import { logger } from "./logger";
 
 let cachedLimiter: Ratelimit | null = null;
 let warned = false;

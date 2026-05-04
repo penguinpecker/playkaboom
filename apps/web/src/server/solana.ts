@@ -4,10 +4,10 @@ import {
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
-import { houseAuthority, programId } from "./env.js";
-import { getConnection } from "./connection.js";
+import { houseAuthority, programId } from "./env";
+import { getConnection } from "./connection";
 import { deriveGamePda } from "@playkaboom/sdk";
-import { logger } from "./logger.js";
+import { logger } from "./logger";
 
 const COMPUTE_PRICE_MICROLAMPORTS = 5_000;
 const COMPUTE_LIMIT = 200_000;

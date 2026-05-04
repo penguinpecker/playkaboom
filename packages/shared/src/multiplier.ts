@@ -1,4 +1,4 @@
-import { BPS, GRID_SIZE } from "./constants.js";
+import { BPS, GRID_SIZE } from "./constants";
 
 /**
  * Hypergeometric mines multiplier in basis points.

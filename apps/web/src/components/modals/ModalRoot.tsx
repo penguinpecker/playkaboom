@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useWallets } from "@privy-io/react-auth/solana";
+import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { ModalShell } from "./ModalShell";
 import { useModal } from "@/hooks/useModal";
