@@ -1,0 +1,43 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "NODE_ENV",
+    "VERCEL_ENV"
+  ],
+  "globalPassThroughEnv": [
+    "SOLANA_RPC",
+    "NEXT_PUBLIC_SOLANA_RPC",
+    "NEXT_PUBLIC_SOLANA_CLUSTER",
+    "NEXT_PUBLIC_PRIVY_APP_ID",
+    "PROGRAM_ID",
+    "HOUSE_AUTHORITY_KEY",
+    "SESSION_ENC_KEY",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN",
+    "SENTRY_DSN",
+    "NEXT_PUBLIC_SENTRY_DSN"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

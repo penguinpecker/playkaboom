@@ -1,0 +1,32 @@
+{
+  "name": "playkaboom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-grade provably-fair Mines on Solana",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rimraf node_modules .turbo",
+    "anchor:build": "anchor build",
+    "anchor:test": "anchor test --skip-local-validator",
+    "anchor:deploy:devnet": "anchor deploy --provider.cluster devnet",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "rimraf": "^6.0.1",
+    "turbo": "^2.3.3",
+    "typescript": "^5.6.3"
+  },
+  "packageManager": "npm@10.9.7"
+}

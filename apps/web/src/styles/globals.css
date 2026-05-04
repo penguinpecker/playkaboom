@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface: 12 14 18;
+  --surface-bright: 30 34 42;
+  --surface-container-lowest: 8 10 14;
+  --surface-container-low: 16 18 24;
+  --surface-container: 22 25 33;
+  --surface-container-high: 28 32 42;
+  --surface-container-highest: 36 40 52;
+  --on-surface: 230 232 238;
+  --on-surface-variant: 156 162 178;
+  --outline-variant: 70 76 92;
+  --primary: 164 201 255;
+  --primary-container: 116 156 220;
+  --on-primary: 6 24 56;
+  --secondary: 196 168 240;
+  --secondary-container: 128 96 188;
+  --tertiary: 252 130 122;
+  --tertiary-container: 200 80 80;
+  --emerald: 76 200 142;
+  --amber: 240 180 80;
+  --error: 240 100 96;
+}
+
+html,
+body {
+  background: rgb(var(--surface));
+  color: rgb(var(--on-surface));
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .stealth-card {
+    @apply shadow-[0_2px_18px_rgba(0,0,0,0.4)];
+  }
+  .glow-primary {
+    box-shadow: 0 0 32px rgba(164, 201, 255, 0.18);
+  }
+  .gem-glow {
+    box-shadow: inset 0 0 24px rgba(164, 201, 255, 0.18);
+  }
+  .boom-glow {
+    box-shadow: inset 0 0 24px rgba(252, 130, 122, 0.22);
+  }
+  .status-dot {
+    @apply inline-block h-1.5 w-1.5 rounded-full bg-emerald;
+    box-shadow: 0 0 6px rgba(76, 200, 142, 0.7);
+  }
+  .modal-backdrop {
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+  }
+  .kinetic-grid {
+    background-image:
+      radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(180deg, transparent 0, rgb(var(--surface)) 100%);
+    background-size: 28px 28px, 100% 100%;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgb(var(--outline-variant) / 0.5);
+    border-radius: 3px;
+  }
+}
