@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { GRID_SIZE, MAX_MINES, MIN_MINES } from "@playkaboom/shared";
 import { computeCommitment } from "@playkaboom/sdk";
-import type { SessionPayload } from "./session.js";
+import type { SessionPayload } from "./session";
 
 /**
  * Unbiased Fisher-Yates shuffle producing a u16 bitmask with `mineCount` bits set.

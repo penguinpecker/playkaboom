@@ -4,8 +4,8 @@ import {
   TransactionInstruction,
   type AccountMeta,
 } from "@solana/web3.js";
-import { ixDiscriminator } from "./discriminator.js";
-import { deriveGamePda, deriveVaultPda } from "./pdas.js";
+import { ixDiscriminator } from "./discriminator";
+import { deriveGamePda, deriveVaultPda } from "./pdas";
 
 const writable = (pubkey: PublicKey, isSigner = false): AccountMeta => ({
   pubkey,

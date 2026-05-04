@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GRID_SIZE, MAX_MINES, MIN_BET_LAMPORTS, MIN_MINES } from "./constants.js";
+import { GRID_SIZE, MAX_MINES, MIN_BET_LAMPORTS, MIN_MINES } from "./constants";
 
 const base58 = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 

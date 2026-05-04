@@ -7,7 +7,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { useConnection } from "@solana/wallet-adapter-react";
-import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import { useSolanaWallets as useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 import { deriveVaultPda, decodeVault, type VaultAccount } from "@playkaboom/sdk";
 import { PROGRAM_ID } from "@/lib/cluster";
 

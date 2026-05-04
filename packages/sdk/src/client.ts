@@ -11,8 +11,8 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { decodeGameSession, decodeVault, type GameSessionAccount, type VaultAccount } from "./accounts.js";
-import { deriveGamePda, deriveVaultPda } from "./pdas.js";
+import { decodeGameSession, decodeVault, type GameSessionAccount, type VaultAccount } from "./accounts";
+import { deriveGamePda, deriveVaultPda } from "./pdas";
 
 export interface KaboomClientOptions {
   connection: Connection;

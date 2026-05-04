@@ -1,5 +1,5 @@
 import { Connection } from "@solana/web3.js";
-import { solanaRpc } from "./env.js";
+import { solanaRpc } from "./env";
 
 let cached: Connection | null = null;
 export function getConnection(): Connection {
