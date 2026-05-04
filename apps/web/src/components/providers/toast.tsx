@@ -4,24 +4,29 @@ import { createContext, useCallback, useContext, useState, type ReactNode } from
 interface Toast {
   id: number;
   message: string;
-  color: "primary" | "emerald" | "amber" | "error" | "secondary";
+  color: string;
 }
 
-interface ToastApi {
-  toast: (msg: string, color?: Toast["color"]) => void;
-}
-
-const Ctx = createContext<ToastApi | null>(null);
+const ToastContext = createContext<{ toast: (msg: string, color?: string) => void } | null>(null);
+let toastId = 0;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const toast = useCallback<ToastApi["toast"]>((message, color = "primary") => {
-    const id = Date.now() + Math.random();
-    setToasts((prev) => [...prev, { id, message, color }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3200);
+
+  const toast = useCallback((message: string, color: string = "primary") => {
+    const id = ++toastId;
+    setToasts((t) => [...t, { id, message, color }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 3200);
   }, []);
 
-  const dot: Record<Toast["color"], string> = {
+  const colorMap: Record<string, string> = {
+    primary: "border-primary/20",
+    emerald: "border-emerald/20",
+    amber: "border-amber/20",
+    error: "border-error/20",
+    secondary: "border-secondary/20",
+  };
+  const dotMap: Record<string, string> = {
     primary: "bg-primary",
     emerald: "bg-emerald",
     amber: "bg-amber",
@@ -30,25 +35,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ toast }}>
+    <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="pointer-events-none fixed right-3 top-16 z-[110] flex w-72 flex-col gap-2">
+      <div className="fixed top-14 right-3 z-[110] flex flex-col gap-2 w-72 pointer-events-none">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className="pointer-events-auto flex animate-slide-down items-center gap-2 border border-outline-variant/20 bg-surface-container-low px-3 py-2.5 shadow-[0_4px_16px_rgba(0,0,0,.5)]"
+            className={`pointer-events-auto px-3 py-2.5 bg-surface-container-low border ${colorMap[t.color] || colorMap.primary} flex items-center gap-2 shadow-[0_4px_16px_rgba(0,0,0,.5)] animate-slide-down`}
           >
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot[t.color]}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${dotMap[t.color] || dotMap.primary} shrink-0`} />
             <span className="text-[11px] text-on-surface">{t.message}</span>
           </div>
         ))}
       </div>
-    </Ctx.Provider>
+    </ToastContext.Provider>
   );
 }
 
 export function useToast() {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useToast must be used inside ToastProvider");
+  const ctx = useContext(ToastContext);
+  if (!ctx) throw new Error("useToast must be used within ToastProvider");
   return ctx;
 }

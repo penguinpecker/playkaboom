@@ -1,74 +1,82 @@
 "use client";
-import { useGameStore } from "@/stores/game-store";
-import { useGameActions } from "@/hooks/use-game-actions";
+import { useGame } from "@/hooks/useGame";
 
 export function Tile({ index }: { index: number }) {
-  const status = useGameStore((s) => s.status);
-  const safeTiles = useGameStore((s) => s.safeTiles);
-  const mineTiles = useGameStore((s) => s.mineTiles);
-  const pendingTile = useGameStore((s) => s.pendingTile);
-  const { revealTile } = useGameActions();
-
-  const isSafe = safeTiles.has(index);
-  const isMine = mineTiles.has(index);
-  const isPending = pendingTile === index;
-  const isPlaying = status === "playing";
-  const otherPending = pendingTile !== null && pendingTile !== index;
+  const { state, revealTile } = useGame();
+  const isSafe = state.safeTiles.has(index);
+  const isMine = state.mineTiles.has(index);
+  const isPending = state.pendingTile === index;
+  const isPlaying = state.status === "playing";
+  const isGameOver = state.status === "won" || state.status === "lost";
 
   if (isSafe) {
     return (
-      <div className="stealth-card gem-glow flex animate-tile-reveal flex-col items-center justify-center border border-primary/60 bg-primary-container/20">
-        <span className="text-2xl font-bold text-primary">✦</span>
-        <span className="font-headline text-[10px] font-bold uppercase text-primary">SAFE</span>
+      <div className="bg-primary-container/20 stealth-card border border-primary/60 flex flex-col items-center justify-center gem-glow animate-tile-reveal">
+        <span className="material-symbols-outlined text-primary mi" style={{ fontSize: 48 }}>
+          verified
+        </span>
+        <span className="font-headline text-[10px] font-bold text-primary uppercase">SAFE</span>
       </div>
     );
   }
 
   if (isMine) {
     return (
-      <div className="stealth-card boom-glow flex animate-tile-reveal flex-col items-center justify-center border border-tertiary bg-tertiary-container/20">
-        <span className="text-2xl font-black text-tertiary">⚠</span>
-        <span className="font-headline text-[10px] font-black uppercase text-tertiary">BOOM</span>
+      <div className="bg-tertiary-container/20 stealth-card border border-tertiary flex flex-col items-center justify-center boom-glow animate-tile-reveal">
+        <span className="material-symbols-outlined text-tertiary mi" style={{ fontSize: 48 }}>
+          emergency
+        </span>
+        <span className="font-headline text-[10px] font-black text-tertiary uppercase">BOOM</span>
       </div>
     );
   }
 
   if (isPending) {
     return (
-      <div className="stealth-card flex animate-pulse flex-col items-center justify-center border border-primary/50 bg-primary/10">
-        <span className="text-primary">…</span>
+      <div className="bg-primary/10 stealth-card border border-primary/50 flex flex-col items-center justify-center animate-pulse">
+        <span
+          className="material-symbols-outlined text-primary animate-spin"
+          style={{ fontSize: 36 }}
+        >
+          progress_activity
+        </span>
+        <span className="font-headline text-[9px] text-primary/70 uppercase mt-1">confirming</span>
       </div>
     );
   }
 
-  if (!isPlaying) {
+  if (isPlaying && !isGameOver) {
+    const isDisabled = state.pendingTile !== null;
     return (
-      <div className="stealth-card flex items-center justify-center border border-primary/5 bg-surface-container-highest">
-        <span className="text-primary/15">▦</span>
+      <div
+        onClick={() => !isDisabled && revealTile(index)}
+        className={`bg-surface-container-highest stealth-card group border border-primary/5 relative flex items-center justify-center transition-all
+          ${
+            isDisabled
+              ? "opacity-50 cursor-not-allowed"
+              : "cursor-pointer hover:bg-primary/10 hover:border-primary/30"
+          }`}
+      >
+        <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+        <span
+          className={`material-symbols-outlined transition-all ${
+            isDisabled
+              ? "text-primary/15"
+              : "text-primary/20 group-hover:text-primary/50 group-hover:scale-110"
+          }`}
+          style={{ fontSize: 40 }}
+        >
+          view_in_ar
+        </span>
       </div>
     );
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => !otherPending && revealTile(index)}
-      disabled={otherPending}
-      className={`stealth-card group relative flex items-center justify-center border border-primary/5 bg-surface-container-highest transition-all ${
-        otherPending
-          ? "cursor-not-allowed opacity-50"
-          : "cursor-pointer hover:border-primary/30 hover:bg-primary/10"
-      }`}
-    >
-      <span
-        className={`transition-all ${
-          otherPending
-            ? "text-primary/15"
-            : "text-primary/20 group-hover:scale-110 group-hover:text-primary/50"
-        }`}
-      >
-        ▦
+    <div className="bg-surface-container-highest stealth-card border border-primary/5 flex items-center justify-center">
+      <span className="material-symbols-outlined text-primary/15" style={{ fontSize: 40 }}>
+        view_in_ar
       </span>
-    </button>
+    </div>
   );
 }
