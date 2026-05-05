@@ -1,0 +1,20 @@
+# Local Supabase config. Real project ref filled in via `supabase link`.
+
+project_id = "playkaboom"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = false # we use Privy for auth, Supabase is db-only
