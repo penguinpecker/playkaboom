@@ -21,7 +21,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use sha2::{Digest, Sha256};
 
-declare_id!("Kab1TestProgam11111111111111111111111111111");
+declare_id!("4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT");
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
