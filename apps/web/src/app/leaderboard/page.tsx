@@ -1,15 +1,26 @@
 "use client";
 import { useMemo, useState } from "react";
-import { formatEther, useAccount } from "@/lib/compat";
-import { useLeaderboard, useGameCounter } from "@/hooks/useContracts";
+import Link from "next/link";
+import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { useAccount } from "@/lib/compat";
+import { useGameCounter } from "@/hooks/useContracts";
 import { useGameHistory } from "@/hooks/useGameHistory";
+import { useLeaderboardOnchain, type LeaderboardView } from "@/hooks/use-leaderboard";
+import { shortAddr } from "@/lib/format";
+
+const TABS: { label: string; view: LeaderboardView }[] = [
+  { label: "Top Wins", view: "alltime" },
+  { label: "Volume", view: "volume" },
+  { label: "Streak", view: "streak" },
+];
 
 export default function LeaderboardPage() {
   const { address } = useAccount();
-  const { data: leaders } = useLeaderboard();
   const { data: gameCount } = useGameCounter();
   const { history } = useGameHistory();
-  const [tab, setTab] = useState("All-Time");
+  const [tab, setTab] = useState<LeaderboardView>("alltime");
+  const { data: chainRows = [] } = useLeaderboardOnchain(tab);
+  const hasChain = chainRows.length > 0;
 
   const localStats = useMemo(() => {
     if (!history.length) return null;
@@ -63,7 +74,6 @@ export default function LeaderboardPage() {
     () => new Set(history.map((g) => g.player.toLowerCase())).size,
     [history],
   );
-  const hasChainLeaders = leaders.length > 0;
 
   return (
     <div className="px-6 lg:px-8 pb-16 min-h-screen">
@@ -112,23 +122,28 @@ export default function LeaderboardPage() {
               Top Operations
             </h2>
             <div className="flex gap-1">
-              {["Daily", "Weekly", "All-Time"].map((t) => (
+              {TABS.map((t) => (
                 <button
-                  key={t}
-                  onClick={() => setTab(t)}
+                  key={t.view}
+                  onClick={() => setTab(t.view)}
                   className={`px-3 py-1 font-headline text-[10px] font-bold tracking-widest transition-colors ${
-                    t === tab
+                    t.view === tab
                       ? "bg-primary/10 text-primary border border-primary/15"
                       : "text-on-surface-variant/40 hover:text-on-surface"
                   }`}
                 >
-                  {t}
+                  {t.label}
                 </button>
               ))}
             </div>
           </div>
           <div className="grid grid-cols-5 px-6 py-3 border-b border-outline-variant/10">
-            {["Rank", "Operator Name", "Biggest Win", "Multiplier", "Status"].map((h, i) => (
+            {(tab === "alltime"
+              ? ["Rank", "Operator", "Biggest Win", "Multiplier", "Status"]
+              : tab === "volume"
+                ? ["Rank", "Operator", "Total Wagered", "Games", "Status"]
+                : ["Rank", "Operator", "Best Streak", "Games Won", "Status"]
+            ).map((h, i) => (
               <span
                 key={h}
                 className={`font-headline text-[10px] tracking-widest text-on-surface-variant/40 uppercase ${i === 4 ? "text-right" : ""}`}
@@ -138,7 +153,47 @@ export default function LeaderboardPage() {
             ))}
           </div>
 
-          {hasChainLeaders ? null : localLeaders.length > 0 ? (
+          {hasChain ? (
+            chainRows.map((row, i) => {
+              const isMe = address && row.player.toLowerCase() === address.toLowerCase();
+              const cellA =
+                tab === "alltime"
+                  ? `${(("biggest_win" in row ? row.biggest_win : 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL`
+                  : tab === "volume"
+                    ? `${(("total_wagered" in row ? row.total_wagered : 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL`
+                    : `${"best_streak" in row ? row.best_streak : 0}`;
+              const cellB =
+                tab === "alltime"
+                  ? `${("biggest_multiplier_bps" in row ? Number(row.biggest_multiplier_bps) : 0) / 10_000}×`
+                  : tab === "volume"
+                    ? `${"games_played" in row ? row.games_played : 0}`
+                    : `${"games_won" in row ? row.games_won : 0}`;
+              return (
+                <Link
+                  key={`${row.player}-${i}`}
+                  href={`/profile/${row.player}`}
+                  className={`grid grid-cols-5 px-6 py-4 items-center border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
+                >
+                  <RankBadge rank={i + 1} />
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded bg-secondary/20 flex items-center justify-center font-headline text-[10px] font-bold text-secondary">
+                      {row.player.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="font-headline text-xs font-bold text-on-surface">
+                      {isMe ? "YOU" : shortAddr(row.player, 6, 4)}
+                    </div>
+                  </div>
+                  <span className="font-headline text-sm font-bold text-primary">{cellA}</span>
+                  <span className="font-headline text-sm font-bold text-secondary">{cellB}</span>
+                  <span
+                    className={`font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
+                  >
+                    {i === 0 ? "ELITE" : "ACTIVE"}
+                  </span>
+                </Link>
+              );
+            })
+          ) : localLeaders.length > 0 ? (
             localLeaders.map(([player, stats], i) => {
               const isMe = address && player.toLowerCase() === address.toLowerCase();
               return (
@@ -178,7 +233,9 @@ export default function LeaderboardPage() {
           )}
           <div className="px-6 py-4 text-center border-t border-outline-variant/10">
             <span className="font-headline text-[10px] text-on-surface-variant/40 tracking-widest uppercase">
-              Indexer-backed global leaderboard ships in v0.2
+              {hasChain
+                ? "On-chain · indexed via Helius"
+                : "Local cache fallback — chain index will populate after first settled game"}
             </span>
           </div>
         </div>
