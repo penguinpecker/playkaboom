@@ -6,6 +6,7 @@ import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useGame } from "@/hooks/useGame";
 import { useVaultMaxBet } from "@/hooks/useContracts";
+import { usePythSolUsd, formatUsd, solToUsd } from "@/hooks/use-pyth";
 import { GAME_CONFIG } from "@/lib/chain";
 
 export function BetControls() {
@@ -15,6 +16,7 @@ export function BetControls() {
   const publicKey = wallets[0]?.address ? { toBase58: () => wallets[0]!.address } : null;
   const { connection } = useConnection();
   const { data: maxBetWei } = useVaultMaxBet();
+  const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
 
   const isPlaying = state.status === "playing";
@@ -100,8 +102,23 @@ export function BetControls() {
               </div>
             </div>
             <div className="flex justify-between mt-1 text-[9px] font-headline text-on-surface-variant/40">
-              <span>Balance: {walletBalance.toFixed(3)} SOL</span>
-              <span>Max bet: {maxBet.toFixed(2)} SOL</span>
+              <span>
+                Balance: {walletBalance.toFixed(3)} SOL
+                {pyth && walletBalance > 0 && (
+                  <span className="text-on-surface-variant/30">
+                    {" "}
+                    ≈ {formatUsd(solToUsd(walletBalance, pyth))}
+                  </span>
+                )}
+              </span>
+              <span>
+                {pyth && state.bet > 0 && (
+                  <span className="text-emerald/70 mr-2">
+                    ≈ {formatUsd(solToUsd(state.bet, pyth))}
+                  </span>
+                )}
+                Max bet: {maxBet.toFixed(2)} SOL
+              </span>
             </div>
           </div>
           <div>
