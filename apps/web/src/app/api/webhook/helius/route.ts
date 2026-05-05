@@ -120,14 +120,20 @@ async function applyEvent(
       break;
     }
     case "GameSettled": {
-      const verified = ev.verified;
-      // GameSettled fires after GameWon or GameLost. We update the row written
-      // by those handlers with the final layout.
+      // GameSettled fires after GameWon or GameLost in the same tx. Update the
+      // row written by those handlers with the proof inputs needed for
+      // public verification (salt + mine_count + commitment).
       await db
         .from("games")
-        .update({ mine_layout: ev.mineLayout, commitment: ev.commitment.toString("hex") })
+        .update({
+          mine_layout: ev.mineLayout,
+          settled_layout: ev.mineLayout,
+          mine_count: ev.mineCount,
+          commitment: ev.commitment.toString("hex"),
+          salt: ev.salt.toString("hex"),
+        })
         .eq("signature", tx.signature);
-      if (verified) {
+      if (ev.verified) {
         logger.info({ sig: tx.signature, player: ev.player.toBase58() }, "settle verified");
       }
       break;
