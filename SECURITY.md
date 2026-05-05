@@ -56,13 +56,99 @@ Solana account data is publicly readable. Storing mine positions on-chain during
 | No formal audit before mainnet | Defended by: on-chain bet/payout caps (2% / 50% of vault), 24-hour treasury timelock, public bug bounty on Immunefi, open-source program code with reproducible builds |
 | No geographic restrictions | Player base is intended to be self-selecting crypto-native users; ToS displays clearly that participation is at the user's discretion under their jurisdiction's laws; no fiat on/off ramps reduce regulated-money exposure |
 
+## Defence-in-depth controls
+
+### API authorization
+
+Every player-mutating route (`/api/commit`, `/api/reveal`, `/api/settle`, `/api/cleanup`) calls `verifyPlayerAuth(req, body.player)` before any business logic. That function:
+
+1. Pulls the Privy access token from `Authorization: Bearer …` or the `privy-token` cookie.
+2. Verifies it via `PrivyClient.verifyAuthToken()` against `PRIVY_APP_SECRET`.
+3. Confirms the claimed `player` pubkey is one of the user's linked Solana wallets.
+
+Anyone can hit the endpoints, but only the true owner of a wallet can drive its game. A claim mismatch is a `403`.
+
+### Webhook signing
+
+`/api/webhook/helius` (P2) verifies `Authorization` (or `x-helius-signature`) against `HELIUS_WEBHOOK_AUTH` using `crypto.timingSafeEqual`. Two acceptable forms: literal shared secret (Helius default) or HMAC-SHA256 over the raw body.
+
+### Server-only modules
+
+`server/auth.ts`, `server/env.ts`, `server/session.ts`, `server/solana.ts`, `server/db/supabase.ts`, `server/game.ts`, `server/player.ts`, `server/webhook-auth.ts` all start with `import "server-only"`. Any accidental import from a client component fails the build, preventing service-role keys or house-authority secrets from leaking into the browser bundle.
+
+### Database — RLS + role grants
+
+| Table | Anon | Authenticated | service_role |
+|---|---|---|---|
+| `player_stats` | SELECT | SELECT | ALL |
+| `games` | SELECT | SELECT | ALL |
+| `referrals` | SELECT | SELECT | ALL |
+| `referral_events` | SELECT | SELECT | ALL |
+| `processed_events` | none | none | ALL |
+
+RLS is on AND `FORCE` for every table — even the table owner can't bypass policies. Only `service_role` (which only the server has) can write. The Helius webhook handler is the only writer in the system.
+
+### Database — schema integrity
+
+CHECK constraints on every numeric field (bet > 0, mine_count 1-12, multiplier ≥ 1.0×, tier 0-2, etc.) — the index can never store anything the program would reject. SHA-256 commitments are validated by regex (64 lowercase hex chars). Tx signatures by length range (64–96).
+
+`updated_at` columns are auto-set by triggers via a `SECURITY DEFINER` function with `search_path = ''` to defeat search-path injection.
+
+### Transport — security headers
+
+Set in `apps/web/next.config.mjs` for every response:
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | strict allow-list (self + Privy + Solana + Supabase + Pyth + WalletConnect) |
+| `X-Frame-Options` | `DENY` |
+| `frame-ancestors` (CSP) | `'none'` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
+| `Cross-Origin-Opener-Policy` | `same-origin` |
+| `Cross-Origin-Resource-Policy` | `same-origin` (assets: `cross-origin`) |
+| `Strict-Transport-Security` (prod) | `max-age=63072000; includeSubDomains; preload` |
+
+`object-src 'none'` blocks legacy plugin embedding. `upgrade-insecure-requests` enforces HTTPS in prod.
+
+### Transport — rate limiting
+
+Sliding-window 30 req / 10s per `(IP, player)` tuple via Upstash. Defends against brute-forcing the commit endpoint or replaying stale game tokens.
+
+### Key management — current
+
+| Key | Storage | Rotation |
+|---|---|---|
+| `HOUSE_AUTHORITY_KEY` | env var, Vercel encrypted secrets | manual; rotate after personnel change |
+| `SESSION_ENC_KEY` | env var, encrypted | rotate every 30 days |
+| `SUPABASE_SERVICE_ROLE_KEY` | env var, server-only | rotate via Supabase dashboard if exposed |
+| `PRIVY_APP_SECRET` | env var, server-only | rotate via Privy dashboard if exposed |
+| Treasury private key | Squads multisig (cold) | per-key holder rotation in Squads |
+| Owner private key | Squads multisig | per-key holder rotation in Squads |
+
+### Key management — roadmap
+
+| Improvement | Phase |
+|---|---|
+| House authority moved to AWS KMS / 1Password Connect | P3 |
+| Per-environment env-var encryption with Vercel Encrypted Env | P2 |
+| Session-key rotation on schedule (cron) | P3 |
+
+### Audit + incident response
+
+- Every house-signed transaction is logged via pino with `request_id` and player pubkey
+- Sentry captures unhandled errors (P2)
+- Better Stack uptime monitor + status page (P2)
+- Bug bounty live on Immunefi at GA (no audits prior — accepted risk)
+
 ## Cryptographic primitives
 
 | Primitive | Algorithm | Library |
 |---|---|---|
-| Commitment hash | SHA-256 | `sha2` crate (program), `node:crypto` (server) |
+| Commitment hash | SHA-256 | `sha2` crate (program), `@noble/hashes` (server + browser) |
 | Session encryption | AES-256-GCM (12-byte IV, 16-byte tag) | `node:crypto` |
-| Session signing | HMAC-SHA256 | `node:crypto` |
+| Webhook auth | HMAC-SHA256 + `timingSafeEqual` | `node:crypto` |
 | Mine selection | Fisher-Yates with rejection-sampled `randomBytes` | `node:crypto` |
 
 ## Key management
