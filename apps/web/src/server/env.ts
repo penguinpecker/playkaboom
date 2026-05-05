@@ -1,3 +1,4 @@
+import "server-only";
 /**
  * Server-only env. Validated lazily so unrelated routes don't crash the
  * deployment when one var is missing. Each accessor throws with a clear

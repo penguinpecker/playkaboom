@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, RevealTileInput);
 
+    await verifyPlayerAuth(req, body.player);
+
     const rl = await enforceRateLimit(`reveal:${clientIp(req)}:${body.player}`);
     if (!rl.ok) throw new ApiError(429, "Too many requests");
 
