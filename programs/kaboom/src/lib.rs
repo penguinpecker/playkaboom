@@ -541,7 +541,9 @@ pub mod kaboom {
         emit!(GameSettled {
             player: game.player,
             game: game.key(),
+            mine_count: game.mine_count,
             mine_layout,
+            salt,
             commitment: game.commitment,
             verified: true,
             slot: Clock::get()?.slot,
@@ -1337,7 +1339,9 @@ pub struct GameLost {
 pub struct GameSettled {
     pub player: Pubkey,
     pub game: Pubkey,
+    pub mine_count: u8,
     pub mine_layout: u16,
+    pub salt: [u8; 32],
     pub commitment: [u8; 32],
     pub verified: bool,
     pub slot: u64,

@@ -63,7 +63,9 @@ export interface GameSettledEvent {
   kind: "GameSettled";
   player: PublicKey;
   game: PublicKey;
+  mineCount: number;
   mineLayout: number;
+  salt: Buffer;
   commitment: Buffer;
   verified: boolean;
   slot: bigint;
@@ -161,7 +163,9 @@ const EVENTS: Record<
         kind: "GameSettled",
         player: r.pk(),
         game: r.pk(),
+        mineCount: r.u8(),
         mineLayout: r.u16(),
+        salt: r.bytes(32),
         commitment: r.bytes(32),
         verified: r.bool(),
         slot: r.u64(),

@@ -232,17 +232,28 @@ export default function LogsPage() {
               <span className="font-headline text-xs text-on-surface-variant">
                 {formatDate(g.timestamp)}
               </span>
-              <div className="text-right">
+              <div className="text-right flex justify-end gap-2">
                 {g.txHash ? (
-                  <a
-                    href={txExplorer(g.txHash)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
-                    style={{ fontSize: 18 }}
-                  >
-                    visibility
-                  </a>
+                  <>
+                    <a
+                      href={`/verify/${g.txHash}`}
+                      title="Verify provable fairness"
+                      className="material-symbols-outlined text-on-surface-variant/40 hover:text-emerald transition-colors cursor-pointer"
+                      style={{ fontSize: 18 }}
+                    >
+                      verified
+                    </a>
+                    <a
+                      href={txExplorer(g.txHash)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="View on Solscan"
+                      className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
+                      style={{ fontSize: 18 }}
+                    >
+                      visibility
+                    </a>
+                  </>
                 ) : (
                   <span className="text-on-surface-variant/20">—</span>
                 )}
