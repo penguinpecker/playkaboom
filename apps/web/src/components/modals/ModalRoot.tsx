@@ -112,6 +112,25 @@ function ProfileModal() {
         </span>
         <span className="font-headline text-xl font-bold text-primary">{bal} SOL</span>
       </div>
+      <div className="flex gap-2 mb-2">
+        <a
+          href={publicKey ? `/profile/${publicKey.toBase58()}` : "#"}
+          onClick={(e) => {
+            if (!publicKey) e.preventDefault();
+            close();
+          }}
+          className="flex-1 text-center py-2.5 bg-surface-container-highest border border-outline-variant/15 font-headline font-bold text-[10px] tracking-widest text-on-surface hover:border-primary/30"
+        >
+          MY DOSSIER
+        </a>
+        <a
+          href="/referrals"
+          onClick={() => close()}
+          className="flex-1 text-center py-2.5 bg-surface-container-highest border border-outline-variant/15 font-headline font-bold text-[10px] tracking-widest text-on-surface hover:border-primary/30"
+        >
+          REFERRALS
+        </a>
+      </div>
       <div className="flex gap-2">
         <button
           onClick={() => {
