@@ -26,6 +26,18 @@ export const DEFAULT_MAX_PAYOUT_BPS = 5_000; // 50% of vault
 
 export const VAULT_SEED = "kaboom_vault";
 export const GAME_SEED = "kaboom_game";
+export const STATS_SEED = "kaboom_stats";
+export const REFERRAL_SEED = "kaboom_referral";
+
+/** Referral payout in bps of bet (= 25/30/35% of 2% house edge). */
+export const REFERRAL_BRONZE_BPS = 50;
+export const REFERRAL_SILVER_BPS = 60;
+export const REFERRAL_GOLD_BPS = 70;
+export const SILVER_VOLUME_LAMPORTS = 10_000_000_000n;
+export const GOLD_VOLUME_LAMPORTS = 100_000_000_000n;
+
+export const REFERRAL_TIER_LABELS = ["Bronze", "Silver", "Gold"] as const;
+export type ReferralTier = 0 | 1 | 2;
 
 export type SolanaCluster = "mainnet-beta" | "devnet" | "testnet" | "localnet";
 

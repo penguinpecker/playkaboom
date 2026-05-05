@@ -9,6 +9,7 @@ import { sendHouseTx } from "@/server/solana";
 import { houseAuthority, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
+import { fetchPlayerReferrer } from "@/server/player";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,6 +30,7 @@ export async function POST(req: NextRequest) {
     const ctx = { programId: programId() };
 
     if (body.phase === "settle") {
+      const referrer = await fetchPlayerReferrer(playerPk);
       const sig = await sendHouseTx([
         buildSettleGame({
           ctx,
@@ -36,6 +38,7 @@ export async function POST(req: NextRequest) {
           houseAuthority: houseAuthority().publicKey,
           mineLayout: session.mineLayout,
           salt: saltBuffer(session),
+          referrer: referrer ?? undefined,
         }),
       ]);
       logger.info({ player: body.player, sig }, "settle");

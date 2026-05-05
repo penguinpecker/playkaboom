@@ -7,6 +7,7 @@ const LINKS = [
   { href: "/", label: "Home", icon: "home" },
   { href: "/play", label: "Play", icon: "bomb" },
   { href: "/leaderboard", label: "Leaderboard", icon: "emoji_events" },
+  { href: "/referrals", label: "Referrals", icon: "diversity_3" },
   { href: "/logs", label: "Event Logs", icon: "receipt_long" },
   { href: "/vault", label: "Vault", icon: "account_balance" },
 ];
