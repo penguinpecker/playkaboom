@@ -59,6 +59,10 @@ test-ledger
 *.wallet.json
 keypairs/
 
+# supabase cli scratch state (project ref + version cache)
+supabase/.temp/
+supabase/.branches/
+
 # misc
 .contentlayer
 storybook-static
