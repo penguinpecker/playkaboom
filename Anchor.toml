@@ -5,11 +5,11 @@ anchor_version = "0.31.1"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
-kaboom = "Kab1TestProgam11111111111111111111111111111"
-
 [programs.devnet]
-kaboom = "Kab1TestProgam11111111111111111111111111111"
+kaboom = "4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT"
+
+[programs.localnet]
+kaboom = "4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT"
 
 [programs.mainnet]
 kaboom = "Kab1MainnetProgram1111111111111111111111111"
@@ -24,5 +24,13 @@ wallet = "~/.config/solana/id.json"
 [scripts]
 test = "ts-node --project tests/anchor/tsconfig.json tests/anchor/runner.ts"
 
+[test]
+startup_wait = 5000
+shutdown_wait = 2000
+upgradeable = false
+
 [test.validator]
+bind_address = "0.0.0.0"
 url = "https://api.devnet.solana.com"
+ledger = ".anchor/test-ledger"
+rpc_port = 8899
