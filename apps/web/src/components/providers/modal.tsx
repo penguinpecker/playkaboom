@@ -1,7 +1,16 @@
 "use client";
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 
-export type ModalKey = "wallet" | "profile" | "deposit" | "fair" | "settings" | "win" | "lose" | null;
+export type ModalKey =
+  | "wallet"
+  | "profile"
+  | "deposit"
+  | "fair"
+  | "referral"
+  | "settings"
+  | "win"
+  | "lose"
+  | null;
 
 const Ctx = createContext<{
   modal: ModalKey;

@@ -7,10 +7,11 @@ describe("calcMultiplierBps", () => {
   });
 
   it("matches the program for a few sentinel inputs (1 mine, 1 safe)", () => {
-    // (16 / 15) * 0.98 = 1.0453 → 10453 bps (truncated by integer math)
+    // Integer math (mirrors the program exactly):
+    //   raw_bps  = (16 * 10_000) / 15            = 10666  (floor)
+    //   final    = (10666 * 9800) / 10_000       = 10452  (floor)
     const bps = calcMultiplierBps(1, 1, 200);
-    expect(Number(bps)).toBeGreaterThanOrEqual(10453);
-    expect(Number(bps)).toBeLessThanOrEqual(10454);
+    expect(Number(bps)).toBe(10452);
   });
 
   it("monotonically increases with safe reveals", () => {

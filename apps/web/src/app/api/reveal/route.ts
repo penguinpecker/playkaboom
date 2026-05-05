@@ -8,6 +8,7 @@ import {
 } from "@playkaboom/sdk";
 import { RevealTileInput } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
+import { verifyPlayerAuth } from "@/server/auth";
 import { checkTile, saltBuffer } from "@/server/game";
 import { decryptSession, encryptSession } from "@/server/session";
 import { sendHouseTx } from "@/server/solana";

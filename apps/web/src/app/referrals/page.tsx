@@ -43,7 +43,7 @@ export default function ReferralsPage() {
   }, [address]);
 
   const tier = myReferral?.tier ?? 0;
-  const tierLabel = REFERRAL_TIER_LABELS[tier];
+  const tierLabel = REFERRAL_TIER_LABELS[tier] ?? REFERRAL_TIER_LABELS[0];
   const accrued = myReferral ? Number(myReferral.accruedLamports) / LAMPORTS_PER_SOL : 0;
   const totalEarned = myReferral ? Number(myReferral.totalEarned) / LAMPORTS_PER_SOL : 0;
   const referredCount = myReferral?.referredCount ?? 0;

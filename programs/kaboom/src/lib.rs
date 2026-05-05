@@ -390,8 +390,8 @@ pub mod kaboom {
     /// Optional `remaining_accounts[0]`: ReferralAccount (mut) — must match
     /// `player_stats.referrer`'s PDA. If absent, no credit happens (server
     /// must include it whenever the player has a referrer).
-    pub fn settle_game(
-        ctx: Context<SettleGame>,
+    pub fn settle_game<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SettleGame<'info>>,
         mine_layout: u16,
         salt: [u8; 32],
     ) -> Result<()> {
@@ -743,7 +743,8 @@ pub mod kaboom {
             .take(vault.allowlist_count as usize)
             .any(|k| *k == address);
         require!(!existing, KaboomError::AlreadyAllowlisted);
-        vault.withdraw_allowlist[vault.allowlist_count as usize] = address;
+        let slot = vault.allowlist_count as usize;
+        vault.withdraw_allowlist[slot] = address;
         vault.allowlist_count = vault.allowlist_count.saturating_add(1);
 
         emit!(AllowlistChanged {

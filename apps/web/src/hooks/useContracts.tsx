@@ -7,7 +7,10 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { useConnection } from "@solana/wallet-adapter-react";
-import { useSolanaWallets as useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import {
+  useSolanaWallets as useWallets,
+  useStandardSignTransaction,
+} from "@privy-io/react-auth/solana";
 import { deriveVaultPda, decodeVault, type VaultAccount } from "@playkaboom/sdk";
 import { PROGRAM_ID } from "@/lib/cluster";
 
@@ -96,7 +99,7 @@ export function useWhaleAlertCount() {
 export function useDepositToVault() {
   const { connection } = useConnection();
   const { wallets } = useWallets();
-  const { signTransaction } = useSignTransaction();
+  const { signTransaction } = useStandardSignTransaction();
   const [isPending, setIsPending] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
