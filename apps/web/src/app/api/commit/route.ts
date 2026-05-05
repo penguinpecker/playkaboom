@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { StartGameInput } from "@playkaboom/shared";
 import { buildStartGame, serializeIx } from "@playkaboom/sdk";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
+import { verifyPlayerAuth } from "@/server/auth";
 import { createGameSession } from "@/server/game";
 import { encryptSession } from "@/server/session";
 import { playerHasActiveGame } from "@/server/solana";
@@ -16,6 +17,9 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, StartGameInput);
+
+    // Verify the requester actually owns the wallet they're playing as.
+    await verifyPlayerAuth(req, body.player);
 
     const rl = await enforceRateLimit(`commit:${clientIp(req)}:${body.player}`);
     if (!rl.ok) throw new ApiError(429, "Too many requests");

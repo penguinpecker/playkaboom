@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { buildCashOut, buildSettleGame, serializeIx } from "@playkaboom/sdk";
 import { SettleInput } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
+import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
 import { decryptSession } from "@/server/session";
 import { sendHouseTx } from "@/server/solana";
@@ -17,6 +18,8 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, SettleInput);
+
+    await verifyPlayerAuth(req, body.player);
 
     const rl = await enforceRateLimit(`settle:${clientIp(req)}:${body.player}`);
     if (!rl.ok) throw new ApiError(429, "Too many requests");

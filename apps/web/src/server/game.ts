@@ -1,3 +1,4 @@
+import "server-only";
 import { randomBytes } from "node:crypto";
 import { GRID_SIZE, MAX_MINES, MIN_MINES } from "@playkaboom/shared";
 import { computeCommitment } from "@playkaboom/sdk";

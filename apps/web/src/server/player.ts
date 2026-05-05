@@ -1,3 +1,4 @@
+import "server-only";
 import { PublicKey } from "@solana/web3.js";
 import { decodePlayerStats, derivePlayerStatsPda } from "@playkaboom/sdk";
 import { getConnection } from "./connection";
