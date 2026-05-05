@@ -41,10 +41,20 @@ Solana account data is publicly readable. Storing mine positions on-chain during
 | House changes mine layout mid-game | Commitment is immutable; settlement enforces SHA-256 equality |
 | House lies about a tile (says "mine" on safe) | Settlement rejects: `revealed_safe_mask & layout == 0` |
 | House refuses to settle | Player calls `refund_expired` after `GAME_EXPIRY_SLOTS` (≈2 min) |
-| House generates biased layout | Salt mixes with on-chain slot hash at start (mitigates server-side determinism); roadmap: replace with Switchboard On-Demand VRF |
-| Owner drains vault | Treasury withdrawal is the design intent (it's house capital). Player active bets are protected by expiry refund |
+| House generates biased layout | P2: Switchboard On-Demand VRF supplies salt entropy on-chain; server cannot bias the layout |
+| Owner drains vault | `treasury` is a separate Squads multisig from `owner`; withdrawals only land in pre-allowlisted addresses; player active bets always recoverable via expiry refund |
 | Compromised session token | AES-256-GCM authenticated encryption; tokens are tied to `(player, commitment)` and rotated on every reveal |
 | Replay of stale token | Token has `nonce` field, server tracks last-seen nonce per game PDA |
+| Compromised house authority key | Can lose games by lying about reveals → settlement detects mismatch and rejects with `RevealMismatch`; **cannot** drain vault (owner-only) or move funds (treasury-only) |
+| Compromised owner key | Can update config (edge, caps, pause) but cannot move funds; treasury withdrawals require treasury signer + allowlisted destination |
+| Compromised treasury key | Can withdraw vault profits, but only to allowlisted addresses; owner can rotate treasury via `update_vault` |
+
+## Accepted risks (documented, not mitigated)
+
+| Risk | Why accepted |
+|---|---|
+| No formal audit before mainnet | Defended by: on-chain bet/payout caps (2% / 50% of vault), 24-hour treasury timelock, public bug bounty on Immunefi, open-source program code with reproducible builds |
+| No geographic restrictions | Player base is intended to be self-selecting crypto-native users; ToS displays clearly that participation is at the user's discretion under their jurisdiction's laws; no fiat on/off ramps reduce regulated-money exposure |
 
 ## Cryptographic primitives
 
