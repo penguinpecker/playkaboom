@@ -1,6 +1,6 @@
 # PlayKaboom — Session Handoff
 
-A self-contained status doc you can paste into a new Claude session. Up-to-date as of commit `fa89d0f` (security pass).
+A self-contained status doc you can paste into a new Claude session. Up-to-date as of commit `a4ca7ab` (public verifier).
 
 ## TL;DR
 
@@ -163,6 +163,7 @@ playkaboom/
 | `/vault` | Vault health bar, contracts list, deposit form |
 | `/leaderboard` | Tabs (Top Wins / Volume / Streak) backed by `/api/leaderboard` (Supabase views) with localStorage fallback |
 | `/profile/[wallet]` | On-chain stats + recent games + referral status |
+| `/verify/[sig]` | Public verifier — recomputes SHA-256(layout‖count‖salt) in browser, ✅/❌ banner |
 | `/referrals` | Pending-referrer prompt, copy link, tier ladder, claim button, my referrer |
 | `/logs` | Combat log with filters + pagination |
 
@@ -197,19 +198,30 @@ Views: `leaderboard_alltime`, `leaderboard_volume`, `leaderboard_streaks`. CHECK
 
 ## Status: TO-DO
 
-### Code work (no external blockers)
+### Code work — landed since prior handoff
 
 | # | Item | Status |
 |---|---|---|
-| 26 | `/api/webhook/helius` receiver | ✅ done |
-| — | `/leaderboard` switched to on-chain via `/api/leaderboard` (Supabase view) with localStorage fallback | ✅ done |
-| — | `/profile/[wallet]` reading on-chain `PlayerStats` | ✅ done |
-| — | SDK event decoders (`StatsUpdated`, `GameWon/Lost`, `ReferralAccrued`, etc.) | ✅ done |
-| — | Anchor flow tests (`tests/anchor/runner.ts`) | ⏸ needs Anchor toolchain |
-| 22 | Switchboard On-Demand VRF — server requests randomness, folds into salt before commit | ⏸ P2 |
-| — | Pyth Hermes USD overlay on bet input (`SOL/USD = …`) | ⏸ |
-| — | PWA manifest + service worker | ⏸ P3 |
+| 26 | `/api/webhook/helius` receiver — HMAC-verified, decodes program logs, upserts player_stats / games / referrals / referral_events idempotently via processed_events | ✅ done |
+| 38 | `/leaderboard` switched to `/api/leaderboard` (Top Wins / Volume / Streak views) with localStorage fallback | ✅ done |
+| 36 | `/profile/[wallet]` page reading on-chain `PlayerStats` + `ReferralAccount` | ✅ done |
+| — | SDK event decoders + `extractEventsFromLogs` for 8 events | ✅ done |
+| 39 | Pyth Hermes USD overlay on bet input + balance line | ✅ done |
+| 40 | PWA manifest + apple-touch + theme-color + OG/Twitter meta | ✅ done |
+| 41 | Program update: `GameSettled` event now emits `mine_count` + `salt` so verifier doesn't need an extra RPC | ✅ done |
+| 42 | Migration `20260506000001_verify_salt.sql` adds `salt` + `settled_layout` columns to `games` table | ✅ done |
+| 43 | `/verify/[sig]` page + `/api/verify` endpoint — browser-side `verifyGame()` from `@playkaboom/sdk`, ✅/❌ banner, full proof inputs displayed; linked from FairModal + each row in `/logs` | ✅ done |
+
+### Code work — still TODO
+
+| # | Item | Status |
+|---|---|---|
+| — | Anchor flow tests (`tests/anchor/runner.ts`) — happy path, refund, mine reveal, claim_referral | ⏸ needs Anchor toolchain (`avm install 0.31.1`) |
+| 22 | Switchboard On-Demand VRF — server requests randomness, folds into salt before commit | ⏸ needs Switchboard account |
 | — | i18n scaffold (next-intl, en-US first) | ⏸ P3 |
+| — | Service worker for true offline (manifest is in but no SW yet) | ⏸ P3 |
+| — | Sentry init wiring (env var present, code stub not added) | ⏸ P2 |
+| — | Treasury withdrawal timelock (24h delay) — currently instant within allowlist | ⏸ P2 |
 
 ### Account setup (you do, blocks deploy)
 
@@ -250,7 +262,21 @@ Views: `leaderboard_alltime`, `leaderboard_volume`, `leaderboard_streaks`. CHECK
 
 Paste this block at the top of the new session:
 
-> I'm working on PlayKaboom — a provably-fair on-chain Mines casino on Solana. Repo: `~/Desktop/Projects/playkaboom` (and https://github.com/penguinpecker/playkaboom). Read `HANDOFF.md` first for full context, then `ROADMAP.md` and `SECURITY.md`. Key locked decisions: Mines only, no geo-block, 2-of-2 Squads, Switchboard On-Demand VRF, Vercel + Supabase hosting, 25/30/35% referral rakeback. Last commit: `fa89d0f` (security pass). Auto mode is on. Pick up where the prior session left off — `HANDOFF.md` "Status: TO-DO" lists the next items.
+> I'm working on **PlayKaboom** — a provably-fair on-chain Mines casino on Solana. Repo: `~/Desktop/Projects/playkaboom` (also https://github.com/penguinpecker/playkaboom). Read `HANDOFF.md` first for full context, then `ROADMAP.md` and `SECURITY.md`. Last commit: `a4ca7ab` (public verifier).
+>
+> Locked decisions: Mines only, no geo-block, 2-of-2 Squads multisig, Switchboard On-Demand VRF (P2), Vercel + Supabase, 25/30/35% on-chain referral rakeback. Tech stack: Anchor 0.31 + Next.js 15 + React 19 + Privy + Supabase + Upstash. Theme: deep purple `#1b0639`, primary `#a4c9ff`, Space Grotesk + Inter.
+>
+> Auto mode is on. Pages live at `/`, `/play`, `/vault`, `/leaderboard`, `/referrals`, `/logs`, `/profile/<wallet>`, `/verify/<sig>`. Server hardened: Privy JWT verification + RLS-forced Postgres + CSP + server-only guards.
+>
+> **Critical path to playable devnet** (everything else is polish):
+> 1. Install Anchor: `cargo install --git https://github.com/coral-xyz/anchor avm --locked && avm install 0.31.1 && avm use 0.31.1`
+> 2. `anchor build` then `anchor deploy --provider.cluster devnet`
+> 3. Update `PROGRAM_ID` in `apps/web/.env.local` and `Anchor.toml`
+> 4. Fill `PRIVY_APP_SECRET`, `HOUSE_AUTHORITY_KEY`, `SESSION_ENC_KEY`, `HELIUS_WEBHOOK_AUTH` in `.env.local`
+> 5. Write a script calling `initialize_vault(200, 200, 5000)` + `fund_vault(2_000_000_000)`
+> 6. Visit `/play` and play end-to-end
+>
+> See `HANDOFF.md` "Code work — still TODO" and "Account setup" for the rest.
 
 ## Resume commands (verify state)
 

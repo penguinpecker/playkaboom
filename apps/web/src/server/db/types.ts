@@ -31,7 +31,9 @@ export interface GameRow {
   multiplier_bps: number;
   safe_reveals: number;
   mine_layout: number | null;
+  settled_layout: number | null;
   commitment: string;
+  salt: string | null;
   settled_at: string;
   slot: number;
 }
