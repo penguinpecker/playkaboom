@@ -192,6 +192,7 @@ function DepositModal() {
 
 function FairModal() {
   const { state } = useGame();
+  const lastTx = state.lastTxHash;
   return (
     <ModalShell title="Provably Fair">
       <p className="text-xs text-on-surface-variant mb-3">
@@ -207,6 +208,14 @@ function FairModal() {
             {state.commitment || "Play a game to see commitment"}
           </div>
         </div>
+        {lastTx && (
+          <a
+            href={`/verify/${lastTx}`}
+            className="block text-center py-2.5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-bold text-[10px] tracking-widest hover:brightness-110"
+          >
+            VERIFY THIS GAME
+          </a>
+        )}
         <div className="bg-emerald/5 border-emerald/15 border p-3 flex items-center gap-2.5">
           <span
             className="material-symbols-outlined mi text-emerald"
