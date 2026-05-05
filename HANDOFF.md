@@ -161,7 +161,8 @@ playkaboom/
 | `/` (home) | Hero, stats banner, how-it-works, reactive modules, real-time intel, footer |
 | `/play` | Grid + BetControls + on-chain stats sidebar |
 | `/vault` | Vault health bar, contracts list, deposit form |
-| `/leaderboard` | LocalStorage fallback now; switches to Supabase view once webhook lands |
+| `/leaderboard` | Tabs (Top Wins / Volume / Streak) backed by `/api/leaderboard` (Supabase views) with localStorage fallback |
+| `/profile/[wallet]` | On-chain stats + recent games + referral status |
 | `/referrals` | Pending-referrer prompt, copy link, tier ladder, claim button, my referrer |
 | `/logs` | Combat log with filters + pagination |
 
@@ -198,16 +199,17 @@ Views: `leaderboard_alltime`, `leaderboard_volume`, `leaderboard_streaks`. CHECK
 
 ### Code work (no external blockers)
 
-| # | Item | Effort |
+| # | Item | Status |
 |---|---|---|
-| 26 | `/api/webhook/helius` receiver: parse program events (`StatsUpdated`, `ReferralAccrued`, `GameSettled`), upsert into Supabase | ~2 hrs |
-| — | Switch `/leaderboard` from localStorage to `supabasePublic().from('leaderboard_alltime')` | ~30 min |
-| — | New `/profile/[wallet]` reading on-chain `PlayerStats` + on-chain games count | ~1 hr |
-| — | Anchor flow tests (`tests/anchor/runner.ts`) — happy path, refund, mine reveal, claim | ~3 hrs once toolchain ready |
-| 22 | Switchboard On-Demand VRF — server requests randomness, folds into salt before commit | ~2 hrs |
-| — | Pyth Hermes USD overlay on bet input (`SOL/USD = …`) | ~30 min |
-| — | PWA manifest + service worker (P3) | ~2 hrs |
-| — | i18n scaffold (next-intl, en-US first, P3) | ~2 hrs |
+| 26 | `/api/webhook/helius` receiver | ✅ done |
+| — | `/leaderboard` switched to on-chain via `/api/leaderboard` (Supabase view) with localStorage fallback | ✅ done |
+| — | `/profile/[wallet]` reading on-chain `PlayerStats` | ✅ done |
+| — | SDK event decoders (`StatsUpdated`, `GameWon/Lost`, `ReferralAccrued`, etc.) | ✅ done |
+| — | Anchor flow tests (`tests/anchor/runner.ts`) | ⏸ needs Anchor toolchain |
+| 22 | Switchboard On-Demand VRF — server requests randomness, folds into salt before commit | ⏸ P2 |
+| — | Pyth Hermes USD overlay on bet input (`SOL/USD = …`) | ⏸ |
+| — | PWA manifest + service worker | ⏸ P3 |
+| — | i18n scaffold (next-intl, en-US first) | ⏸ P3 |
 
 ### Account setup (you do, blocks deploy)
 
