@@ -2,7 +2,10 @@
 import { useCallback } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useSolanaWallets as useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import {
+  useSolanaWallets as useWallets,
+  useStandardSignTransaction,
+} from "@privy-io/react-auth/solana";
 import {
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -33,7 +36,7 @@ interface ActionsResult {
 export function useGameActions(): ActionsResult {
   const { authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
-  const { signTransaction } = useSignTransaction();
+  const { signTransaction } = useStandardSignTransaction();
   const { connection } = useConnection();
   const store = useGameStore();
   const pushHistory = useHistoryStore((s) => s.push);

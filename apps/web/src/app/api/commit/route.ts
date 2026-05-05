@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       ctx: { programId: programId() },
       player: playerPk,
       mineCount: body.mineCount,
-      betLamports: body.betLamports,
+      betLamports: BigInt(body.betLamports),
       commitment,
     });
     const gameToken = encryptSession(payload);

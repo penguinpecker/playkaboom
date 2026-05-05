@@ -5,7 +5,8 @@
   "description": "Production-grade provably-fair Mines on Solana",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "tests/sdk"
   ],
   "engines": {
     "node": ">=20.0.0"

@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction } from "@solana/web3.js";
 import { usePrivy } from "@privy-io/react-auth";
-import { useSolanaWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import { useSolanaWallets, useStandardSignTransaction } from "@privy-io/react-auth/solana";
 import {
   buildClaimReferral,
   buildSetReferrer,
@@ -76,7 +76,7 @@ export function useReferralActions() {
   const { connection } = useConnection();
   const { authenticated, login } = usePrivy();
   const { wallets } = useSolanaWallets();
-  const { signTransaction } = useSignTransaction();
+  const { signTransaction } = useStandardSignTransaction();
   const wallet = wallets[0];
   const queryClient = useQueryClient();
 
