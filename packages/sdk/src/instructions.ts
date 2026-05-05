@@ -5,7 +5,12 @@ import {
   type AccountMeta,
 } from "@solana/web3.js";
 import { ixDiscriminator } from "./discriminator";
-import { deriveGamePda, deriveVaultPda } from "./pdas";
+import {
+  deriveGamePda,
+  derivePlayerStatsPda,
+  deriveReferralPda,
+  deriveVaultPda,
+} from "./pdas";
 
 const writable = (pubkey: PublicKey, isSigner = false): AccountMeta => ({
   pubkey,
@@ -85,6 +90,7 @@ export function buildStartGame(args: StartGameArgs): TransactionInstruction {
   if (args.commitment.length !== 32) throw new Error("commitment must be 32 bytes");
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
+  const [statsPda] = derivePlayerStatsPda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8 + 1 + 8 + 32);
   ixDiscriminator("start_game").copy(data, 0);
   data.writeUInt8(args.mineCount, 8);
@@ -95,9 +101,53 @@ export function buildStartGame(args: StartGameArgs): TransactionInstruction {
     keys: [
       writable(vaultPda),
       writable(gamePda),
+      writable(statsPda),
       writable(args.player, true),
       readonly(SystemProgram.programId),
     ],
+    data,
+  });
+}
+
+// ── set_referrer ──────────────────────────────────────────────────────────────
+export interface SetReferrerArgs {
+  ctx: BuildContext;
+  player: PublicKey;
+  referrer: PublicKey;
+}
+
+export function buildSetReferrer(args: SetReferrerArgs): TransactionInstruction {
+  if (args.player.equals(args.referrer)) throw new Error("cannot self-refer");
+  const [statsPda] = derivePlayerStatsPda(args.ctx.programId, args.player);
+  const [referralPda] = deriveReferralPda(args.ctx.programId, args.referrer);
+  const data = Buffer.alloc(8);
+  ixDiscriminator("set_referrer").copy(data, 0);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(statsPda),
+      readonly(args.referrer),
+      writable(referralPda),
+      writable(args.player, true),
+      readonly(SystemProgram.programId),
+    ],
+    data,
+  });
+}
+
+// ── claim_referral ────────────────────────────────────────────────────────────
+export interface ClaimReferralArgs {
+  ctx: BuildContext;
+  referrer: PublicKey;
+}
+
+export function buildClaimReferral(args: ClaimReferralArgs): TransactionInstruction {
+  const [referralPda] = deriveReferralPda(args.ctx.programId, args.referrer);
+  const data = Buffer.alloc(8);
+  ixDiscriminator("claim_referral").copy(data, 0);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(referralPda), writable(args.referrer, true)],
     data,
   });
 }
@@ -150,19 +200,32 @@ export interface SettleGameArgs {
   houseAuthority: PublicKey;
   mineLayout: number;
   salt: Buffer;
+  /** If the player has a referrer, pass it to credit the rakeback in the same tx. */
+  referrer?: PublicKey;
 }
 
 export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
   if (args.salt.length !== 32) throw new Error("salt must be 32 bytes");
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
+  const [statsPda] = derivePlayerStatsPda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8 + 2 + 32);
   ixDiscriminator("settle_game").copy(data, 0);
   data.writeUInt16LE(args.mineLayout, 8);
   args.salt.copy(data, 10);
+  const keys: AccountMeta[] = [
+    writable(vaultPda),
+    writable(gamePda),
+    writable(statsPda),
+    readonly(args.houseAuthority, true),
+  ];
+  if (args.referrer) {
+    const [referralPda] = deriveReferralPda(args.ctx.programId, args.referrer);
+    keys.push(writable(referralPda));
+  }
   return new TransactionInstruction({
     programId: args.ctx.programId,
-    keys: [readonly(vaultPda), writable(gamePda), readonly(args.houseAuthority, true)],
+    keys,
     data,
   });
 }
@@ -206,6 +269,7 @@ export function buildCloseGame(args: CloseGameArgs): TransactionInstruction {
 export interface WithdrawArgs {
   ctx: BuildContext;
   treasury: PublicKey;
+  destination: PublicKey;
   amount: bigint;
 }
 
@@ -216,7 +280,38 @@ export function buildWithdrawToTreasury(args: WithdrawArgs): TransactionInstruct
   data.writeBigUInt64LE(args.amount, 8);
   return new TransactionInstruction({
     programId: args.ctx.programId,
-    keys: [writable(vaultPda), writable(args.treasury, true)],
+    keys: [writable(vaultPda), readonly(args.treasury, true), writable(args.destination)],
+    data,
+  });
+}
+
+// ── allowlist_add / allowlist_remove ──────────────────────────────────────────
+export interface AllowlistChangeArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  address: PublicKey;
+}
+
+export function buildAllowlistAdd(args: AllowlistChangeArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const data = Buffer.alloc(8 + 32);
+  ixDiscriminator("allowlist_add").copy(data, 0);
+  args.address.toBuffer().copy(data, 8);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), readonly(args.owner, true)],
+    data,
+  });
+}
+
+export function buildAllowlistRemove(args: AllowlistChangeArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const data = Buffer.alloc(8 + 32);
+  ixDiscriminator("allowlist_remove").copy(data, 0);
+  args.address.toBuffer().copy(data, 8);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), readonly(args.owner, true)],
     data,
   });
 }
@@ -228,6 +323,7 @@ export interface UpdateVaultArgs {
   houseEdgeBps?: number;
   maxBetBps?: number;
   maxPayoutBps?: number;
+  treasurySplitBps?: number;
   paused?: boolean;
   newHouseAuthority?: PublicKey;
   newTreasury?: PublicKey;
@@ -235,11 +331,11 @@ export interface UpdateVaultArgs {
 
 export function buildUpdateVault(args: UpdateVaultArgs): TransactionInstruction {
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
-  // Anchor encodes Option<T> as (1-byte presence flag, optionally T).
   const parts: Buffer[] = [ixDiscriminator("update_vault")];
   parts.push(encodeOption(args.houseEdgeBps, (v) => writeU16(v)));
   parts.push(encodeOption(args.maxBetBps, (v) => writeU16(v)));
   parts.push(encodeOption(args.maxPayoutBps, (v) => writeU16(v)));
+  parts.push(encodeOption(args.treasurySplitBps, (v) => writeU16(v)));
   parts.push(encodeOption(args.paused, (v) => Buffer.from([v ? 1 : 0])));
   parts.push(encodeOption(args.newHouseAuthority, (v) => Buffer.from(v.toBytes())));
   parts.push(encodeOption(args.newTreasury, (v) => Buffer.from(v.toBytes())));

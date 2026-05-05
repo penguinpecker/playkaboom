@@ -16,6 +16,7 @@ const NAV_LINKS = [
   { href: "/", label: "Home" },
   { href: "/play", label: "Play" },
   { href: "/leaderboard", label: "Leaderboard" },
+  { href: "/referrals", label: "Referrals" },
   { href: "/logs", label: "Logs" },
   { href: "/vault", label: "Vault" },
 ];
