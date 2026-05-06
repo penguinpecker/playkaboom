@@ -5,7 +5,7 @@ import { SettleInput } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
-import { decryptSession } from "@/server/session";
+import { loadSession, deleteSession } from "@/server/session-store";
 import { sendHouseTx } from "@/server/solana";
 import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
@@ -24,7 +24,8 @@ export async function POST(req: NextRequest) {
     const rl = await enforceRateLimit(`settle:${clientIp(req)}:${body.player}`);
     if (!rl.ok) throw new ApiError(429, "Too many requests");
 
-    const session = decryptSession(body.gameToken);
+    const session = await loadSession(body.player, body.gameToken);
+    if (!session) throw new ApiError(404, "No active session — start a new game");
     if (session.player !== body.player) {
       throw new ApiError(403, "Player mismatch");
     }
@@ -45,6 +46,8 @@ export async function POST(req: NextRequest) {
         }),
       ]);
       logger.info({ player: body.player, sig }, "settle");
+      // Game is closed on chain; clear server-side session.
+      await deleteSession(body.player);
       return NextResponse.json({ signature: sig, mineLayout: session.mineLayout, verified: true });
     }
 

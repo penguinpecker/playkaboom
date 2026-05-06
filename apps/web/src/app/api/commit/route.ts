@@ -5,9 +5,10 @@ import { buildStartGame, serializeIx } from "@playkaboom/sdk";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { createGameSession } from "@/server/game";
-import { encryptSession } from "@/server/session";
+import { saveSession } from "@/server/session-store";
 import { playerHasActiveGame } from "@/server/solana";
 import { programId } from "@/server/env";
+import { getConnection } from "@/server/connection";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 
@@ -38,7 +39,11 @@ export async function POST(req: NextRequest) {
       betLamports: BigInt(body.betLamports),
       commitment,
     });
-    const gameToken = encryptSession(payload);
+    // Mirror the encrypted session to Supabase keyed by GameSession PDA so
+    // the player can recover from any device. Function returns the same
+    // ciphertext we'd have produced with encryptSession alone.
+    const slot = await getConnection().getSlot("confirmed");
+    const gameToken = await saveSession(body.player, payload, slot);
 
     logger.info(
       { player: body.player, mineCount: body.mineCount, bet: body.betLamports.toString() },
