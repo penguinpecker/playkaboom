@@ -11,23 +11,36 @@ import { logger } from "./logger";
  * server is the only thing that can decrypt (SESSION_ENC_KEY) — Supabase
  * holds ciphertext only. This lets a player recover an in-flight game from
  * any device, not just the one with the localStorage token.
+ *
+ * `betLamports`/`mineCount`/`startSlot` are stored in plaintext for ops
+ * visibility — same data that's on-chain anyway, just easier to query.
  */
+export interface SaveSessionMeta {
+  betLamports?: bigint;
+  mineCount?: number;
+  startSlot?: number;
+}
+
 export async function saveSession(
   player: string,
   payload: SessionPayload,
   createdSlot: number,
+  meta?: SaveSessionMeta,
 ): Promise<string> {
   const ciphertext = encryptSession(payload);
   const [gamePda] = deriveGamePda(programId(), new PublicKey(player));
-  const { error } = await supabaseAdmin().from("game_sessions").upsert(
-    {
-      game: gamePda.toBase58(),
-      player,
-      ciphertext,
-      created_slot: createdSlot,
-    },
-    { onConflict: "game" },
-  );
+  const row: Record<string, unknown> = {
+    game: gamePda.toBase58(),
+    player,
+    ciphertext,
+    created_slot: createdSlot,
+  };
+  if (meta?.betLamports !== undefined) row.bet_lamports = meta.betLamports.toString();
+  if (meta?.mineCount !== undefined) row.mine_count = meta.mineCount;
+  if (meta?.startSlot !== undefined) row.start_slot = meta.startSlot;
+  const { error } = await supabaseAdmin().from("game_sessions").upsert(row, {
+    onConflict: "game",
+  });
   if (error) {
     // Mirror is best-effort: if Supabase is down, we still return the
     // ciphertext to the client. The client-side localStorage path stays

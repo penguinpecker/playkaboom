@@ -43,7 +43,11 @@ export async function POST(req: NextRequest) {
     // the player can recover from any device. Function returns the same
     // ciphertext we'd have produced with encryptSession alone.
     const slot = await getConnection().getSlot("confirmed");
-    const gameToken = await saveSession(body.player, payload, slot);
+    const gameToken = await saveSession(body.player, payload, slot, {
+      betLamports: BigInt(body.betLamports),
+      mineCount: body.mineCount,
+      startSlot: slot,
+    });
 
     logger.info(
       { player: body.player, mineCount: body.mineCount, bet: body.betLamports.toString() },
