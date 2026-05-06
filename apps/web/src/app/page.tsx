@@ -2,9 +2,9 @@
 import Link from "next/link";
 import { formatEther } from "@/lib/compat";
 import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
-import { useGameHistory } from "@/hooks/useGameHistory";
 import { CLUSTER, CLUSTER_LABEL, accountExplorer, PROGRAM_ID } from "@/lib/cluster";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
+import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 
 export default function HomePage() {
   return (
@@ -472,10 +472,8 @@ function ReactiveModules() {
 }
 
 function RealTimeIntel() {
-  const { history } = useGameHistory();
   const { data: gameCount } = useGameCounter();
   const { data: vaultBal } = useVaultBalance();
-  const recent = history.slice(0, 4);
 
   return (
     <section className="py-16 lg:py-24 container mx-auto px-4 sm:px-6 lg:px-12">
@@ -485,13 +483,14 @@ function RealTimeIntel() {
             REAL-TIME INTEL
           </h2>
           <p className="font-body text-sm text-on-surface-variant mb-8 leading-relaxed">
-            Live game data from on-chain reads + your local cache.
+            Live games settled on-chain, indexed into our public database. Every
+            row links to a verifiable proof.
           </p>
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <span className="status-dot" />
               <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface">
-                {gameCount ? gameCount.toString() : history.length} Games Played
+                {gameCount ? gameCount.toString() : "0"} Games Played
               </span>
             </div>
             <div className="flex items-center gap-3">
@@ -509,53 +508,10 @@ function RealTimeIntel() {
           </div>
         </div>
         <div className="lg:col-span-3">
-          <div className="bg-surface-container-low rounded-lg border border-outline-variant/10 overflow-hidden">
-            <div className="grid grid-cols-4 px-6 py-4 bg-surface-container-high font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
-              <span>Operative</span>
-              <span>Module</span>
-              <span>Multiplier</span>
-              <span className="text-right">Result</span>
-            </div>
-            <div className="divide-y divide-outline-variant/5">
-              {recent.length > 0 ? (
-                recent.map((g) => (
-                  <div
-                    key={`${g.gameId}-${g.timestamp}`}
-                    className="grid grid-cols-4 px-6 py-4 items-center hover:bg-surface-container-highest transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div
-                        className={`w-6 h-6 rounded ${g.won ? "bg-primary/20" : "bg-error/20"} flex items-center justify-center font-headline text-[8px] font-bold ${g.won ? "text-primary" : "text-error"}`}
-                      >
-                        {g.player.slice(0, 2).toUpperCase()}
-                      </div>
-                      <span className="font-body text-sm text-on-surface">
-                        {g.player.slice(0, 6)}…{g.player.slice(-4)}
-                      </span>
-                    </div>
-                    <span className="font-headline text-xs text-on-surface-variant">
-                      MINES (4×4)
-                    </span>
-                    <span
-                      className={`font-headline text-sm font-bold ${g.won ? "text-primary" : "text-on-surface-variant"}`}
-                    >
-                      ×{g.won ? g.multiplier.toFixed(2) : "0.00"}
-                    </span>
-                    <span
-                      className={`font-headline text-sm font-bold ${g.won ? "text-primary" : "text-error"} text-right`}
-                    >
-                      {g.won ? "+" : "-"}
-                      {(g.won ? g.payout : g.bet).toFixed(3)} SOL
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <div className="px-6 py-8 text-center text-on-surface-variant text-sm">
-                  Play a game to see live intel here
-                </div>
-              )}
-            </div>
-          </div>
+          {/* Same component as /play below the grid — DB-backed, indexed
+              from on-chain settle events by the cron worker. Everyone sees
+              everyone's games, not just their own. */}
+          <GlobalActivityFeed limit={20} title="" maxHeight={420} />
         </div>
       </div>
     </section>

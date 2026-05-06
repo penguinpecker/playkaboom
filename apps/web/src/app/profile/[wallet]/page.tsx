@@ -195,7 +195,8 @@ export default function ProfilePage() {
                 />
               </div>
 
-              {/* Recent games (local cache) */}
+              {/* Recent activity for this wallet, sourced from on-chain
+                  settle events indexed into the public database. */}
               {myGames.length > 0 && (
                 <>
                   <h3 className="font-headline text-xs font-bold uppercase tracking-widest text-on-surface mt-8 mb-4">
