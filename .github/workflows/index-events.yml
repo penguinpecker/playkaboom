@@ -24,8 +24,10 @@ jobs:
             echo "CRON_SECRET secret not configured" >&2
             exit 1
           fi
+          # Hit www directly — playkaboom.gg 307-redirects to www, and following
+          # the redirect would strip the Authorization header for cross-host.
           response=$(curl -sS -w "\nHTTP %{http_code}" \
             -H "Authorization: Bearer $CRON_SECRET" \
-            https://playkaboom.gg/api/cron/index-events)
+            https://www.playkaboom.gg/api/cron/index-events)
           echo "$response"
           echo "$response" | tail -n1 | grep -q "HTTP 200"
