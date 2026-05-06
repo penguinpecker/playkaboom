@@ -25,6 +25,8 @@ export const DEFAULT_MAX_BET_BPS = 200; // 2% of vault
 export const DEFAULT_MAX_PAYOUT_BPS = 5_000; // 50% of vault
 
 export const VAULT_SEED = "kaboom_vault";
+export const VAULT_V2_SEED = "kaboom_v2_state";
+export const LP_SEED = "kaboom_lp";
 export const GAME_SEED = "kaboom_game";
 export const STATS_SEED = "kaboom_stats";
 export const REFERRAL_SEED = "kaboom_referral";

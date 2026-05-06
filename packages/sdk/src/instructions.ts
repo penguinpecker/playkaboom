@@ -7,8 +7,10 @@ import {
 import { ixDiscriminator } from "./discriminator";
 import {
   deriveGamePda,
+  deriveLpPositionPda,
   derivePlayerStatsPda,
   deriveReferralPda,
+  deriveV2StatePda,
   deriveVaultPda,
 } from "./pdas";
 
@@ -89,6 +91,7 @@ export interface StartGameArgs {
 export function buildStartGame(args: StartGameArgs): TransactionInstruction {
   if (args.commitment.length !== 32) throw new Error("commitment must be 32 bytes");
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
   const [statsPda] = derivePlayerStatsPda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8 + 1 + 8 + 32);
@@ -100,6 +103,7 @@ export function buildStartGame(args: StartGameArgs): TransactionInstruction {
     programId: args.ctx.programId,
     keys: [
       writable(vaultPda),
+      writable(v2StatePda),
       writable(gamePda),
       writable(statsPda),
       writable(args.player, true),
@@ -183,12 +187,18 @@ export interface CashOutArgs {
 
 export function buildCashOut(args: CashOutArgs): TransactionInstruction {
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8);
   ixDiscriminator("cash_out").copy(data, 0);
   return new TransactionInstruction({
     programId: args.ctx.programId,
-    keys: [writable(vaultPda), writable(gamePda), writable(args.player, true)],
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      writable(gamePda),
+      writable(args.player, true),
+    ],
     data,
   });
 }
@@ -207,6 +217,7 @@ export interface SettleGameArgs {
 export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
   if (args.salt.length !== 32) throw new Error("salt must be 32 bytes");
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
   const [statsPda] = derivePlayerStatsPda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8 + 2 + 32);
@@ -215,6 +226,7 @@ export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
   args.salt.copy(data, 10);
   const keys: AccountMeta[] = [
     writable(vaultPda),
+    writable(v2StatePda),
     writable(gamePda),
     writable(statsPda),
     readonly(args.houseAuthority, true),
@@ -238,12 +250,18 @@ export interface RefundExpiredArgs {
 
 export function buildRefundExpired(args: RefundExpiredArgs): TransactionInstruction {
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8);
   ixDiscriminator("refund_expired").copy(data, 0);
   return new TransactionInstruction({
     programId: args.ctx.programId,
-    keys: [writable(vaultPda), writable(gamePda), writable(args.player, true)],
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      writable(gamePda),
+      writable(args.player, true),
+    ],
     data,
   });
 }
@@ -346,6 +364,184 @@ export function buildUpdateVault(args: UpdateVaultArgs): TransactionInstruction 
   });
 }
 
+// ── Phase 2: LP / V2 builders ────────────────────────────────────────────────
+
+export interface InitializeV2Args {
+  ctx: BuildContext;
+  owner: PublicKey;
+}
+
+export function buildInitializeV2(args: InitializeV2Args): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      readonly(vaultPda),
+      writable(v2StatePda),
+      writable(args.owner, true),
+      readonly(SystemProgram.programId),
+    ],
+    data: ixDiscriminator("initialize_v2"),
+  });
+}
+
+export interface UpdateV2ConfigArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  minHouseShareBps?: number;
+  maxUserPositionBps?: number;
+  minHealthBps?: number;
+  withdrawCooldownSlots?: bigint;
+  minLpDeposit?: bigint;
+}
+
+export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const parts: Buffer[] = [ixDiscriminator("update_v2_config")];
+  parts.push(encodeOption(args.minHouseShareBps, (v) => writeU16(v)));
+  parts.push(encodeOption(args.maxUserPositionBps, (v) => writeU16(v)));
+  parts.push(encodeOption(args.minHealthBps, (v) => writeU16(v)));
+  parts.push(encodeOption(args.withdrawCooldownSlots, (v) => writeU64(v)));
+  parts.push(encodeOption(args.minLpDeposit, (v) => writeU64(v)));
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [readonly(vaultPda), writable(v2StatePda), readonly(args.owner, true)],
+    data: Buffer.concat(parts),
+  });
+}
+
+export interface LpDepositArgs {
+  ctx: BuildContext;
+  user: PublicKey;
+  amountLamports: bigint;
+}
+
+export function buildLpDeposit(args: LpDepositArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const [positionPda] = deriveLpPositionPda(args.ctx.programId, args.user);
+  const data = Buffer.concat([ixDiscriminator("lp_deposit"), writeU64(args.amountLamports)]);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      writable(positionPda),
+      writable(args.user, true),
+      readonly(SystemProgram.programId),
+    ],
+    data,
+  });
+}
+
+interface UserLpActionArgs {
+  ctx: BuildContext;
+  user: PublicKey;
+}
+
+function buildUserLpAction(name: string, args: UserLpActionArgs, extra?: Buffer): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const [positionPda] = deriveLpPositionPda(args.ctx.programId, args.user);
+  const data = extra ? Buffer.concat([ixDiscriminator(name), extra]) : ixDiscriminator(name);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      writable(positionPda),
+      writable(args.user, true),
+    ],
+    data,
+  });
+}
+
+export interface RequestWithdrawArgs extends UserLpActionArgs {
+  units: bigint;
+}
+
+export function buildRequestWithdraw(args: RequestWithdrawArgs): TransactionInstruction {
+  return buildUserLpAction("request_withdraw", args, writeU128(args.units));
+}
+
+export function buildCancelWithdraw(args: UserLpActionArgs): TransactionInstruction {
+  return buildUserLpAction("cancel_withdraw", args);
+}
+
+export function buildCompleteWithdraw(args: UserLpActionArgs): TransactionInstruction {
+  return buildUserLpAction("complete_withdraw", args);
+}
+
+export interface CloseLpPositionArgs {
+  ctx: BuildContext;
+  user: PublicKey;
+}
+
+export function buildCloseLpPosition(args: CloseLpPositionArgs): TransactionInstruction {
+  const [positionPda] = deriveLpPositionPda(args.ctx.programId, args.user);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(positionPda), writable(args.user, true)],
+    data: ixDiscriminator("close_lp_position"),
+  });
+}
+
+export interface HouseDepositArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  amountLamports: bigint;
+}
+
+export function buildHouseDeposit(args: HouseDepositArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const data = Buffer.concat([ixDiscriminator("house_deposit"), writeU64(args.amountLamports)]);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      readonly(vaultPda),
+      writable(v2StatePda),
+      writable(args.owner, true),
+      readonly(SystemProgram.programId),
+    ],
+    data,
+  });
+}
+
+interface HouseLpActionArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+}
+
+function buildHouseLpAction(name: string, args: HouseLpActionArgs, extra?: Buffer): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const data = extra ? Buffer.concat([ixDiscriminator(name), extra]) : ixDiscriminator(name);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), writable(v2StatePda), writable(args.owner, true)],
+    data,
+  });
+}
+
+export interface HouseRequestWithdrawArgs extends HouseLpActionArgs {
+  units: bigint;
+}
+
+export function buildHouseRequestWithdraw(args: HouseRequestWithdrawArgs): TransactionInstruction {
+  return buildHouseLpAction("house_request_withdraw", args, writeU128(args.units));
+}
+
+export function buildHouseCancelWithdraw(args: HouseLpActionArgs): TransactionInstruction {
+  return buildHouseLpAction("house_cancel_withdraw", args);
+}
+
+export function buildHouseCompleteWithdraw(args: HouseLpActionArgs): TransactionInstruction {
+  return buildHouseLpAction("house_complete_withdraw", args);
+}
+
 // ── propose_owner / cancel_proposed_owner / accept_ownership ─────────────────
 export interface ProposeOwnerArgs {
   ctx: BuildContext;
@@ -400,6 +596,22 @@ export function buildAcceptOwnership(args: AcceptOwnershipArgs): TransactionInst
 function writeU16(v: number): Buffer {
   const b = Buffer.alloc(2);
   b.writeUInt16LE(v, 0);
+  return b;
+}
+
+function writeU64(v: bigint): Buffer {
+  const b = Buffer.alloc(8);
+  b.writeBigUInt64LE(v, 0);
+  return b;
+}
+
+function writeU128(v: bigint): Buffer {
+  const b = Buffer.alloc(16);
+  // little-endian: low 64 bits first, then high 64 bits.
+  const lo = v & 0xffffffffffffffffn;
+  const hi = (v >> 64n) & 0xffffffffffffffffn;
+  b.writeBigUInt64LE(lo, 0);
+  b.writeBigUInt64LE(hi, 8);
   return b;
 }
 

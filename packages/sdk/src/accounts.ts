@@ -2,6 +2,8 @@ import { PublicKey } from "@solana/web3.js";
 import { accountDiscriminator } from "./discriminator";
 
 const VAULT_DISC = accountDiscriminator("Vault");
+const VAULT_V2_DISC = accountDiscriminator("VaultV2State");
+const LP_POSITION_DISC = accountDiscriminator("LpPosition");
 const GAME_DISC = accountDiscriminator("GameSession");
 const STATS_DISC = accountDiscriminator("PlayerStats");
 const REFERRAL_DISC = accountDiscriminator("ReferralAccount");
@@ -128,6 +130,84 @@ class Reader {
     }
     return this.pk();
   }
+  u128(): bigint {
+    const lo = this.data.readBigUInt64LE(this.offset);
+    const hi = this.data.readBigUInt64LE(this.offset + 8);
+    this.offset += 16;
+    return (hi << 64n) | lo;
+  }
+}
+
+export interface VaultV2StateAccount {
+  bump: number;
+  totalOutstandingMaxPayout: bigint;
+  totalUnits: bigint;
+  houseUnits: bigint;
+  housePendingUnits: bigint;
+  housePendingUnlockSlot: bigint;
+  seedUnits: bigint;
+  totalPendingUnits: bigint;
+  minHouseShareBps: number;
+  maxUserPositionBps: number;
+  minHealthBps: number;
+  withdrawCooldownSlots: bigint;
+  minLpDeposit: bigint;
+}
+
+export interface LpPositionAccount {
+  user: PublicKey;
+  units: bigint;
+  pendingUnits: bigint;
+  pendingUnlockSlot: bigint;
+  createdSlot: bigint;
+  bump: number;
+}
+
+export function decodeVaultV2State(data: Buffer): VaultV2StateAccount {
+  if (!data.subarray(0, 8).equals(VAULT_V2_DISC))
+    throw new Error("not a VaultV2State account");
+  const r = new Reader(data.subarray(8) as Buffer);
+  const bump = r.u8();
+  const totalOutstandingMaxPayout = r.u64();
+  const totalUnits = r.u128();
+  const houseUnits = r.u128();
+  const housePendingUnits = r.u128();
+  const housePendingUnlockSlot = r.u64();
+  const seedUnits = r.u128();
+  const totalPendingUnits = r.u128();
+  const minHouseShareBps = r.u16();
+  const maxUserPositionBps = r.u16();
+  const minHealthBps = r.u16();
+  const withdrawCooldownSlots = r.u64();
+  const minLpDeposit = r.u64();
+  return {
+    bump,
+    totalOutstandingMaxPayout,
+    totalUnits,
+    houseUnits,
+    housePendingUnits,
+    housePendingUnlockSlot,
+    seedUnits,
+    totalPendingUnits,
+    minHouseShareBps,
+    maxUserPositionBps,
+    minHealthBps,
+    withdrawCooldownSlots,
+    minLpDeposit,
+  };
+}
+
+export function decodeLpPosition(data: Buffer): LpPositionAccount {
+  if (!data.subarray(0, 8).equals(LP_POSITION_DISC))
+    throw new Error("not an LpPosition account");
+  const r = new Reader(data.subarray(8) as Buffer);
+  const user = r.pk();
+  const units = r.u128();
+  const pendingUnits = r.u128();
+  const pendingUnlockSlot = r.u64();
+  const createdSlot = r.u64();
+  const bump = r.u8();
+  return { user, units, pendingUnits, pendingUnlockSlot, createdSlot, bump };
 }
 
 export function decodeVault(data: Buffer): VaultAccount {
