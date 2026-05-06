@@ -108,20 +108,18 @@ export function GameRecoveryBanner({ info }: Props) {
   // ─── Recoverable: Resume vs forfeit ───────────────────────────────────
   if (info.recoverable) {
     return (
-      <section className="bg-primary/5 border border-primary/30 p-5 rounded-lg space-y-3">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-primary" style={{ fontSize: 20 }}>
-            replay
-          </span>
-          <h3 className="font-headline text-xs font-bold tracking-widest text-primary uppercase">
-            In-Flight Game Found
-          </h3>
-        </div>
-        <p className="font-mono text-xs text-on-surface-variant leading-relaxed">
-          You have an active <span className="text-on-surface">{fmtSol(info.betLamports)}</span> game
-          {info.mineCount != null ? ` with ${info.mineCount} mines` : ""} that paused on
-          another device. Resume now to continue revealing tiles with the same
-          mine layout.
+      <section className="bg-surface-container-low p-5 stealth-card border border-outline-variant/10">
+        <p className="font-headline text-[10px] tracking-[.12em] text-on-surface-variant flex items-center gap-2 mb-2">
+          <span className="status-dot bg-primary" />
+          IN-FLIGHT GAME — RESUME?
+        </p>
+        <h3 className="font-headline text-base font-black italic tracking-tight text-on-surface mb-3">
+          PICK UP WHERE YOU LEFT OFF
+        </h3>
+        <p className="font-mono text-xs text-on-surface-variant leading-relaxed mb-4">
+          Active <span className="text-on-surface font-bold">{fmtSol(info.betLamports)}</span> game
+          {info.mineCount != null ? ` (${info.mineCount} mines)` : ""} paused on another
+          device. Resume to keep playing the same mine layout.
         </p>
         <div className="flex gap-2">
           <button
@@ -134,7 +132,7 @@ export function GameRecoveryBanner({ info }: Props) {
           <button
             disabled={busy || !info.refundable}
             onClick={() => void forceClose()}
-            className="px-4 py-3 border border-amber/40 text-amber font-headline font-bold text-xs tracking-widest hover:bg-amber/10 active:scale-95 transition-all disabled:opacity-40"
+            className="px-4 py-3 border border-outline-variant/30 text-on-surface-variant font-headline font-bold text-xs tracking-widest hover:bg-surface-container hover:text-on-surface active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             title={
               info.refundable
                 ? "Force-close this game (forfeit it on-chain). PDA rent returns to your wallet."
@@ -143,13 +141,11 @@ export function GameRecoveryBanner({ info }: Props) {
           >
             {info.refundable
               ? "FORCE CLOSE"
-              : `CLOSABLE IN ${countdownLabel(info.secondsUntilRefund)}`}
+              : `${countdownLabel(info.secondsUntilRefund)}`}
           </button>
         </div>
-        <p className="font-mono text-[10px] text-on-surface-variant/40 italic">
-          Resume = continue with same layout/salt the server held for you.
-          Force close = forfeit this game's on-chain proof, recover the slot
-          + ~0.002 SOL rent so you can start a fresh one.
+        <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
+          Resume = same mine layout · Force close = forfeit, reclaim slot
         </p>
       </section>
     );
@@ -157,32 +153,30 @@ export function GameRecoveryBanner({ info }: Props) {
 
   // ─── Stuck: only force-close path is meaningful ────────────────────────
   return (
-    <section className="bg-amber/10 border border-amber/40 p-5 rounded-lg space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="material-symbols-outlined text-amber" style={{ fontSize: 20 }}>
-          warning
-        </span>
-        <h3 className="font-headline text-xs font-bold tracking-widest text-amber uppercase">
-          Stuck Game On-Chain
-        </h3>
-      </div>
-      <p className="font-mono text-xs text-on-surface-variant leading-relaxed">
-        On-chain bet of <span className="text-on-surface">{fmtSol(info.betLamports)}</span>{" "}
-        with no recoverable off-chain session — close it to unblock your
-        wallet.{" "}
+    <section className="bg-surface-container-low p-5 stealth-card border border-outline-variant/10">
+      <p className="font-headline text-[10px] tracking-[.12em] text-on-surface-variant flex items-center gap-2 mb-2">
+        <span className="status-dot bg-tertiary" />
+        STUCK GAME ON-CHAIN
+      </p>
+      <h3 className="font-headline text-base font-black italic tracking-tight text-on-surface mb-3">
+        UNBLOCK YOUR WALLET
+      </h3>
+      <p className="font-mono text-xs text-on-surface-variant leading-relaxed mb-4">
+        On-chain bet of <span className="text-on-surface font-bold">{fmtSol(info.betLamports)}</span>{" "}
+        with no recoverable session.{" "}
         {info.refundable ? (
-          <span className="text-emerald">Ready to close now.</span>
+          <span className="text-emerald">Ready to close.</span>
         ) : (
-          <span>
+          <>
             Closable in{" "}
-            <span className="text-amber">{countdownLabel(info.secondsUntilRefund)}</span>.
-          </span>
+            <span className="text-on-surface">{countdownLabel(info.secondsUntilRefund)}</span>.
+          </>
         )}
       </p>
       <button
         disabled={busy || !info.refundable}
         onClick={() => void forceClose()}
-        className="w-full py-3 bg-amber text-on-primary font-headline font-bold text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        className="w-full py-3 border-2 border-tertiary text-tertiary font-headline font-bold text-xs tracking-widest hover:bg-tertiary/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {busy
           ? "CLOSING…"
@@ -190,10 +184,8 @@ export function GameRecoveryBanner({ info }: Props) {
             ? "FORCE CLOSE STUCK GAME"
             : `READY IN ${countdownLabel(info.secondsUntilRefund)}…`}
       </button>
-      <p className="font-mono text-[10px] text-on-surface-variant/40 italic">
-        Calls close_unsettled_game on the program (~0.002 SOL rent returns to
-        you). If you won, your cash-out already paid out at win time; this
-        only reclaims the slot.
+      <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
+        Calls close_unsettled_game · ~0.002 SOL rent returned
       </p>
     </section>
   );
