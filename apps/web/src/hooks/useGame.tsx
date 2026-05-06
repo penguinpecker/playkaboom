@@ -21,7 +21,10 @@ export function useGame() {
 
   return {
     state: {
-      gameId: state.status === "playing" ? BigInt(Date.parse(`${Date.now()}`)) : null,
+      // Date.parse(`${Date.now()}`) returns NaN — Date.parse expects a
+      // date-formatted string, not a unix-ms integer-as-string. Use Date.now()
+      // directly so the BigInt cast doesn't crash the page once the bet lands.
+      gameId: state.status === "playing" ? BigInt(Date.now()) : null,
       status: state.status,
       bet: state.bet,
       mineCount: state.mineCount,
