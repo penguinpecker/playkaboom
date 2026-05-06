@@ -4,6 +4,8 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { useGameStore } from "@/stores/game-store";
 
+export type OnChainGameStatus = "Playing" | "Won" | "Lost" | "Expired";
+
 export interface StuckGameInfo {
   active: boolean;
   /** True if server has the encrypted session and player can keep playing. */
@@ -13,11 +15,16 @@ export interface StuckGameInfo {
   /** Bet in lamports (string for u64). */
   betLamports: string | null;
   mineCount: number | null;
-  /** Slots until refund_expired becomes callable. 0 if already refundable. */
+  /** Current GameSession status — drives which recovery ix the banner dispatches:
+   *    Playing  → refund_expired (refunds bet)
+   *    Won/Lost → close_unsettled_game (reclaims rent)
+   *    Expired  → close_game (no cooldown left). */
+  status: OnChainGameStatus | null;
+  /** Slots until the appropriate recovery ix becomes callable. 0 if already refundable. */
   slotsUntilRefund: number;
   /** Wall-clock seconds until refundable. 0 if already refundable. */
   secondsUntilRefund: number;
-  /** True if refund_expired ix would succeed right now. */
+  /** True if the right ix (per status) would succeed right now. */
   refundable: boolean;
   /** Pre-fetched ciphertext — caller hands this to setGameToken when the
    *  player clicks the Resume button. NOT auto-applied (avoids surprise). */
@@ -41,6 +48,7 @@ const EMPTY_INFO: Omit<StuckGameInfo, "refresh"> = {
   stuck: false,
   betLamports: null,
   mineCount: null,
+  status: null,
   slotsUntilRefund: 0,
   secondsUntilRefund: 0,
   refundable: false,
@@ -75,7 +83,7 @@ export function useGameResume(): StuckGameInfo {
         active: boolean;
         gameToken?: string | null;
         sessionRecovered?: boolean;
-        onChain?: { bet?: string; mineCount?: number };
+        onChain?: { bet?: string; mineCount?: number; status?: OnChainGameStatus };
         refund?: {
           refundable: boolean;
           slotsUntilRefund: number;
@@ -99,6 +107,7 @@ export function useGameResume(): StuckGameInfo {
         stuck: !data.gameToken,
         betLamports: data.onChain?.bet ?? null,
         mineCount: data.onChain?.mineCount ?? null,
+        status: data.onChain?.status ?? null,
         slotsUntilRefund: data.refund?.slotsUntilRefund ?? 0,
         secondsUntilRefund: data.refund?.secondsUntilRefund ?? 0,
         refundable: data.refund?.refundable ?? false,
