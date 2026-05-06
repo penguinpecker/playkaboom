@@ -13,6 +13,7 @@ import {
   type ReferralAccountData,
 } from "@playkaboom/sdk";
 import { PROGRAM_ID } from "@/lib/cluster";
+import { buildPriorityIxs } from "@/lib/priority-fee";
 
 const REFERRER_LOCAL_KEY = "playkaboom.referrer.v1";
 
@@ -83,7 +84,15 @@ export function useReferralActions() {
   const signAndSend = useCallback(
     async (tx: Transaction): Promise<string> => {
       if (!wallet) throw new Error("No wallet connected");
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
+        connection.getLatestBlockhash("confirmed"),
+        buildPriorityIxs(connection, PROGRAM_ID),
+      ]);
+      // Prepend priority-fee ixs so refer/claim txs aren't evicted under load.
+      const wrapped = new Transaction();
+      for (const pix of priorityIxs) wrapped.add(pix);
+      for (const orig of tx.instructions) wrapped.add(orig);
+      tx = wrapped;
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);

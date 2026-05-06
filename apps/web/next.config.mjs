@@ -4,18 +4,29 @@ const isProd = process.env.NODE_ENV === "production";
 
 // Content Security Policy. Tightened for production; relaxed in dev for HMR.
 //
-// allow-list rationale (production):
+// allow-list rationale (production) — every entry is scoped to a host we
+// actually call from the browser. We re-verified this list 2026-05-06 and
+// dropped Helius/Triton/WalletConnect/web3modal which are either server-only
+// or unused. Smaller allow-list = smaller blast radius if a third party is
+// compromised.
+//
 //   - script-src/connect-src 'self' for our own assets and API routes
 //   - Privy SDK + auth iframe + Cloudflare Turnstile (Privy bundles it for bot defense)
-//   - Solana RPCs (mainnet, devnet, Helius, Triton) over https + wss
+//   - Alchemy Solana RPC (https + wss)
+//   - Public Solana RPC fallbacks (mainnet/devnet) — used only if Alchemy is down
 //   - Supabase REST + realtime
 //   - Pyth Hermes for live price feed
-//   - WalletConnect relay for non-Privy wallets
 //   - frame-ancestors 'none' blocks clickjacking
 //   - object-src 'none' blocks legacy plugins
+//   - require-trusted-types-for 'script' opts into Trusted Types where the
+//     browser supports it (Chrome 83+); harmless otherwise
 const csp = [
   "default-src 'self'",
-  // 'unsafe-inline' + 'unsafe-eval' are required by Next.js inline runtime + Privy until we move to strict nonces.
+  // 'unsafe-inline' is required by Next.js's inline runtime hydration script.
+  // 'unsafe-eval' is dev-only (Webpack HMR). Production runtime has neither
+  // dynamic eval nor third-party inline scripts (audited 2026-05-06: zero
+  // <script src=*>, zero dangerouslySetInnerHTML in src/). The next hardening
+  // step is nonce-based CSP via middleware to drop 'unsafe-inline' entirely.
   `script-src 'self' 'unsafe-inline' ${isProd ? "" : "'unsafe-eval'"} https://auth.privy.io https://*.privy.io https://challenges.cloudflare.com`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
@@ -23,23 +34,14 @@ const csp = [
   [
     "connect-src 'self'",
     "https://*.privy.io",
+    "wss://*.privy.io",
     "https://*.supabase.co",
     "wss://*.supabase.co",
     "https://api.mainnet-beta.solana.com",
     "https://api.devnet.solana.com",
     "https://*.g.alchemy.com",
     "wss://*.g.alchemy.com",
-    "https://*.alchemyapi.io",
-    "wss://*.alchemyapi.io",
-    "https://*.helius-rpc.com",
-    "https://*.helius.xyz",
-    "wss://*.helius-rpc.com",
-    "https://*.triton.one",
-    "wss://*.triton.one",
     "https://hermes.pyth.network",
-    "wss://relay.walletconnect.com",
-    "https://explorer-api.walletconnect.com",
-    "https://api.web3modal.com",
   ].join(" "),
   "frame-src 'self' https://*.privy.io https://auth.privy.io https://challenges.cloudflare.com",
   "frame-ancestors 'none'",
@@ -47,6 +49,12 @@ const csp = [
   "form-action 'self'",
   "base-uri 'self'",
   "object-src 'none'",
+  // Manifest/media kept default-self.
+  "manifest-src 'self'",
+  "media-src 'self'",
+  // Opt into Trusted Types where supported. Forces script-injection sinks to
+  // accept only typed objects, blocking common XSS sink patterns.
+  isProd ? "require-trusted-types-for 'script'" : "",
   isProd ? "upgrade-insecure-requests" : "",
 ]
   .filter(Boolean)
@@ -59,7 +67,18 @@ const securityHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    value: [
+      "camera=()",
+      "microphone=()",
+      "geolocation=()",
+      "payment=()",
+      "usb=()",
+      "magnetometer=()",
+      "gyroscope=()",
+      "accelerometer=()",
+      "interest-cohort=()",
+      "browsing-topics=()",
+    ].join(", "),
   },
   { key: "X-DNS-Prefetch-Control", value: "on" },
   // `same-origin-allow-popups` is required for Coinbase / Base Account
@@ -67,6 +86,8 @@ const securityHeaders = [
   // the postMessage handshake. Privy's auth iframe is unaffected.
   { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
   { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
+  // Don't expose timing/origin info to ad networks.
+  { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
 ];
 
 if (isProd) {
