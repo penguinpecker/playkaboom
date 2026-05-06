@@ -5,7 +5,7 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useGame } from "@/hooks/useGame";
-import { useVaultMaxBet } from "@/hooks/useContracts";
+import { useVaultCapacity } from "@/hooks/useContracts";
 import { usePythSolUsd, formatUsd, solToUsd } from "@/hooks/use-pyth";
 import { GAME_CONFIG } from "@/lib/chain";
 
@@ -24,7 +24,12 @@ export function BetControls() {
   const { wallets } = useWallets();
   const publicKey = wallets[0]?.address ? { toBase58: () => wallets[0]!.address } : null;
   const { connection } = useConnection();
-  const { data: maxBetWei } = useVaultMaxBet();
+  // useVaultCapacity is the SINGLE SOURCE OF TRUTH for "can the vault
+  // pay if I win?" — it mirrors the on-chain check exactly (health-aware,
+  // mine-count-aware, obligations-aware). Use it instead of the simpler
+  // useVaultMaxBet which only knows about maxBetBps and not the
+  // worst-case payout the player might trigger.
+  const capacity = useVaultCapacity(state.bet, state.mineCount);
   const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
   // Synchronous lockout — flipped on click before any React re-render so a
@@ -37,7 +42,24 @@ export function BetControls() {
   const isCashing = state.status === "cashing";
   const safeTilesTotal = GAME_CONFIG.GRID_SIZE - state.mineCount;
   const progress = isPlaying ? Math.round((state.safeTiles.size / safeTilesTotal) * 100) : 0;
-  const maxBet = maxBetWei ? Number(maxBetWei) / LAMPORTS_PER_SOL : 999;
+  const maxBet = capacity.maxBetSol;
+  const wouldExceedLiquidity = capacity.reason === "exceeds_cap";
+  const vaultUnavailable =
+    capacity.reason === "paused" ||
+    capacity.reason === "vault_empty" ||
+    capacity.reason === "obligations_full";
+  // Human-readable explanation surfaced under the bet input. Only set when
+  // the bet *can't* go through — otherwise the input stays clean.
+  const blockReason: string | null =
+    capacity.reason === "paused"
+      ? "Vault paused. Gameplay is temporarily disabled."
+      : capacity.reason === "obligations_full"
+        ? "Vault is fully obligated to in-flight games + pending withdrawals — wait a few minutes for settlements."
+        : capacity.reason === "vault_empty"
+          ? "Vault is empty. Liquidity needs to be deposited before games can run."
+          : capacity.reason === "exceeds_cap"
+            ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${maxBet.toFixed(3)} SOL.`
+            : null;
   const engageLocked = lockoutRemaining > 0;
 
   useEffect(() => {
@@ -94,6 +116,7 @@ export function BetControls() {
     if (Date.now() < lockoutUntilRef.current) return;
     if (isStarting || isPlaying) return;
     if (state.bet > walletBalance || state.bet > maxBet) return;
+    if (wouldExceedLiquidity) return;
     lockoutUntilRef.current = Date.now() + ENGAGE_LOCKOUT_MS;
     setLockoutRemaining(ENGAGE_LOCKOUT_MS);
     void startGame();
@@ -161,9 +184,32 @@ export function BetControls() {
                     ≈ {formatUsd(solToUsd(state.bet, pyth))}
                   </span>
                 )}
-                Max bet: {maxBet.toFixed(2)} SOL
+                Max safe bet: <span className={wouldExceedLiquidity ? "text-error" : "text-on-surface-variant"}>{maxBet.toFixed(3)} SOL</span>
               </span>
             </div>
+            {/* Worst-case payout preview — only when the bet is set and the
+                vault has capacity. Lets the player see the actual amount
+                the on-chain check is comparing against the vault. */}
+            {state.bet > 0 && capacity.worstCasePayoutSol > 0 && !blockReason && (
+              <div className="mt-2 text-[10px] font-headline uppercase tracking-widest text-on-surface-variant/50">
+                Worst-case payout if you reveal all{" "}
+                <span className="text-primary">{GAME_CONFIG.GRID_SIZE - state.mineCount}</span>{" "}
+                safe tiles:{" "}
+                <span className="text-emerald">
+                  {capacity.worstCasePayoutSol.toFixed(3)} SOL
+                </span>
+              </div>
+            )}
+            {blockReason && (
+              <div className="mt-3 p-3 bg-error/10 border-l-2 border-error">
+                <p className="font-headline text-[10px] uppercase tracking-widest text-error mb-1">
+                  Cannot bet
+                </p>
+                <p className="font-mono text-[11px] text-on-surface-variant leading-relaxed">
+                  {blockReason}
+                </p>
+              </div>
+            )}
           </div>
           <div>
             <label className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 block">
@@ -191,7 +237,13 @@ export function BetControls() {
         {!isPlaying && state.status !== "cashing" ? (
           <button
             onClick={handleStart}
-            disabled={isStarting || engageLocked || !authenticated}
+            disabled={
+              isStarting ||
+              engageLocked ||
+              !authenticated ||
+              wouldExceedLiquidity ||
+              vaultUnavailable
+            }
             className="w-full mt-8 py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-black text-lg tracking-[0.2em] glow-primary hover:brightness-125 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed disabled:grayscale"
           >
             {isStarting ? (
@@ -220,6 +272,20 @@ export function BetControls() {
                   account_balance_wallet
                 </span>
                 CONNECT WALLET
+              </>
+            ) : vaultUnavailable ? (
+              <>
+                <span className="material-symbols-outlined" style={{ fontSize: 24 }}>
+                  block
+                </span>
+                VAULT UNAVAILABLE
+              </>
+            ) : wouldExceedLiquidity ? (
+              <>
+                <span className="material-symbols-outlined" style={{ fontSize: 24 }}>
+                  warning
+                </span>
+                LOWER YOUR BET
               </>
             ) : (
               <>

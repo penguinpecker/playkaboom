@@ -63,7 +63,14 @@ export default function ReferralsPage() {
           headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         });
-        if (!res.ok || cancelled) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          // Mark as "loaded but failed" by setting clicks to 0 — this lets
+          // the loading-state check fall through to the legacy URL fallback
+          // instead of spinning forever.
+          setRefClicks(0);
+          return;
+        }
         const data = (await res.json()) as {
           code: string;
           clickCount: number;
@@ -77,7 +84,7 @@ export default function ReferralsPage() {
           setRefConfirmed(data.confirmedCount);
         }
       } catch {
-        /* silent — page still works without the short link, falls back below */
+        if (!cancelled) setRefClicks(0);
       }
     })();
     return () => {
@@ -85,14 +92,21 @@ export default function ReferralsPage() {
     };
   }, [address, getAccessToken]);
 
+  // refCodeLoading: while the /api/ref/code/<wallet> call is in flight we
+  // render a placeholder rather than the legacy ?ref=<addr> form, which
+  // looked terrible flickering on screen for ~500ms before being replaced
+  // by the short link. We only fall back to the long form if the API
+  // outright errors (refCode stays null after the request settles).
+  const refCodeLoading = !!address && refClicks === null && refCode === null;
   const myLink = (() => {
-    if (!address) return "";
+    if (!address || refCodeLoading) return "";
     const origin =
       typeof window === "undefined" ? "https://playkaboom.gg" : window.location.origin;
     if (refCode) return `${origin}/r/${refCode}`;
-    // Fallback: legacy long form. Still works because the URL handler in
-    // useReferralFromURL keeps the ?ref= path. If the code endpoint is
-    // down or rate-limited, the user can still share *something*.
+    // Hard fallback: API returned an error (table missing, network 500).
+    // The legacy ?ref= path is still wired to set the referrer in
+    // localStorage, so the share link remains functional even if the
+    // server-side mapping is unavailable.
     return `${origin}/?ref=${address}`;
   })();
 
@@ -249,14 +263,19 @@ export default function ReferralsPage() {
               )}
             </div>
             <div className="flex gap-2 mb-3">
-              <input
-                value={myLink}
-                readOnly
-                className="flex-1 bg-surface-container-lowest font-mono text-[11px] text-primary px-3 py-2.5 outline-none border-none"
-              />
+              {refCodeLoading ? (
+                <div className="flex-1 bg-surface-container-lowest h-[42px] animate-pulse" />
+              ) : (
+                <input
+                  value={myLink}
+                  readOnly
+                  className="flex-1 bg-surface-container-lowest font-mono text-[11px] text-primary px-3 py-2.5 outline-none border-none"
+                />
+              )}
               <button
                 onClick={handleCopy}
-                className="bg-gradient-to-r from-primary to-primary-container text-on-primary px-5 font-headline text-xs font-bold tracking-widest hover:brightness-110 active:scale-95"
+                disabled={refCodeLoading}
+                className="bg-gradient-to-r from-primary to-primary-container text-on-primary px-5 font-headline text-xs font-bold tracking-widest hover:brightness-110 active:scale-95 disabled:opacity-50"
               >
                 COPY
               </button>
