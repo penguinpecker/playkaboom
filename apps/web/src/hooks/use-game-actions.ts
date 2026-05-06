@@ -15,6 +15,7 @@ import {
 import { calcMultiplier } from "@playkaboom/shared";
 import { deserializeIx, type SerializedIx } from "@playkaboom/sdk";
 import { apiCleanup, apiCommit, apiReveal, apiSettle, ApiClientError } from "@/lib/api";
+import { confirmByPolling } from "@/lib/confirm";
 import { useGameStore, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";
 import { useToast } from "@/components/providers/toast";
@@ -63,10 +64,7 @@ export function useGameActions(): ActionsResult {
       const raw =
         signedTransaction instanceof Uint8Array ? signedTransaction : Buffer.from(signedTransaction);
       const sig = await connection.sendRawTransaction(raw, { skipPreflight: false });
-      await connection.confirmTransaction(
-        { signature: sig, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
+      await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       return sig;
     },
     [wallet, connection, signTransaction],
