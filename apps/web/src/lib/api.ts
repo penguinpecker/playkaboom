@@ -110,8 +110,11 @@ export interface VaultPositionResponse {
   deposited: number;
   withdrawn: number;
   netDeposited: number;
-  pnlLamports: number;
+  pnlLamports: number | null;
   pnlPercent: number | null;
+  /** True when on-chain holds units but the Helius indexer hasn't ingested
+   * the deposit yet. UI should show P&L as "—" / "indexing" instead of zeros. */
+  indexerStale?: boolean;
   history: Array<{
     signature: string;
     action: string;

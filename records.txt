@@ -1,0 +1,628 @@
+================================================================================
+PLAYKABOOM — PROTOCOL RECORDS
+================================================================================
+
+Last updated: 2026-05-06
+Author of these records: Claude Opus 4.7 (1M context), in collaboration with
+the project owner. Everything below is reconstructed from the actual repo
+(`~/Projects/playkaboom`), the Anchor program (`programs/kaboom/src/lib.rs`),
+the deployed devnet binary, and the on-chain state at time of writing.
+
+This file is intended to survive future sessions. Treat it as authoritative
+for "what is the system today" — when the answer changes, edit the matching
+line here. Do NOT delete history; append a new dated section at the bottom.
+
+
+================================================================================
+1. ONE-PARAGRAPH SUMMARY
+================================================================================
+
+PlayKaboom is a provably-fair on-chain Mines casino on Solana. Players bet
+SOL, the server commits a SHA-256 hash of the mine layout up front, signs each
+tile reveal during play, and publishes (layout, salt) at settlement so anyone
+can verify the layout pre-existed the reveal sequence. The vault that backs
+player payouts is a permissionless yield vehicle: anyone can deposit SOL and
+receive `units` (an LP position) that share the casino's net P&L pro-rata.
+Withdrawals queue for 3 days, units stay live during cooldown (still earning
+or losing), and 50% of every settle's house profit is retained in the vault
+(boosting unit_value for all LPs); the other 50% goes to a Squads multisig
+treasury. The house operates as one of the LPs, with a configurable minimum
+share floor (default 50%, decreasing over time). Every privileged operation
+requires a 2-of-2 Squads multisig signature; the hot signing key (per-game
+reveals) lives on a Turnkey HSM and never touches a server.
+
+
+================================================================================
+2. HIGH-LEVEL ARCHITECTURE
+================================================================================
+
+Five-layer stack:
+
+  Layer 1 — Solana program (Anchor 0.31.1, Rust)
+            Program ID: 4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT (devnet)
+            Source: programs/kaboom/src/lib.rs (~2200 LOC)
+            Cluster: devnet (mainnet not yet deployed)
+
+  Layer 2 — TypeScript SDK
+            packages/sdk/  — instruction builders, account decoders, event
+            decoders, PDA helpers. Hand-rolled, no Anchor IDL on the client.
+
+  Layer 3 — Server-side Next.js API
+            apps/web/src/app/api/  — Privy-authed routes for player game flow
+            (commit/reveal/settle/cleanup) and LP flow (vault/{state,position,
+            deposit,request-withdraw,cancel-withdraw,complete-withdraw}).
+            apps/web/src/server/ — server-only helpers: env, auth, session,
+            game-rng, solana-tx-sender, turnkey-signer, vault-math.
+
+  Layer 4 — Client (Next.js 15 + React 19 + Tailwind)
+            apps/web/src/app/ pages: /, /play, /vault, /leaderboard,
+            /referrals, /logs, /verify/[sig], /profile/[wallet].
+            Privy embedded wallets + standard wallet adapters.
+
+  Layer 5 — Off-chain indexer
+            Helius webhook → /api/webhook/helius → Supabase Postgres.
+            Mirrors on-chain state for fast UI queries (leaderboard, history,
+            APY series, LP positions). Indexer is downstream of on-chain;
+            on-chain is the source of truth.
+
+External services:
+  • Privy (player auth + embedded wallets)        — apps/web/src/server/auth.ts
+  • Turnkey (HSM for house signer)                — apps/web/src/server/turnkey-signer.ts
+  • Squads V4 multisig (owner + treasury)         — devnet program SQDS4ep65...
+  • Helius (RPC + enhanced-webhook event stream)  — webhook URL configured externally
+  • Supabase Postgres (indexer cache)             — project ref vrxeqgynejlnmwsifvml (Tokyo)
+  • Vercel (Next.js host)                         — playkaboom-ten.vercel.app
+  • Pyth Hermes (USD price overlay)               — public, no auth
+  • Upstash Redis (rate limiting)                 — env-configured
+
+
+================================================================================
+3. ON-CHAIN ACCOUNT LAYOUT
+================================================================================
+
+Six account types, three of which are permanent global PDAs and three of
+which are per-entity PDAs created on demand.
+
+  3.1  Vault — global, [VAULT_SEED="kaboom_vault"]
+       PDA: Hn3GfLhAFdKLitEKyBQfqs2QGk6sjp8yCxXZrjf1Ckez
+       Size: 428 bytes (8 disc + 32×3 pks + 1 bump + 2×4 u16 + 8×3 u64 +
+             3×u8 + 32×8 allowlist + 32 pending_owner)
+       Fields:
+         owner             : Pubkey   — config admin (Squads vault)
+         house_authority   : Pubkey   — signs reveals/settles (Turnkey HSM)
+         treasury          : Pubkey   — receives 50% of net settle profit
+         bump              : u8
+         house_edge_bps    : u16      — 200 (2.00%)
+         max_bet_bps       : u16      — 200 (2% of vault, base before health)
+         max_payout_bps    : u16      — 5000 (50%, base before health)
+         treasury_split_bps: u16      — 5000 (50/50 settle split)
+         total_games       : u64
+         total_wagered     : u64
+         total_payouts     : u64
+         paused            : bool
+         version           : u8       — 1
+         allowlist_count   : u8
+         withdraw_allowlist: Pubkey[8]
+         pending_owner     : Pubkey   — Pubkey::default() means "no pending
+                                        ownership transfer" (was [u8; 32]
+                                        _reserved before Phase 1)
+
+  3.2  VaultV2State — global, [VAULT_V2_SEED="kaboom_v2_state"]
+       PDA: EAGBgVyESjXfACWAXayG7Ck1Wxonqn836y35WsarUuqr
+       Size: 191 bytes
+       Fields (all Phase 2 LP/health state):
+         bump                       : u8
+         total_outstanding_max_payout: u64    — Σ active games' worst payout
+         total_units                : u128   — seed + house + house_pending
+                                                  + Σ user units + Σ user pending
+         house_units                : u128   — house's LP position (active)
+         house_pending_units        : u128
+         house_pending_unlock_slot  : u64
+         seed_units                 : u128   — locked anti-inflation seed
+                                                  (1 SOL worth at carve)
+         total_pending_units        : u128   — Σ user pending only
+         min_house_share_bps        : u16    — 5000 default
+         max_user_position_bps      : u16    — 1000 default
+         min_health_bps             : u16    — 1000 default
+         withdraw_cooldown_slots    : u64    — 648,000 (~3 days @ 400ms slots)
+         min_lp_deposit             : u64    — 10,000,000 (0.01 SOL)
+         _reserved                  : [u8; 64]
+
+  3.3  LpPosition — per user, [LP_SEED="kaboom_lp", user.key()]
+       Size: 121 bytes
+       Fields:
+         user                : Pubkey
+         units               : u128   — active, earning + losing
+         pending_units       : u128   — queued for withdraw, also earning/losing
+         pending_unlock_slot : u64    — 0 if no pending
+         created_slot        : u64
+         bump                : u8
+         _reserved           : [u8; 32]
+
+  3.4  GameSession — per active game per player, [GAME_SEED="kaboom_game", player]
+       Size unchanged from v1; max_payout (8 bytes) carved from prior 32-byte
+       _reserved. Backwards-compat: existing v1 games have max_payout=0 and
+       skip obligation tracking (saturating_sub).
+
+  3.5  PlayerStats — per player, [STATS_SEED="kaboom_stats", player]
+       Lifetime stats. Unchanged across Phase 1/2/3.
+
+  3.6  ReferralAccount — per referrer, [REFERRAL_SEED="kaboom_referral", referrer]
+       Per-referrer accrual + tier. Unchanged.
+
+
+================================================================================
+4. INSTRUCTION INVENTORY
+================================================================================
+
+22 program instructions live in the deployed binary.
+
+GAME FLOW (player-driven)
+  initialize_vault(houseEdgeBps, maxBetBps, maxPayoutBps)        once, by deployer
+  fund_vault(amount)                                             anyone (donates to pool)
+  start_game(mineCount, bet, commitment)                         player sigs
+  reveal_tile(tileIndex, isMine)                                 house_authority sigs
+  cash_out()                                                     player sigs
+  settle_game(mineLayout, salt)                                  house_authority sigs
+                                                                   (verifies SHA-256(layout||count||salt) == commitment;
+                                                                    decrements obligation; emits VaultUnitValueUpdated)
+  refund_expired()                                               player sigs (after 300 slots)
+  close_game()                                                   player sigs (rent reclaim)
+
+REFERRALS
+  set_referrer(referrer)                                         player sigs (one-time)
+  claim_referral()                                               referrer sigs
+
+OWNER OPS  (after Phase 1, all of these require Squads 2-of-2)
+  update_vault(<options>)                                        owner sigs
+  allowlist_add(address)                                         owner sigs
+  allowlist_remove(address)                                      owner sigs
+  withdraw_to_treasury(amount)                                   treasury sigs (Squads)
+  propose_owner(new_owner)                                       owner sigs
+  cancel_proposed_owner()                                        owner sigs
+  accept_ownership()                                             new_owner sigs (Squads vault PDA)
+  initialize_v2()                                                owner sigs (Squads)  — one-shot
+  update_v2_config(<options>)                                    owner sigs (Squads)
+  house_deposit(amount)                                          owner sigs (Squads)
+  house_request_withdraw(units)                                  owner sigs (Squads)
+  house_cancel_withdraw()                                        owner sigs (Squads)
+  house_complete_withdraw()                                      owner sigs (Squads)
+
+LP USER FLOW
+  lp_deposit(amount)                                             user sigs
+  request_withdraw(units)                                        user sigs
+  cancel_withdraw()                                              user sigs
+  complete_withdraw()                                            user sigs (after 3-day cooldown)
+  close_lp_position()                                            user sigs (after units == 0)
+
+
+================================================================================
+5. SIGNATURE MODEL — WHO HOLDS WHAT KEY, WHAT DOES IT SIGN
+================================================================================
+
+Three key types in the system. Each has its own threat model.
+
+  5.1  Player keys
+       Format: standard Solana ed25519, 32-byte secret.
+       Held by: each player, via Privy embedded wallets (or external wallet
+       adapters). Privy stores keys in user-controlled enclaves; the server
+       never sees them.
+       Signs: start_game, cash_out, set_referrer, claim_referral,
+       refund_expired, close_game, lp_deposit, request_withdraw,
+       cancel_withdraw, complete_withdraw, close_lp_position.
+       Compromise impact: only that player's funds and active game.
+
+  5.2  House operator key (house_authority)
+       Format: standard Solana ed25519, 32-byte public key. The PRIVATE
+       key is generated and stored by Turnkey inside a TEE. We never
+       extract it; we ask Turnkey to sign on our behalf.
+       Held by: Turnkey (Org "Kaboom", id <redacted-turnkey-org-id>).
+       Public key: 3TCMevgUMRU86Q96dj2mLELjsTAsZyvUp7Pecr8dQKWL
+       Signs: every reveal_tile (per tile), every settle_game (per game).
+       Sign throughput: ~165ms per call to Turnkey API per tx.
+       Compromise model:
+         - To compromise we'd need either Turnkey breach OR the API
+           key/secret pair stored in Vercel env (TURNKEY_API_PUBLIC_KEY +
+           TURNKEY_API_PRIVATE_KEY — secp256r1 P-256 keypair, 32-byte
+           private). API keys can be rotated through Turnkey dashboard.
+         - Compromised house_authority cannot drain the vault (cannot
+           call update_vault, cannot withdraw_to_treasury, cannot move
+           house_units). Worst case: malicious settles emitting fake
+           layouts, which would be detected by anyone running the
+           public verifier (commitment != SHA-256(layout||count||salt)).
+
+  5.3  Owner / treasury key (Squads multisig)
+       Format: Solana ed25519 PDA. The Squads V4 program controls signing
+       authority via member approvals; the actual on-chain "signer" is the
+       Squads vault PDA, signed for via CPI when both members approve.
+       Squads V4 program id: SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf
+                              (same on devnet AND mainnet; Squads-controlled)
+       Multisig PDA (devnet): 7RjsJ7uEzVbU7u7JXoPECuBNjgC1eCeuVmny35pNL2Nz
+       Vault PDA (devnet)   : At5oBj3KtiTBRkkquZTL1ceY2KDtz1KckLTuaQFbJjVh
+       Members (devnet):
+         1. DbR1a1CuqwjrdKU9DD6GMqghAXDypD9FLzHNvLabXpRH (project owner)
+         2. HYZzCBLht5BUoKYzJ74q5xW2WXtNt5hdi8ofBZHkL4uW (generated test key,
+            private at keypairs/squads-cosigner-devnet.json — gitignored)
+       Threshold: 2-of-2.
+       For mainnet: project owner has created a real Squads via app.squads.so;
+       the cosigner identity is not yet shared with this records file.
+       Signs: update_vault, allowlist_add/remove, propose_owner,
+       cancel_proposed_owner, initialize_v2, update_v2_config, house_deposit,
+       house_*_withdraw, withdraw_to_treasury, AND accept_ownership (the
+       Squads vault PDA itself signs as new_owner via CPI).
+       Compromise impact: full control over vault config and treasury withdrawals.
+       Mitigated by:
+         - 2-of-2 quorum
+         - propose_owner / accept_ownership two-step (an attacker with one
+           signature cannot transfer ownership instantly; they need both)
+
+
+================================================================================
+6. PHASE-BY-PHASE MIGRATION LOG  (most recent first)
+================================================================================
+
+Each phase landed as a single git commit + corresponding on-chain action(s).
+All transaction signatures below are devnet.
+
+------ PHASE 3 (2026-05-06) — LP frontend + indexer ------
+Commit: 0755df9
+Files changed (key):
+  apps/web/src/app/api/vault/{state,position/[wallet],deposit,
+                              request-withdraw,cancel-withdraw,
+                              complete-withdraw}/route.ts          (new)
+  apps/web/src/app/api/webhook/helius/route.ts                     (extended)
+  apps/web/src/components/vault/lp-panel.tsx                       (new)
+  apps/web/src/hooks/use-vault-lp.ts                               (new)
+  apps/web/src/app/vault/page.tsx                                  (extended)
+  apps/web/src/lib/api.ts                                          (extended)
+  apps/web/src/server/vault-math.ts                                (new)
+  apps/web/src/server/db/types.ts                                  (extended)
+  packages/sdk/src/events.ts                                       (new u128 reader + 11 new event decoders)
+  supabase/migrations/20260506000002_lp_vault.sql                  (new)
+
+Supabase migration applied via `supabase db push --linked` (confirmed in
+`supabase migration list --linked` output).
+
+What worked:
+  - Phase 3 typecheck green (`tsc --noEmit` clean across all 4 workspaces).
+  - Local production build green (`npm run build`).
+  - Vercel auto-deploy from the commit (`kjwtpmr3a` → `41o2170o2`),
+    serving on playkaboom-ten.vercel.app.
+  - GET /api/health → 200 OK
+  - GET /api/vault/state → 200 OK with the full payload
+  - GET /api/vault/position/<wallet> → 200 OK (sentinel `__house__` excluded)
+  - POST /api/vault/{deposit,request-withdraw,...} with empty body → 400
+  - POST /api/vault/deposit with valid body but no auth → 401 "Missing auth token"
+  - SSR HTML for /vault, /play, /, /leaderboard, /referrals, /logs all 200 OK
+
+What didn't work / was caught:
+  - PnL bug: when indexer is empty (cumulativeDeposited=0 from Supabase) but
+    on-chain holds units, the API was reporting fake "+100% PnL". Fix: API
+    now sets pnlLamports/pnlPercent to null and adds an indexerStale flag;
+    UI shows "—" with explanatory caption.
+  - Double "DEPOSIT SOL" buttons on /vault: legacy `Fund Vault` panel called
+    the v1 `fund_vault` ix (which works as a donation to the pool) while the
+    new LP panel calls `lp_deposit` (mints user units). Confusing UX. Fix:
+    removed the legacy `Fund Vault` panel; replaced with a "Trust Anchors"
+    panel listing PROGRAM, Vault, V2State, Squads, Turnkey HSM. The
+    fund_vault ix still exists on-chain for owner ops via scripts.
+  - "VAULT STATUS: EMERGENCY" flash on first SSR render: legacy
+    `useVaultHealth` returned 0 before the first RPC fetch, which
+    `useRiskLevel` mapped to bucket 2 (Emergency). Fix: both hooks now
+    return undefined while loading, and the page renders "LOADING" for the
+    status field instead of falsely red-flagging the vault.
+  - CONTRACTS panel was incomplete (only KaboomProgram + Vault). Fix:
+    added Vault V2 State, Squads multisig, Turnkey HSM.
+
+------ PHASE 2 (2026-05-06) — LP vault + health-factor primitives ------
+Commit: 68ef62f
+Anchor build: ~638 KB (vs ~490 KB before).
+Devnet program upgrade tx:
+  3AbB55RCw2EQw3Ya8AE4ZLUqxhh8PJu5jeMD8kGEKQRqQ4ov1BSGAEFQKKQb9nh7c81k5rU4a6xbu6f2okhe8Eca
+Solana program data extension required additional rent funding; user funded
+via Turnkey-transfer (script `scripts/turnkey-transfer.ts`) of 1 SOL from
+HSM wallet to owner.
+
+initialize_v2 migration via Squads two-step
+  vaultTransactionCreate sig: 3cHsTNxNtYockrq2Nti9d8sdbzhqM8geTtxKFp1WuD6n7yhUFKAHmBvZYotYTkXZntU1NfWyNA27eLcP5DPVVFd2
+  proposalCreate sig:        4TA2kda4AszHmNkv4Gq7WdSRsX1GP76NEYUpyc7y592AQQjUDWbc2SGxg7NjfcBQ9YMf4fRZkj9yXnWt5S7EWww
+  proposalApprove (m1):      5cyE93qzHDXuuwwk3aDkL5skPNAXN1RA49z1M47y3v7qhhUVCVTpLamBG3hdjtQu1mGtdDEtTTLGFxNPWqaUyKDv
+  proposalApprove (m2):      4eWGU4i8EcrcuW9eEWKhBhK14TiufBcUZnmvbw8fqNCR6DPUbJgYFw6Etdz3j18aZz3oNTpwydN4de91tHh8jTDj
+  vaultTransactionExecute:   22cV3pLuAigAPwoHsvtZjz4sDSnMVfGo2K2dKekXcdtcbZ6HYxnB714M7Zoj2r1B7Z21hCZPSntfP11RaVs5fd9w
+
+Resulting v2_state state:
+  PDA          : EAGBgVyESjXfACWAXayG7Ck1Wxonqn836y35WsarUuqr (191 bytes)
+  total_units  : 5,496,130,240        (= vault_assets at migration time)
+  seed_units   : 1,000,000,000        (1 SOL anti-inflation, locked)
+  house_units  : 4,496,130,240        (= 5.5 SOL existing bankroll - 1 SOL seed)
+  config       : min_house=5000, max_user_pos=1000, min_health=1000,
+                 cooldown=648000, min_lp_deposit=10000000
+
+LP smoke (commit 68ef62f, scripts/lp-smoke.ts):
+  lp_deposit 0.1 SOL — 100M units minted at 1:1 unit_value
+    sig: 2d5hTBng2NfZ2o3A4bit7rZCSZTug1j2PF1XpXMgYRXsK1gSWLGpbLfQGAS7YcBecTHrn2zCuhNqK2s3LztDF7ot
+  request_withdraw 100M units — moved to pending, unlock at slot 461125967
+    sig: Nyba89Bxv6zzGJU3hqaFSU1g5ohNyUJRPhRjADsysto6iJbggLsci66aBgbcDt4LrKN9aF1MsxGz4nkMX7RoUL3
+
+E2E smoke after Phase 3 SDK changes (scripts/lp-cancel-redeposit-smoke.ts):
+  cancel_withdraw       sig: 3BKJBVX5ESWPQ7ktNxRfW67RXuD8hWowsXKWQTaJPgDgixy2GtK8oKmpERwn5FJFXm1arVhNHrKqj9UmZS2dXDLz
+  lp_deposit 0.05 SOL   sig: 4K4b6gY3PGmNNMrxiUZWZad3RmfuxoX6dj9ZShXUrJCQgxPnFzH7AEDjb6A35Wmjst2b4116RPheJ5v7hnNpAbGc
+  request_withdraw 75M  sig: 4jsubV6Qu4i4TS94dXjXeHsEYtdZmqYy1oQtwogd99vCQ56yYixYGwa2aFEwRWnpE6WsbKtRdBLkFYvMrVVdq6oZ
+
+Verified math (pre-fix audit, see scripts/audit-phase3.ts):
+  Σ(seed + house + house_pending + Σuser_units + Σuser_pending) == total_units
+  health_bps = 9821 (98.21%) — only user pending withdraw counts as obligation
+
+------ PHASE 1 (2026-05-06) — owner-transfer plumbing + Squads rotation ------
+Commit: cccf58d
+Devnet program upgrade tx: 4vSPKgV7kjtyasZ3xQHHgGvN3U6yUbBY3oU6wTimnwEsCAXvLQU7zGd3ByXKkHuxKqB8TtsSppnVe4zDDBTf3i92
+
+Vault struct: replaced trailing `_reserved: [u8; 32]` with `pending_owner: Pubkey`
+(byte-compatible — old data has zeros there, decodes as Pubkey::default() == "no pending").
+
+scripts/rotate-treasury.ts (single owner-signed tx)
+  update_vault(new_treasury=<Squads>) + allowlist_add(<Squads>)
+  sig: 48NouQb7nkFPobgB18yFetNCpawR4qPSCUSuVdjrNx4tS8s1FyXNXrHYCHJngP3eupdCaGHv9aAEME7VqAzXcvZS
+
+scripts/rotate-owner.ts (two-step via Squads):
+  propose_owner sig:           4AjrGQTvH3iXe7UAMNCbzLofomRnHW6gFZnXsjDkwiom1qWFxcAQZ9rM5aFbircXzYzZT9P77AfMgfKk5cagv75r
+  vaultTransactionCreate sig:  2A9d9kvUhCkjqnj6UmxeFbPpQQRPhiG9aUBtxG6172wNwWc3FWXCCtQ2L9x7j21nyij7sqWLYsvZHM3DC12CKZys
+  proposalCreate sig:          3PEzLM3K7RsnXs1ZxcPdbEPm4iNUz5N9DLxJiGBWjk4i1qCy3U7TtMkpa8LpKqGYVMK3txzD9NEasQCYyS5SXoCB
+  proposalApprove (m1) sig:    bjkzDhkGiDhrH9HuC3x66R1XeUYUmYb5n5jniTzJWqnazVEfyVZYN99dCwSVNVFPFCVCVEuTVDyYSTe1kZen61v
+  proposalApprove (m2) sig:    2bSDzQFhU4wjoWHcbhCTk69gVBsbwZC2WsePZGne1TLURgWJ3oAV6TyKmUeQPu6UteyKwgMm42xEkc1EPjz7iY4Q
+  vaultTransactionExecute sig: snwvEgwnLeJoDfcXfHjCips5tjT7am5P8FVVwQGnqbhA5fbrmfrzxhz1j1e6wNVjKcybfcqUBa6bRXASUkg7jRu
+
+Result: vault.owner = vault.treasury = At5oBj3KtiTBRkkquZTL1ceY2KDtz1KckLTuaQFbJjVh.
+
+------ PRE-PHASE-1 (2026-05-06) — Turnkey migration ------
+Commit: 79baca3
+Goal: retire the raw 64-byte HOUSE_AUTHORITY_KEY env var (a hot key sitting in
+Vercel) and move all hot signing to Turnkey.
+
+Turnkey Org: <redacted-turnkey-org-id> ("Kaboom"), region us-east.
+Turnkey API key (in env): public <redacted-turnkey-api-pubkey>, private <redacted-turnkey-api-privkey>
+                          (P-256 secp256r1, 32-byte private; verifies via SDK).
+House wallet (Turnkey-managed Solana ed25519):
+  3TCMevgUMRU86Q96dj2mLELjsTAsZyvUp7Pecr8dQKWL
+
+scripts/sign-smoke.ts (broadcast a memo tx signed by Turnkey):
+  devnet broadcast sig: 49F7fMKbpnLefAQMzJMi82YCnZiVMxDVGDozXXweq6C6mub8zhxQBpj57EbdwvPEsBy2ZGCc3mwYADH5ajGLcGDd
+
+scripts/rotate-house.ts (update_vault.house_authority = Turnkey wallet):
+  sig: 4m59w66q8gT49259Y86RKzBUg7RjoixU8Kt6AspJMW3w9Ye1pCbfCeUYR5sdSYCsfarTh9JepLQvYFTCgHJvAtza
+
+After this, USE_TURNKEY=true was added to Vercel env (production +
+development) and the deploy was redeployed. /api/health then reported
+houseAuthority = Turnkey wallet, confirming the new path was live.
+
+Final cleanup (commit af599fb): removed HOUSE_AUTHORITY_KEY from Vercel env
+and the .env.example template. The on-chain vault enforces only the Turnkey
+public key, so the old raw key would be rejected even if reintroduced.
+
+
+================================================================================
+7. SUPABASE TABLES
+================================================================================
+
+Project ref: vrxeqgynejlnmwsifvml (Tokyo)
+
+  player_stats            (Phase 1 init)
+  games                   (Phase 1 init)
+  referrals               (Phase 1 init)
+  referral_events         (Phase 1 init)
+  processed_events        (Phase 1 init — webhook idempotency)
+  lp_positions            (Phase 3 — units + pending + cumulative deposit/withdraw)
+  lp_actions              (Phase 3 — append-only signed-delta log)
+  vault_unit_value_history(Phase 3 — APY series)
+
+Public read (anon + authenticated). Service-role-only writes. RLS forced.
+The webhook receiver (verifyWebhookSignature) authenticates via header
+matching against HELIUS_WEBHOOK_AUTH (32-byte hex).
+
+Indexer is currently EMPTY for Phase 2 LP events (lp_positions=0,
+lp_actions=0, vault_unit_value_history=0 rows as of audit). See "Open
+issues" below — Helius webhook hasn't been pointed at the deployment URL
+for the new event types.
+
+
+================================================================================
+8. ENVIRONMENT
+================================================================================
+
+Local:
+  apps/web/.env.local       — gitignored, real secrets
+  .env.example              — checked in, blank values + comments
+
+Production (Vercel):
+  TURNKEY_ORG_ID            — sensitive
+  TURNKEY_API_PUBLIC_KEY    — sensitive
+  TURNKEY_API_PRIVATE_KEY   — sensitive
+  TURNKEY_HOUSE_PUBKEY      — sensitive
+  USE_TURNKEY               — "true"
+  PRIVY_APP_SECRET          — sensitive
+  HELIUS_WEBHOOK_AUTH       — sensitive (32-byte hex)
+  SUPABASE_SERVICE_ROLE_KEY — sensitive
+  NEXT_PUBLIC_SOLANA_CLUSTER, NEXT_PUBLIC_SOLANA_RPC, SOLANA_RPC,
+  PROGRAM_ID, NEXT_PUBLIC_PRIVY_APP_ID, NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_ANON_KEY, SESSION_ENC_KEY (32-byte hex), LOG_LEVEL
+
+Removed (no longer in env):
+  HOUSE_AUTHORITY_KEY  — retired 2026-05-06; Turnkey HSM is sole signer.
+
+Anchor toolchain (local):
+  anchor 0.31.1 (avm 1.0.2)
+  rustup at /opt/homebrew/opt/rustup/bin
+  solana platform tools at ~/.local/share/solana/install/active_release/bin
+  PATH prefix for builds:
+    $HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:/opt/homebrew/opt/rustup/bin
+
+
+================================================================================
+9. LIMITATIONS / DEVNET CAVEATS
+================================================================================
+
+  9.1  Squads V4 web UI (app.squads.so) only exposes mainnet multisig
+       creation. The program itself IS deployed to devnet at the same
+       program ID (SQDS4ep65T869...), so devnet multisigs must be created
+       via the SDK. Done in scripts/create-devnet-squads.ts; the resulting
+       multisig is mathematically identical to a UI-created one.
+
+  9.2  Devnet airdrops are heavily rate-limited. To fund the owner key,
+       use https://faucet.solana.com (web faucet) or scripts/turnkey-transfer.ts
+       (pulls from the Turnkey HSM float). The CLI airdrop frequently fails.
+
+  9.3  macOS TCC blocks Terminal.app from reading files inside ~/Desktop
+       unless explicitly granted. Repo was moved from ~/Desktop/Projects to
+       ~/Projects to avoid this entirely.
+
+  9.4  `complete_withdraw` requires waiting the full cooldown (3 days at
+       the default config). To exercise it on devnet, owner can call
+       `update_v2_config(withdrawCooldownSlots=1)` via Squads to drop the
+       cooldown for testing. Production deploy must reset to 648000 before
+       cutover.
+
+  9.5  The Helius webhook is configured (in handoff) to point at
+       `playkaboom.gg/api/webhook/helius`, but the actual deployed URL is
+       `playkaboom-ten.vercel.app/...`. The endpoint is reachable
+       (verified via curl with auth header → 200 OK), but Helius isn't
+       currently forwarding our program's logs to it. Result: indexer
+       tables stay empty for LP events; APY 30d shows null; PnL on
+       /api/vault/position falls back to "indexerStale: true".
+
+  9.6  Solana program upgrades require ~5 SOL of free liquidity on the
+       upgrade-authority key (current owner DbR1a1...XpRH) to fund the
+       buffer + program-data extension. Phase 1 cost ~3.4 SOL of that;
+       Phase 2 cost ~5.4 SOL. Top up before any program upgrade.
+
+  9.7  The on-chain math is integer-only (u128 internally, u64 at the
+       SOL boundary). All `× num / den` operations floor-divide. This is
+       deposit-favorable for the vault (under-mints user units by ≤1)
+       and withdraw-favorable for the vault (under-pays user lamports by
+       ≤1). Standard 4626 design; the accumulated dust boosts existing
+       LPs proportionally over time.
+
+
+================================================================================
+10. OPEN ISSUES / TO-DO BEFORE MAINNET
+================================================================================
+
+  10.1  Helius webhook configuration  (P0 — blocks indexer)
+        Action: in the Helius dashboard, configure an enhanced webhook
+        targeting the Phase 2 program (4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT)
+        on devnet, posting to https://playkaboom-ten.vercel.app/api/webhook/helius
+        with Authorization: <HELIUS_WEBHOOK_AUTH>. Repeat for mainnet
+        once that program is live.
+
+  10.2  Manual game smoke through production  (P1 — verifies the full
+        commit/reveal/settle path against the Phase 2 program)
+        Action: Visit https://playkaboom-ten.vercel.app/play, connect
+        wallet via Privy, play one round (any bet, any tile count).
+        Verify safe reveal succeeds, settle/cashout succeeds, and the
+        signature on /verify/<sig> resolves green.
+
+  10.3  Audit decision  (P2 — re-evaluate now that LP funds are at risk)
+        We previously accepted "skip audit before mainnet" with the
+        defense being on-chain bet/payout caps + bug bounty. With LP
+        funds now in scope, fresh decision needed.
+
+  10.4  SECURITY.md update  (P2 — disclose hidden-house-position UX)
+        The /api/vault/state intentionally hides house_units / seed_units
+        from the public response, while these are publicly readable on
+        chain. This needs a fairness disclosure in long-form docs.
+
+  10.5  Status page  (P3)
+        Monitor /api/health and /api/vault/state from Better Stack or
+        similar. Page on health_bps < min_health_bps × 0.5 or
+        vaultLamports below the obligation floor.
+
+  10.6  Transfer program upgrade authority to Squads  (P0 before mainnet)
+        Today: upgrade authority = DbR1a1...XpRH (single owner key). This
+        is convenient for dev iteration but is the last hot-key foothold.
+        Action: solana program set-upgrade-authority 4rPEGz...
+                  --new-upgrade-authority At5oBj3K...JjVh
+                  --keypair ~/.config/solana/id.json
+                  --url devnet
+        After this, all future upgrades require Squads approval. Do
+        only after Phase 3+ is stable and we don't expect more iteration.
+
+  10.7  Real Squads cosigner identity for mainnet
+        Current devnet cosigner is a generated test key (HYZzCBLht5BUoKYzJ74q5xW2WXtNt5hdi8ofBZHkL4uW)
+        whose private key is at keypairs/squads-cosigner-devnet.json. For
+        the mainnet deployment, the project owner has created a real
+        Squads via app.squads.so with a real second signer; the cosigner
+        identity is not yet recorded in this file.
+
+  10.8  Decommission unused legacy code paths  (P3)
+        - useDepositToVault hook still exists but is no longer wired to
+          a button on /vault. Delete or document.
+        - The fund_vault on-chain ix is still callable by anyone; works
+          as a free top-up to the pool. No issue, but worth a
+          one-liner in /vault explaining what it is for power users.
+
+
+================================================================================
+11. PRODUCTION URLS / ADDRESSES SUMMARY
+================================================================================
+
+  Domain: https://playkaboom-ten.vercel.app  (alias of latest production deploy)
+  Future domain: playkaboom.gg  (not yet pointed)
+  GitHub: https://github.com/penguinpecker/playkaboom
+
+  Devnet
+    Solana cluster   : devnet
+    RPC              : https://api.devnet.solana.com  (will switch to Helius
+                                                         pro RPC once webhook
+                                                         is configured)
+    Program          : 4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT
+    Vault PDA        : Hn3GfLhAFdKLitEKyBQfqs2QGk6sjp8yCxXZrjf1Ckez
+    V2State PDA      : EAGBgVyESjXfACWAXayG7Ck1Wxonqn836y35WsarUuqr
+    Squads multisig  : 7RjsJ7uEzVbU7u7JXoPECuBNjgC1eCeuVmny35pNL2Nz
+    Squads vault PDA : At5oBj3KtiTBRkkquZTL1ceY2KDtz1KckLTuaQFbJjVh   (= owner = treasury)
+    Turnkey HSM      : 3TCMevgUMRU86Q96dj2mLELjsTAsZyvUp7Pecr8dQKWL  (= house_authority)
+    Owner key (hot)  : DbR1a1CuqwjrdKU9DD6GMqghAXDypD9FLzHNvLabXpRH  (= upgrade authority,
+                                                                       Squads member 1)
+    Cosigner (hot)   : HYZzCBLht5BUoKYzJ74q5xW2WXtNt5hdi8ofBZHkL4uW   (Squads member 2)
+
+  Mainnet: not yet deployed.
+
+
+================================================================================
+12. VERIFIED FUNCTIONAL — what was actually exercised in this session
+================================================================================
+
+  ✓ Anchor build (Phase 2 program, ~638 KB, warnings only)
+  ✓ Devnet program upgrade
+  ✓ Workspace typecheck (apps/web, packages/sdk, packages/shared, tests/sdk)
+  ✓ Vitest suite (multiplier, verifier, instructions — 14 tests all pass)
+  ✓ Local Next.js production build
+  ✓ Vercel auto-deploy from each commit (last deploy: 41o2170o2 from 0755df9)
+  ✓ /api/health → 200
+  ✓ /api/vault/state → 200 with full payload (verified via curl)
+  ✓ /api/vault/position/<wallet> → 200 (returns indexerStale: true since
+       the indexer is empty)
+  ✓ /api/vault/{deposit,request-withdraw,...} → 401 without auth (correct)
+  ✓ /vault, /play, /, /leaderboard, /referrals, /logs all 200 OK on SSR
+  ✓ On-chain SDK paths via direct SDK calls (lp-smoke + cancel-redeposit-smoke):
+       - cancel_withdraw, lp_deposit, request_withdraw all confirmed
+       - Math invariants hold:
+           total_units == seed + house + house_pending + Σuser_units + Σuser_pending
+       - Health computation matches API:
+           health_bps API = on-chain calc = 98.21% post-test
+  ✓ Squads two-step flow (vaultTransactionCreate → proposalCreate → 2× approve →
+       execute) for both Phase 1 owner rotation and Phase 2 initialize_v2
+
+NOT YET VERIFIED IN THIS SESSION (require browser / human):
+  • Privy login + wallet connect on /play
+  • Full game flow through /api/commit → /api/reveal → /api/settle (verifier)
+  • LP UI button clicks: deposit, request, cancel, complete
+  • Helius webhook actually receives + ingests events (the endpoint is
+    reachable; the upstream config is the open item)
+
+
+================================================================================
+13. APPENDED NOTES
+================================================================================
+
+(Append future entries here as the system evolves. Do not delete prior
+entries — they are the audit trail. Format: ISO date + short title +
+relevant tx signatures or commit hashes + summary.)
