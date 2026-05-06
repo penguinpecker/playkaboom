@@ -4,7 +4,6 @@ import { formatEther } from "@/lib/compat";
 import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
 import { useGameHistory } from "@/hooks/useGameHistory";
 import { CLUSTER, CLUSTER_LABEL, accountExplorer, PROGRAM_ID } from "@/lib/cluster";
-import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
 
 export default function HomePage() {
@@ -12,43 +11,12 @@ export default function HomePage() {
     <>
       <HeroSection />
       <StatsBanner />
-      <LiveActivitySection />
       <HowItWorks />
       <FeatureMatrix />
       <ReactiveModules />
       <RealTimeIntel />
       <SolanaFooter />
     </>
-  );
-}
-
-/**
- * Stake-style live ticker just under the hero. Pulls the same global feed
- * /play uses below the grid — same component, different layout settings —
- * so visitors landing on the home page see active gameplay before they
- * scroll into the marketing.
- */
-function LiveActivitySection() {
-  return (
-    <section className="container mx-auto px-4 sm:px-6 lg:px-12 py-12 lg:py-16">
-      <div className="flex justify-between items-end mb-6">
-        <div>
-          <h2 className="font-headline text-2xl sm:text-3xl lg:text-4xl font-black italic tracking-tight text-on-surface mb-2">
-            LIVE FEED
-          </h2>
-          <p className="font-body text-sm text-on-surface-variant">
-            Real wins, real losses, real wallets — settled on-chain seconds ago.
-          </p>
-        </div>
-        <Link
-          href="/play"
-          className="hidden sm:block font-headline text-[10px] uppercase tracking-widest text-primary hover:text-primary-container transition-colors"
-        >
-          JOIN A GAME →
-        </Link>
-      </div>
-      <GlobalActivityFeed limit={16} title="" />
-    </section>
   );
 }
 

@@ -106,7 +106,7 @@ export function GlobalActivityFeed({
 
   return (
     <section
-      className={`bg-surface-container-low stealth-card border border-outline-variant/10 ${className}`}
+      className={`bg-surface-container-low rounded-lg border border-outline-variant/10 overflow-hidden ${className}`}
     >
       {title && (
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-outline-variant/10">
@@ -119,6 +119,16 @@ export function GlobalActivityFeed({
           </span>
         </div>
       )}
+      {/* Header row mirrors the home-page REAL-TIME INTEL columns so the
+          two feeds feel like the same surface. Hidden on mobile where
+          we drop the table layout for a stacked card. */}
+      <div className="hidden sm:grid grid-cols-12 px-6 py-4 bg-surface-container-high font-headline text-[10px] uppercase tracking-widest text-on-surface-variant gap-4">
+        <span className="col-span-3">Operative</span>
+        <span className="col-span-3">Module</span>
+        <span className="col-span-2">Multiplier</span>
+        <span className="col-span-2 text-right">Result</span>
+        <span className="col-span-2 text-right">Time</span>
+      </div>
       {loading && events.length === 0 ? (
         <div className="p-4 space-y-2">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -145,61 +155,96 @@ export function GlobalActivityFeed({
             // *this* row is fresh, so subsequent rows in the same render
             // don't all get classed as new.
             if (e.slot > highestSlotRef.current) highestSlotRef.current = e.slot;
+            const initials = e.player.slice(0, 2).toUpperCase();
             return (
               <a
                 key={e.signature}
                 href={`/verify/${e.signature}`}
-                className={`block px-4 py-3 hover:bg-surface-container transition-colors ${
+                className={`block hover:bg-surface-container-highest transition-colors ${
                   isNew ? "animate-feed-row-in" : ""
                 }`}
               >
-                {/* Constrain row content to a centered max-width so on wide
-                    viewports it doesn't sprawl to the edges. */}
-                <div className="flex items-center justify-center gap-3 max-w-xl mx-auto">
-                  <span
-                    className={`font-headline text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 shrink-0 ${
-                      won ? "bg-emerald/15 text-emerald" : "bg-error/15 text-error/80"
-                    }`}
-                  >
-                    {won ? "WIN" : "LOSS"}
-                  </span>
-                  <p className="font-mono text-xs text-on-surface-variant text-center truncate">
-                    <span className="text-on-surface font-bold">{fmtShort(e.player)}</span>{" "}
-                    {won ? "won" : "lost"}{" "}
-                    <span
-                      className={`font-headline font-bold ${
-                        won ? "text-emerald" : "text-error/80"
+                {/* Desktop / tablet: 5-column grid matching REAL-TIME INTEL */}
+                <div className="hidden sm:grid grid-cols-12 px-6 py-4 items-center gap-4">
+                  <div className="col-span-3 flex items-center gap-2 min-w-0">
+                    <div
+                      className={`w-6 h-6 rounded shrink-0 flex items-center justify-center font-headline text-[8px] font-bold ${
+                        won ? "bg-primary/20 text-primary" : "bg-error/20 text-error"
                       }`}
                     >
-                      {fmtSol(won ? e.payout : e.bet)} SOL
+                      {initials}
+                    </div>
+                    <span className="font-body text-sm text-on-surface truncate">
+                      {fmtShort(e.player)}
                     </span>
-                    {won && mult > 0 && (
-                      <>
-                        {" "}
-                        <span className="text-primary">×{mult.toFixed(2)}</span>
-                      </>
-                    )}{" "}
-                    <span className="text-on-surface-variant/50">
-                      · {e.mineCount} mine{e.mineCount === 1 ? "" : "s"}
-                    </span>
-                  </p>
-                  <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/50 shrink-0">
+                  </div>
+                  <span className="col-span-3 font-headline text-xs text-on-surface-variant">
+                    MINES (4×4) · {e.mineCount} BOMB{e.mineCount === 1 ? "" : "S"}
+                  </span>
+                  <span
+                    className={`col-span-2 font-headline text-sm font-bold ${
+                      won && mult > 0 ? "text-primary" : "text-on-surface-variant/50"
+                    }`}
+                  >
+                    ×{won && mult > 0 ? mult.toFixed(2) : "0.00"}
+                  </span>
+                  <span
+                    className={`col-span-2 font-headline text-sm font-bold text-right ${
+                      won ? "text-primary" : "text-error"
+                    }`}
+                  >
+                    {won ? "+" : "−"}
+                    {fmtSol(won ? e.payout : e.bet)} SOL
+                  </span>
+                  <span className="col-span-2 font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/50 text-right">
                     {fmtAgo(e.time)}
                   </span>
+                </div>
+                {/* Mobile: stacked card preserving the same data */}
+                <div className="sm:hidden px-4 py-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div
+                        className={`w-5 h-5 rounded shrink-0 flex items-center justify-center font-headline text-[8px] font-bold ${
+                          won ? "bg-primary/20 text-primary" : "bg-error/20 text-error"
+                        }`}
+                      >
+                        {initials}
+                      </div>
+                      <span className="font-body text-sm text-on-surface truncate">
+                        {fmtShort(e.player)}
+                      </span>
+                    </div>
+                    <span
+                      className={`font-headline text-sm font-bold ${
+                        won ? "text-primary" : "text-error"
+                      }`}
+                    >
+                      {won ? "+" : "−"}
+                      {fmtSol(won ? e.payout : e.bet)} SOL
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-on-surface-variant/50 font-headline">
+                    <span>
+                      {e.mineCount} BOMB{e.mineCount === 1 ? "" : "S"}
+                      {won && mult > 0 && (
+                        <span className="text-primary ml-2">×{mult.toFixed(2)}</span>
+                      )}
+                    </span>
+                    <span>{fmtAgo(e.time)}</span>
+                  </div>
                 </div>
               </a>
             );
           })}
         </div>
       )}
-      {/* Component-scoped CSS for the fade-in animation + thinner scrollbar.
-          Inlined here because we don't want to leak these into globals. */}
       <style jsx>{`
         @keyframes feed-row-in {
           from {
             opacity: 0;
             transform: translateY(-6px);
-            background-color: rgba(74, 222, 128, 0.08);
+            background-color: rgba(164, 201, 255, 0.08);
           }
           to {
             opacity: 1;
