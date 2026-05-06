@@ -364,6 +364,26 @@ export function buildUpdateVault(args: UpdateVaultArgs): TransactionInstruction 
   });
 }
 
+// ── Self-recovery: close an unsettled Won/Lost game after 4-min expiry ──────
+export interface CloseUnsettledGameArgs {
+  ctx: BuildContext;
+  player: PublicKey;
+}
+
+export function buildCloseUnsettledGame(args: CloseUnsettledGameArgs): TransactionInstruction {
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(v2StatePda),
+      writable(gamePda),
+      writable(args.player, true),
+    ],
+    data: ixDiscriminator("close_unsettled_game"),
+  });
+}
+
 // ── Phase 2: LP / V2 builders ────────────────────────────────────────────────
 
 export interface InitializeV2Args {

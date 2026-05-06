@@ -1,6 +1,11 @@
 "use client";
-import { useState } from "react";
-import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { useCallback, useState } from "react";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { useSolanaWallets as useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import { LAMPORTS_PER_SOL, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
+import { buildCloseUnsettledGame } from "@playkaboom/sdk";
+import { confirmByPolling } from "@/lib/confirm";
+import { PROGRAM_ID } from "@/lib/cluster";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
 import { useGame } from "@/hooks/useGame";
 import { useToast } from "@/components/providers/toast";
@@ -19,6 +24,45 @@ export function StuckGameBanner({ info }: Props) {
   const [busy, setBusy] = useState(false);
   const { toast } = useToast();
   const { resetGame } = useGame();
+  const { connection } = useConnection();
+  const { wallets } = useWallets();
+  const { signTransaction } = useSignTransaction();
+  const wallet = wallets[0];
+
+  const forceClose = useCallback(async () => {
+    if (busy || !wallet) return;
+    setBusy(true);
+    try {
+      const ix = buildCloseUnsettledGame({
+        ctx: { programId: PROGRAM_ID },
+        player: new PublicKey(wallet.address),
+      });
+      const tx = new Transaction().add(ix);
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.lastValidBlockHeight = lastValidBlockHeight;
+      tx.feePayer = new PublicKey(wallet.address);
+      const signed = await signTransaction({
+        transaction: tx,
+        connection,
+        address: wallet.address,
+      });
+      const raw =
+        signed instanceof VersionedTransaction
+          ? signed.serialize()
+          : (signed as Transaction).serialize();
+      const sig = await connection.sendRawTransaction(raw, { skipPreflight: false });
+      await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
+      toast("Stuck game closed — wallet unblocked", "success");
+      resetGame();
+      // Force a reload of the resume probe.
+      setTimeout(() => window.location.reload(), 800);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Close failed", "error");
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, wallet, connection, signTransaction, toast, resetGame]);
 
   if (!info.stuck) return null;
 
@@ -31,31 +75,6 @@ export function StuckGameBanner({ info }: Props) {
     if (s < 60) return `${s}s`;
     return `${Math.ceil(s / 60)}m`;
   })();
-
-  const forceRefund = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      // Reusing the existing useGame.cleanupStuck flow.
-      const ok = await (async () => {
-        const { useGameStore } = await import("@/stores/game-store");
-        useGameStore.setState({ status: "cleaning" });
-        const wnd = window as unknown as { __cleanupStuck?: () => Promise<boolean> };
-        if (wnd.__cleanupStuck) return wnd.__cleanupStuck();
-        return false;
-      })();
-      if (ok) {
-        toast("Game cleaned up — bet refunded", "success");
-        resetGame();
-      } else {
-        toast("Cleanup failed. If countdown above is 'now', try again in a few seconds.", "error");
-      }
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Cleanup error", "error");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   return (
     <section className="bg-amber/10 border border-amber/40 p-5 rounded-lg space-y-3">
@@ -78,11 +97,16 @@ export function StuckGameBanner({ info }: Props) {
       </p>
       <button
         disabled={busy || !info.refundable}
-        onClick={() => void forceRefund()}
+        onClick={() => void forceClose()}
         className="w-full py-3 bg-amber text-on-primary font-headline font-bold text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       >
-        {busy ? "REFUNDING…" : info.refundable ? "FORCE REFUND BET" : `WAITS ${countdown}…`}
+        {busy ? "CLOSING…" : info.refundable ? "FORCE CLOSE STUCK GAME" : `READY IN ${countdown}…`}
       </button>
+      <p className="font-mono text-[10px] text-on-surface-variant/40 italic">
+        Calls close_unsettled_game on the program — recovers PDA rent and unblocks
+        your wallet for new games. If you won, your cash-out already paid out
+        when the win landed; this just reclaims the slot.
+      </p>
     </section>
   );
 }
