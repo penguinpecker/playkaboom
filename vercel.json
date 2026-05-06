@@ -4,5 +4,11 @@
   "installCommand": "npm install",
   "outputDirectory": "apps/web/.next",
   "framework": "nextjs",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD ':(exclude)programs' ':(exclude)tests/anchor' ':(exclude)*.md'"
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD ':(exclude)programs' ':(exclude)tests/anchor' ':(exclude)*.md'",
+  "crons": [
+    {
+      "path": "/api/cron/index-events",
+      "schedule": "* * * * *"
+    }
+  ]
 }
