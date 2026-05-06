@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { usePrivy } from "@privy-io/react-auth";
 import {
   GOLD_VOLUME_LAMPORTS,
   REFERRAL_BRONZE_BPS,
@@ -31,16 +32,58 @@ export default function ReferralsPage() {
 
   const [submitting, setSubmitting] = useState<"set" | "claim" | null>(null);
   const [pendingRef, setPendingRef] = useState<string | null>(null);
+  const [refCode, setRefCode] = useState<string | null>(null);
+  const [refClicks, setRefClicks] = useState<number | null>(null);
+  const { getAccessToken } = usePrivy();
 
   useEffect(() => {
     setPendingRef(getPendingReferrer());
   }, [captured]);
 
-  const myLink = useMemo(() => {
+  // Fetch (or mint) the wallet's short code. The API requires a signed
+  // Privy bearer for the wallet, so this is the only place a code can be
+  // claimed for `address`. Anybody else hitting GET /api/ref/code/<address>
+  // gets 401 — that's the tamper-resistance.
+  useEffect(() => {
+    if (!address) {
+      setRefCode(null);
+      setRefClicks(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+        const res = await fetch(`/api/ref/code/${address}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { code: string; clickCount: number };
+        if (!cancelled) {
+          setRefCode(data.code);
+          setRefClicks(data.clickCount);
+        }
+      } catch {
+        /* silent — page still works without the short link, falls back below */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, getAccessToken]);
+
+  const myLink = (() => {
     if (!address) return "";
-    if (typeof window === "undefined") return `https://playkaboom.gg/?ref=${address}`;
-    return `${window.location.origin}/?ref=${address}`;
-  }, [address]);
+    const origin =
+      typeof window === "undefined" ? "https://playkaboom.gg" : window.location.origin;
+    if (refCode) return `${origin}/r/${refCode}`;
+    // Fallback: legacy long form. Still works because the URL handler in
+    // useReferralFromURL keeps the ?ref= path. If the code endpoint is
+    // down or rate-limited, the user can still share *something*.
+    return `${origin}/?ref=${address}`;
+  })();
 
   const tier = myReferral?.tier ?? 0;
   const tierLabel = REFERRAL_TIER_LABELS[tier] ?? REFERRAL_TIER_LABELS[0];
@@ -174,9 +217,16 @@ export default function ReferralsPage() {
 
           {/* My referral link */}
           <div className="bg-surface-container-low border border-outline-variant/10 stealth-card p-6 mb-6">
-            <h2 className="font-headline text-xs font-bold uppercase tracking-widest text-on-surface mb-4">
-              Your referral link
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-headline text-xs font-bold uppercase tracking-widest text-on-surface">
+                Your referral link
+              </h2>
+              {refClicks != null && (
+                <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
+                  <span className="text-primary font-bold">{refClicks}</span> visits
+                </span>
+              )}
+            </div>
             <div className="flex gap-2 mb-3">
               <input
                 value={myLink}
@@ -192,6 +242,11 @@ export default function ReferralsPage() {
             </div>
             <p className="text-[10px] text-on-surface-variant/60">
               Share this link. When friends play their first game and accept you as referrer, you start accruing rakeback.
+              {refCode && (
+                <>
+                  {" "}Code <span className="text-primary font-mono">{refCode}</span> — only you can claim it (signed wallet bearer required).
+                </>
+              )}
             </p>
           </div>
 
