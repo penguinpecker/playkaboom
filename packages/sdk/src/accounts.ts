@@ -26,6 +26,8 @@ export interface VaultAccount {
   version: number;
   allowlistCount: number;
   withdrawAllowlist: PublicKey[];
+  /** `null` when no pending ownership transfer is in flight. */
+  pendingOwner: PublicKey | null;
 }
 
 export interface GameSessionAccount {
@@ -149,6 +151,9 @@ export function decodeVault(data: Buffer): VaultAccount {
   for (let i = 0; i < MAX_ALLOWLIST; i++) {
     allowlist.push(r.pk());
   }
+  const pendingOwnerRaw = r.pk();
+  const isZero = pendingOwnerRaw.toBuffer().every((b) => b === 0);
+  const pendingOwner = isZero ? null : pendingOwnerRaw;
   return {
     owner,
     houseAuthority,
@@ -165,6 +170,7 @@ export function decodeVault(data: Buffer): VaultAccount {
     version,
     allowlistCount,
     withdrawAllowlist: allowlist.slice(0, allowlistCount),
+    pendingOwner,
   };
 }
 

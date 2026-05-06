@@ -346,6 +346,56 @@ export function buildUpdateVault(args: UpdateVaultArgs): TransactionInstruction 
   });
 }
 
+// ── propose_owner / cancel_proposed_owner / accept_ownership ─────────────────
+export interface ProposeOwnerArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  newOwner: PublicKey;
+}
+
+export function buildProposeOwner(args: ProposeOwnerArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const data = Buffer.concat([
+    ixDiscriminator("propose_owner"),
+    Buffer.from(args.newOwner.toBytes()),
+  ]);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), readonly(args.owner, true)],
+    data,
+  });
+}
+
+export interface CancelProposedOwnerArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+}
+
+export function buildCancelProposedOwner(
+  args: CancelProposedOwnerArgs,
+): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), readonly(args.owner, true)],
+    data: ixDiscriminator("cancel_proposed_owner"),
+  });
+}
+
+export interface AcceptOwnershipArgs {
+  ctx: BuildContext;
+  newOwner: PublicKey;
+}
+
+export function buildAcceptOwnership(args: AcceptOwnershipArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), readonly(args.newOwner, true)],
+    data: ixDiscriminator("accept_ownership"),
+  });
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 function writeU16(v: number): Buffer {
   const b = Buffer.alloc(2);
