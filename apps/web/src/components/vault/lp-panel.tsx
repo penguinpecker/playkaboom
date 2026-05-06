@@ -48,7 +48,8 @@ export function VaultLpPanel() {
   const totalUnits = positionUnits + pendingUnits;
   const valueSol = position?.currentValueSol ?? 0;
   const netDepositedSol = position ? position.netDeposited / LAMPORTS_PER_SOL : 0;
-  const pnlSol = position ? position.pnlLamports / LAMPORTS_PER_SOL : 0;
+  const indexerStale = position?.indexerStale ?? false;
+  const pnlSol = position?.pnlLamports == null ? null : position.pnlLamports / LAMPORTS_PER_SOL;
   const pnlPct = position?.pnlPercent ?? null;
 
   const unlockSlot = position ? Number(position.pendingUnlockSlot) : 0;
@@ -166,12 +167,24 @@ export function VaultLpPanel() {
                 value={`${valueSol.toFixed(4)} SOL`}
                 valueColor="text-primary"
               />
-              <Row label="Net deposited" value={`${netDepositedSol.toFixed(4)} SOL`} />
+              <Row
+                label="Net deposited"
+                value={indexerStale ? "indexing…" : `${netDepositedSol.toFixed(4)} SOL`}
+              />
               <Row
                 label="P&L"
-                value={`${pnlSol >= 0 ? "+" : ""}${pnlSol.toFixed(4)} SOL (${fmtPct(pnlPct)})`}
-                valueColor={pnlSol >= 0 ? "text-emerald" : "text-error"}
+                value={
+                  pnlSol == null
+                    ? "—"
+                    : `${pnlSol >= 0 ? "+" : ""}${pnlSol.toFixed(4)} SOL (${fmtPct(pnlPct)})`
+                }
+                valueColor={pnlSol == null ? "text-on-surface-variant/50" : pnlSol >= 0 ? "text-emerald" : "text-error"}
               />
+              {indexerStale && (
+                <p className="font-mono text-[10px] text-on-surface-variant/40 italic">
+                  Off-chain indexer catching up; P&L will populate after the next webhook event.
+                </p>
+              )}
               {pendingUnits > 0n && (
                 <div className="mt-3 p-3 bg-amber/10 border border-amber/30 rounded">
                   <div className="font-headline text-[10px] uppercase tracking-widest text-amber mb-1">

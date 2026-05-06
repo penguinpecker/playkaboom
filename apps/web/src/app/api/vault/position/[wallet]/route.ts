@@ -96,8 +96,14 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
     const cumulativeDeposited = posRow?.cumulative_deposited ?? 0;
     const cumulativeWithdrawn = posRow?.cumulative_withdrawn ?? 0;
     const netDeposited = cumulativeDeposited - cumulativeWithdrawn;
-    const pnl = Number(value) - netDeposited;
-    const pnlPercent = netDeposited > 0 ? pnl / netDeposited : null;
+    // The indexer is downstream of Helius webhooks. If on-chain says you have
+    // a position but cumulative_deposited is 0, the webhook hasn't caught up
+    // (or isn't configured). Don't synthesise a misleading P&L number.
+    const totalUnitsHeld = pos.units + pos.pendingUnits;
+    const indexerStale = totalUnitsHeld > 0n && cumulativeDeposited === 0;
+    const pnlLamports = indexerStale ? null : Number(value) - netDeposited;
+    const pnlPercent =
+      indexerStale || netDeposited <= 0 ? null : (pnlLamports! / netDeposited);
 
     return NextResponse.json({
       wallet: walletStr,
@@ -109,8 +115,9 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
       deposited: cumulativeDeposited,
       withdrawn: cumulativeWithdrawn,
       netDeposited,
-      pnlLamports: pnl,
+      pnlLamports,
       pnlPercent,
+      indexerStale,
       history: actions ?? [],
     });
   } catch (err) {

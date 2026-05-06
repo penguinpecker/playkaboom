@@ -60,7 +60,8 @@ export function useVaultBalance() {
 }
 
 export function useVaultHealth() {
-  const { lamports } = useVaultAccount();
+  const { lamports, vault } = useVaultAccount();
+  if (vault === null) return { data: undefined as number | undefined };
   const sol = Number(lamports) / LAMPORTS_PER_SOL;
   return { data: sol >= 1 ? 100 : Math.round(sol * 100) };
 }
@@ -88,6 +89,7 @@ export function useGameCounter() {
 
 export function useRiskLevel() {
   const { data } = useVaultHealth();
+  if (data === undefined) return { data: undefined as number | undefined };
   const level = data >= 70 ? 0 : data >= 30 ? 1 : 2;
   return { data: level };
 }

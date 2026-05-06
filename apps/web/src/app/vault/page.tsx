@@ -1,5 +1,4 @@
 "use client";
-import { useState } from "react";
 import { formatEther } from "@/lib/compat";
 import {
   useVaultBalance,
@@ -7,10 +6,8 @@ import {
   useVaultMaxPayout,
   useVaultHealth,
   useRiskLevel,
-  useDepositToVault,
   useGameCounter,
 } from "@/hooks/useContracts";
-import { useToast } from "@/hooks/useToast";
 import { CLUSTER, CLUSTER_LABEL, accountExplorer } from "@/lib/cluster";
 import { CONTRACTS } from "@/lib/chain";
 import { VaultLpPanel } from "@/components/vault/lp-panel";
@@ -19,31 +16,25 @@ const RISK_LABELS = ["Healthy", "Caution", "Emergency"];
 const RISK_COLORS = ["text-emerald", "text-amber", "text-error"];
 
 export default function VaultPage() {
-  const { toast } = useToast();
   const { data: balance } = useVaultBalance();
   const { data: maxBet } = useVaultMaxBet();
   const { data: maxPayout } = useVaultMaxPayout();
   const { data: health } = useVaultHealth();
   const { data: riskLevel } = useRiskLevel();
   const { data: gameCount } = useGameCounter();
-  const { deposit, isPending, isConfirming, isSuccess } = useDepositToVault();
-  const [fundAmt, setFundAmt] = useState("1");
 
   const fmt = (v: bigint | undefined) => (v ? Number(formatEther(v)).toFixed(2) : "—");
-  const healthNum = health ? Number(health) : 0;
-  const riskIdx = riskLevel !== undefined ? Number(riskLevel) : 0;
-
-  const handleDeposit = async () => {
-    toast(`Depositing ${fundAmt} SOL...`, "primary");
-    await deposit(fundAmt);
-  };
+  const healthNum = health ?? 0;
+  const riskIdx = riskLevel;
 
   return (
     <div className="px-6 lg:px-8 pb-16 min-h-screen kinetic-grid">
       <div className="mb-8">
         <p className="font-headline text-[10px] tracking-[.12em] text-on-surface-variant flex items-center gap-1 mb-0.5">
           <span className="status-dot" />VAULT STATUS:{" "}
-          {RISK_LABELS[riskIdx]?.toUpperCase() || "LOADING"}
+          {riskIdx === undefined
+            ? "LOADING"
+            : (RISK_LABELS[riskIdx]?.toUpperCase() ?? "—")}
         </p>
         <h1 className="font-headline text-3xl font-black italic tracking-tighter text-on-surface">
           KABOOM <span className="text-primary">VAULT</span>
@@ -71,7 +62,7 @@ export default function VaultPage() {
         />
         <StatCard
           label="Health"
-          value={`${healthNum}%`}
+          value={health === undefined ? "—" : `${healthNum}%`}
           color="border-emerald"
           valColor="text-emerald"
         />
@@ -104,8 +95,8 @@ export default function VaultPage() {
           <div className="space-y-2.5">
             <InfoRow
               label="Risk Level"
-              value={RISK_LABELS[riskIdx] || "—"}
-              valueColor={RISK_COLORS[riskIdx] || "text-on-surface"}
+              value={riskIdx === undefined ? "—" : (RISK_LABELS[riskIdx] ?? "—")}
+              valueColor={riskIdx === undefined ? "text-on-surface" : (RISK_COLORS[riskIdx] ?? "text-on-surface")}
             />
             <InfoRow
               label="Total Games"
@@ -126,37 +117,7 @@ export default function VaultPage() {
         <div className="space-y-4">
           <div className="bg-surface-container-low p-5 border border-outline-variant/10">
             <h3 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-3">
-              Fund Vault
-            </h3>
-            <input
-              type="number"
-              step="0.1"
-              value={fundAmt}
-              onChange={(e) => setFundAmt(e.target.value)}
-              className="w-full bg-surface-container-lowest border-none font-headline font-bold text-lg text-primary px-3 py-2 mb-3 outline-none"
-            />
-            <button
-              onClick={handleDeposit}
-              disabled={isPending || isConfirming}
-              className="w-full py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-bold text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
-            >
-              {isPending || isConfirming ? "CONFIRMING..." : "DEPOSIT SOL"}
-            </button>
-            {isSuccess && (
-              <div className="mt-3 p-4 bg-emerald/10 border border-emerald/30 rounded-lg text-center">
-                <span className="font-headline text-lg font-bold text-emerald block mb-1">
-                  DEPOSIT CONFIRMED
-                </span>
-                <span className="font-headline text-xs text-emerald/70">
-                  {fundAmt} SOL sent to vault
-                </span>
-              </div>
-            )}
-          </div>
-
-          <div className="bg-surface-container-low p-5 border border-outline-variant/10">
-            <h3 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-3">
-              Contracts
+              Trust Anchors
             </h3>
             <div className="space-y-2">
               {Object.entries(CONTRACTS).map(([name, addr]) => (
@@ -168,13 +129,16 @@ export default function VaultPage() {
                     href={accountExplorer(addr)}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-mono text-[9px] text-primary hover:underline"
+                    className="font-mono text-[9px] text-primary hover:underline break-all"
                   >
-                    {addr.slice(0, 8)}…{addr.slice(-6)}
+                    {addr}
                   </a>
                 </div>
               ))}
             </div>
+            <p className="font-mono text-[9px] text-on-surface-variant/40 italic mt-3 leading-relaxed">
+              Owner + treasury are the same Squads vault (2-of-2). House signer is a Turnkey HSM — the private key never leaves the TEE. To deposit liquidity into the vault, use the deposit form above (mints LP units; you share P&L going forward).
+            </p>
           </div>
         </div>
       </div>
