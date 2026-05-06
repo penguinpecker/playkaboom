@@ -30,6 +30,10 @@ pub const MIN_MINES: u8 = 1;
 pub const MAX_MINES: u8 = 12;
 pub const BPS: u64 = 10_000;
 pub const GAME_EXPIRY_SLOTS: u64 = 300;
+/// Player can self-close a Won/Lost-but-unsettled game after this window.
+/// Used for recovery when the server settle ix never ran (e.g. lost game
+/// token, server downtime). 600 slots ≈ 4 minutes at ~400 ms/slot.
+pub const CLOSE_UNSETTLED_EXPIRY_SLOTS: u64 = 600;
 pub const MIN_BET_LAMPORTS: u64 = 1_000_000;
 
 pub const MAX_HOUSE_EDGE_BPS: u16 = 1_000; // 10%
@@ -725,6 +729,35 @@ pub mod kaboom {
                     && (game.status == GameStatus::Won || game.status == GameStatus::Lost)),
             KaboomError::GameNotFinished
         );
+        Ok(())
+    }
+
+    /// Self-recovery: player can close their own Won/Lost game that the
+    /// server failed to settle (e.g. they lost their gameToken). Available
+    /// after CLOSE_UNSETTLED_EXPIRY_SLOTS so the server has ample time to
+    /// settle in the happy path. Decrements the v2 obligation counter so
+    /// total_outstanding_max_payout stays accurate.
+    ///
+    /// Trade-off: the player forfeits the on-chain settlement proof for
+    /// this game (verifier won't be able to confirm the layout matched the
+    /// commitment). Their cash_out (Won) or implicit forfeit (Lost) has
+    /// already moved the SOL on-chain — this ix only reclaims rent + slot.
+    pub fn close_unsettled_game(ctx: Context<CloseUnsettledGame>) -> Result<()> {
+        let game = &ctx.accounts.game;
+        require!(
+            game.status == GameStatus::Won || game.status == GameStatus::Lost,
+            KaboomError::GameNotFinished
+        );
+        require!(!game.settled, KaboomError::GameAlreadySettled);
+        let clock = Clock::get()?;
+        require!(
+            clock.slot > game.start_slot.saturating_add(CLOSE_UNSETTLED_EXPIRY_SLOTS),
+            KaboomError::GameNotExpired
+        );
+        let v2 = &mut ctx.accounts.v2_state;
+        v2.total_outstanding_max_payout = v2
+            .total_outstanding_max_payout
+            .saturating_sub(game.max_payout);
         Ok(())
     }
 
@@ -1890,6 +1923,24 @@ pub struct RefundExpired<'info> {
 
 #[derive(Accounts)]
 pub struct CloseGame<'info> {
+    #[account(
+        mut,
+        seeds = [GAME_SEED, game.player.as_ref()],
+        bump = game.bump,
+        constraint = game.player == player.key() @ KaboomError::Unauthorized,
+        close = player,
+    )]
+    pub game: Account<'info, GameSession>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseUnsettledGame<'info> {
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
     #[account(
         mut,
         seeds = [GAME_SEED, game.player.as_ref()],

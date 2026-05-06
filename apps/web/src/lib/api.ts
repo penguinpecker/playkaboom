@@ -174,3 +174,22 @@ export async function apiVaultCompleteWithdraw(input: {
 }): Promise<IxResponse> {
   return post("/api/vault/complete-withdraw", input);
 }
+
+// ── Activity feed ──────────────────────────────────────────────────────────
+export interface ActivityEvent {
+  kind: "game" | "lp" | "ref_received" | "ref_paid";
+  signature: string;
+  slot: number;
+  time: string | null;
+  payload: Record<string, unknown>;
+}
+
+export async function apiActivity(wallet: string): Promise<{
+  wallet: string;
+  events: ActivityEvent[];
+}> {
+  const res = await fetch(`/api/activity/${wallet}`, { cache: "no-store" });
+  const json = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) throw new ApiClientError(res.status, json);
+  return json as unknown as { wallet: string; events: ActivityEvent[] };
+}

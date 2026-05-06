@@ -4,6 +4,7 @@ import { formatEther, useAccount } from "@/lib/compat";
 import { useGameHistory } from "@/hooks/useGameHistory";
 import { useVaultMaxBet } from "@/hooks/useContracts";
 import { txExplorer } from "@/lib/cluster";
+import { ActivityFeed } from "@/components/logs/ActivityFeed";
 
 export default function LogsPage() {
   useAccount();
@@ -305,6 +306,10 @@ export default function LogsPage() {
           </button>
         </div>
       )}
+
+      <div className="mt-10">
+        <ActivityFeed />
+      </div>
     </div>
   );
 }
