@@ -27,6 +27,10 @@ const csp = [
     "wss://*.supabase.co",
     "https://api.mainnet-beta.solana.com",
     "https://api.devnet.solana.com",
+    "https://*.g.alchemy.com",
+    "wss://*.g.alchemy.com",
+    "https://*.alchemyapi.io",
+    "wss://*.alchemyapi.io",
     "https://*.helius-rpc.com",
     "https://*.helius.xyz",
     "wss://*.helius-rpc.com",
@@ -58,7 +62,10 @@ const securityHeaders = [
     value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   },
   { key: "X-DNS-Prefetch-Control", value: "on" },
-  { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+  // `same-origin-allow-popups` is required for Coinbase / Base Account
+  // wallet SDKs to communicate with their popup. `same-origin` would block
+  // the postMessage handshake. Privy's auth iframe is unaffected.
+  { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
   { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
 ];
 
