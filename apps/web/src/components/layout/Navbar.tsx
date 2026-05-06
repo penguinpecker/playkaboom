@@ -88,11 +88,8 @@ export function Navbar() {
               menu
             </span>
           </button>
-          <Link href="/" className="flex items-center gap-2">
-            <KaboomLogo size={36} />
-            <span className="text-2xl font-black italic tracking-tighter font-headline text-transparent bg-clip-text bg-gradient-to-br from-blue-300 to-blue-500">
-              KABOOM!
-            </span>
+          <Link href="/" className="flex items-center" aria-label="Kaboom — home">
+            <KaboomLogo size={48} glow />
           </Link>
           <nav className="hidden lg:flex gap-6 items-center">
             {NAV_LINKS.map((link) => (

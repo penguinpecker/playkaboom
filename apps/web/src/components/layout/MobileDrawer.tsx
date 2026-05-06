@@ -22,11 +22,8 @@ export function MobileDrawer({ onClose }: { onClose: () => void }) {
       }}
     >
       <div className="w-60 h-full bg-surface-container-low border-r border-outline-variant/10 p-5 animate-scale-in">
-        <div className="flex items-center gap-2 mb-6">
-          <KaboomLogo size={28} />
-          <span className="font-headline text-base font-black italic text-transparent bg-clip-text bg-gradient-to-r from-primary to-primary-container">
-            KABOOM!
-          </span>
+        <div className="flex items-center mb-6">
+          <KaboomLogo size={56} glow />
         </div>
         <nav className="space-y-1">
           {LINKS.map((l) => (

@@ -5,6 +5,7 @@ import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useCont
 import { useGameHistory } from "@/hooks/useGameHistory";
 import { CLUSTER, CLUSTER_LABEL, accountExplorer, PROGRAM_ID } from "@/lib/cluster";
 import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
+import { KaboomLogo } from "@/components/ui/KaboomLogo";
 
 export default function HomePage() {
   return (
@@ -142,6 +143,12 @@ function HeroSection() {
       <div className="absolute top-1/4 right-4 lg:right-10 w-[200px] lg:w-[400px] h-[200px] lg:h-[400px] bg-primary/10 blur-[60px] lg:blur-[100px] rounded-full pointer-events-none" />
       <div className="absolute bottom-1/4 left-4 lg:left-10 w-[200px] lg:w-[300px] h-[200px] lg:h-[300px] bg-tertiary/10 blur-[60px] lg:blur-[80px] rounded-full pointer-events-none" />
       <div className="container mx-auto px-4 sm:px-6 relative z-10 flex flex-col items-center text-center py-12 sm:py-16">
+        {/* Hero logo — branded mark sits above everything as the visual anchor.
+            Sized to feel substantial without crowding the headline below. */}
+        <div className="mb-6 sm:mb-8 animate-float">
+          <KaboomLogo size={160} glow className="drop-shadow-[0_0_40px_rgba(208,188,255,0.4)] sm:hidden" />
+          <KaboomLogo size={240} glow className="drop-shadow-[0_0_60px_rgba(208,188,255,0.5)] hidden sm:block" />
+        </div>
         <div className="inline-flex items-center gap-2 px-3 sm:px-4 py-1 bg-surface-container-high rounded-full mb-6 sm:mb-8 border border-outline-variant/15">
           <span className="status-dot" />
           <span className="font-headline text-[9px] sm:text-[10px] uppercase tracking-[0.15em] sm:tracking-[0.2em] text-on-surface-variant">
