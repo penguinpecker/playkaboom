@@ -44,9 +44,20 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     }
     const game = decodeGameSession(info.data);
     const session = await loadSession(player);
+
+    // Compute refund window: refund_expired requires `now > start + 300 slots`.
+    const currentSlot = await conn.getSlot("confirmed");
+    const startSlot = Number(game.startSlot);
+    const expirySlot = startSlot + 300;
+    const slotsUntilRefund = expirySlot - currentSlot;
+    const refundable = slotsUntilRefund <= 0;
+    const secondsUntilRefund = refundable ? 0 : Math.max(0, Math.ceil(slotsUntilRefund * 0.4));
+
     return NextResponse.json({
       active: true,
       gameToken: session ? encryptSession(session) : null,
+      sessionRecovered: !!session,
+      currentSlot,
       onChain: {
         bet: game.bet.toString(),
         mineCount: game.mineCount,
@@ -56,7 +67,13 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
         multiplierBps: game.multiplierBps.toString(),
         startSlot: game.startSlot.toString(),
         status: game.status,
+        settled: game.settled,
         commitment: game.commitment.toString("hex"),
+      },
+      refund: {
+        refundable,
+        slotsUntilRefund: Math.max(0, slotsUntilRefund),
+        secondsUntilRefund,
       },
     });
   } catch (err) {

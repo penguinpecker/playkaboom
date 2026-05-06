@@ -77,6 +77,10 @@ export function useGameActions(): ActionsResult {
     [wallet, connection, signTransaction],
   );
 
+  // Allow components outside this hook (e.g. StuckGameBanner) to trigger the
+  // exact same cleanup flow without re-implementing it. Set on the window so
+  // hooks/components don't have to thread a prop through every layer.
+  // (Yes, this is a window-scoped escape hatch; treated like an event bus.)
   const cleanupStuck = useCallback(async (): Promise<boolean> => {
     if (!walletAddress) return false;
     store.setStatus("cleaning");
