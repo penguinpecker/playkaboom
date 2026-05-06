@@ -57,7 +57,9 @@ export function useGameActions(): ActionsResult {
     async (ix: TransactionInstruction): Promise<string> => {
       if (!wallet) throw new Error("No wallet");
       const tx = new Transaction().add(ix);
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      // `processed` blockhash is one slot newer than `confirmed` and still
+      // valid for the full ~150-block window — saves ~150-200ms vs confirmed.
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("processed");
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);
@@ -70,7 +72,11 @@ export function useGameActions(): ActionsResult {
         signed instanceof VersionedTransaction
           ? signed.serialize()
           : (signed as Transaction).serialize();
-      const sig = await connection.sendRawTransaction(raw, { skipPreflight: false });
+      // skipPreflight: server already built + validated the ix, so the RPC
+      // simulate step before forwarding is redundant work that adds ~200-400ms
+      // on Alchemy free tier. If the tx is somehow malformed we lose the slot
+      // fee (~5k lamports) — acceptable trade for a 200-400ms UX win.
+      const sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
       await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       return sig;
     },
