@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { useGameStore } from "@/stores/game-store";
-import { useToast } from "@/components/providers/toast";
 
 export interface StuckGameInfo {
   active: boolean;
@@ -20,6 +19,11 @@ export interface StuckGameInfo {
   secondsUntilRefund: number;
   /** True if refund_expired ix would succeed right now. */
   refundable: boolean;
+  /** Pre-fetched ciphertext — caller hands this to setGameToken when the
+   *  player clicks the Resume button. NOT auto-applied (avoids surprise). */
+  pendingGameToken: string | null;
+  /** Force-refresh the probe (e.g. after a Force Close lands). */
+  refresh: () => void;
 }
 
 /**
@@ -31,28 +35,34 @@ export interface StuckGameInfo {
  * fresh ciphertext and flips status to "playing". If not, status is set to
  * "idle" and the caller is responsible for offering the manual refund UX.
  */
+const EMPTY_INFO: Omit<StuckGameInfo, "refresh"> = {
+  active: false,
+  recoverable: false,
+  stuck: false,
+  betLamports: null,
+  mineCount: null,
+  slotsUntilRefund: 0,
+  secondsUntilRefund: 0,
+  refundable: false,
+  pendingGameToken: null,
+};
+
 export function useGameResume(): StuckGameInfo {
   const { authenticated, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
   const wallet = wallets[0];
-  const setGameToken = useGameStore((s) => s.setGameToken);
   const setStatus = useGameStore((s) => s.setStatus);
   const setError = useGameStore((s) => s.setError);
-  const { toast } = useToast();
 
-  const [info, setInfo] = useState<StuckGameInfo>({
-    active: false,
-    recoverable: false,
-    stuck: false,
-    betLamports: null,
-    mineCount: null,
-    slotsUntilRefund: 0,
-    secondsUntilRefund: 0,
-    refundable: false,
-  });
+  const [info, setInfo] = useState<Omit<StuckGameInfo, "refresh">>(EMPTY_INFO);
+  // Bumping this triggers a re-probe via the useEffect below.
+  const [tick, setTick] = useState(0);
 
   const probe = useCallback(async () => {
-    if (!authenticated || !wallet?.address) return;
+    if (!authenticated || !wallet?.address) {
+      setInfo(EMPTY_INFO);
+      return;
+    }
     try {
       const token = await getAccessToken();
       if (!token) return;
@@ -73,27 +83,16 @@ export function useGameResume(): StuckGameInfo {
         };
       };
       if (!data.active) {
-        setInfo({
-          active: false,
-          recoverable: false,
-          stuck: false,
-          betLamports: null,
-          mineCount: null,
-          slotsUntilRefund: 0,
-          secondsUntilRefund: 0,
-          refundable: false,
-        });
+        setInfo(EMPTY_INFO);
+        // Make sure the UI returns to a clean idle when the game closes.
+        setStatus("idle");
+        setError(null);
         return;
       }
-      if (data.gameToken) {
-        setGameToken(data.gameToken);
-        setStatus("playing");
-        toast("Resumed your in-flight game", "primary");
-      } else {
-        // Surface stuck status — UX should show countdown + manual refund.
-        setError(null);
-        setStatus("idle");
-      }
+      // Don't auto-flip status to "playing" — present the choice through the
+      // GameRecoveryBanner Resume button instead. Auto-flipping was confusing
+      // (player got taken straight into a game they may not have wanted to
+      // resume on this device).
       setInfo({
         active: true,
         recoverable: !!data.gameToken,
@@ -103,20 +102,22 @@ export function useGameResume(): StuckGameInfo {
         slotsUntilRefund: data.refund?.slotsUntilRefund ?? 0,
         secondsUntilRefund: data.refund?.secondsUntilRefund ?? 0,
         refundable: data.refund?.refundable ?? false,
+        pendingGameToken: data.gameToken ?? null,
       });
     } catch {
       /* silent */
     }
-  }, [authenticated, wallet?.address, getAccessToken, setGameToken, setStatus, setError, toast]);
+  }, [authenticated, wallet?.address, getAccessToken, setStatus, setError]);
 
   // Initial probe + 15-second poll while a game is active so the countdown
-  // updates without a page reload.
+  // updates without a page reload. Re-runs whenever `tick` bumps.
   useEffect(() => {
     void probe();
     if (!info.active) return;
     const i = setInterval(() => void probe(), 15_000);
     return () => clearInterval(i);
-  }, [probe, info.active]);
+  }, [probe, info.active, tick]);
 
-  return info;
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
+  return { ...info, refresh };
 }
