@@ -69,11 +69,17 @@ External services:
   • Privy (player auth + embedded wallets)        — apps/web/src/server/auth.ts
   • Turnkey (HSM for house signer)                — apps/web/src/server/turnkey-signer.ts
   • Squads V4 multisig (owner + treasury)         — devnet program SQDS4ep65...
-  • Helius (RPC + enhanced-webhook event stream)  — webhook URL configured externally
+  • Alchemy (RPC + WebSocket; replaces Helius)    — solana-{devnet,mainnet}.g.alchemy.com/v2/<KEY>
+  • GitHub Actions (cron-based indexer poll)      — .github/workflows/index-events.yml @ */5 * * * *
   • Supabase Postgres (indexer cache)             — project ref vrxeqgynejlnmwsifvml (Tokyo)
-  • Vercel (Next.js host)                         — playkaboom-ten.vercel.app
+  • Vercel (Next.js host)                         — playkaboom.gg + www.playkaboom.gg + playkaboom-ten.vercel.app
   • Pyth Hermes (USD price overlay)               — public, no auth
   • Upstash Redis (rate limiting)                 — env-configured
+
+  Helius is no longer in the critical path. The /api/webhook/helius endpoint
+  remains as a backup ingestion path (auth-gated by HELIUS_WEBHOOK_AUTH); it
+  shares the same `ingestTransactions` core as the cron route, so either can
+  feed the indexer.
 
 
 ================================================================================
@@ -440,11 +446,20 @@ Production (Vercel):
   TURNKEY_HOUSE_PUBKEY      — sensitive
   USE_TURNKEY               — "true"
   PRIVY_APP_SECRET          — sensitive
-  HELIUS_WEBHOOK_AUTH       — sensitive (32-byte hex)
+  HELIUS_WEBHOOK_AUTH       — sensitive (kept for the backup webhook path)
+  CRON_SECRET               — sensitive (auths the GH Actions cron call;
+                               currently set to the same value as
+                               HELIUS_WEBHOOK_AUTH so a single token works both)
   SUPABASE_SERVICE_ROLE_KEY — sensitive
   NEXT_PUBLIC_SOLANA_CLUSTER, NEXT_PUBLIC_SOLANA_RPC, SOLANA_RPC,
-  PROGRAM_ID, NEXT_PUBLIC_PRIVY_APP_ID, NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY, SESSION_ENC_KEY (32-byte hex), LOG_LEVEL
+  SOLANA_WS, PROGRAM_ID, NEXT_PUBLIC_PRIVY_APP_ID,
+  NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  SESSION_ENC_KEY (32-byte hex), LOG_LEVEL
+
+GitHub Actions (repo Settings → Secrets and variables → Actions):
+  CRON_SECRET — must match Vercel's CRON_SECRET. The workflow at
+  .github/workflows/index-events.yml uses this to authenticate against
+  /api/cron/index-events.
 
 Removed (no longer in env):
   HOUSE_AUTHORITY_KEY  — retired 2026-05-06; Turnkey HSM is sole signer.
@@ -481,13 +496,17 @@ Anchor toolchain (local):
        cooldown for testing. Production deploy must reset to 648000 before
        cutover.
 
-  9.5  The Helius webhook is configured (in handoff) to point at
-       `playkaboom.gg/api/webhook/helius`, but the actual deployed URL is
-       `playkaboom-ten.vercel.app/...`. The endpoint is reachable
-       (verified via curl with auth header → 200 OK), but Helius isn't
-       currently forwarding our program's logs to it. Result: indexer
-       tables stay empty for LP events; APY 30d shows null; PnL on
-       /api/vault/position falls back to "indexerStale: true".
+  9.5  Vercel Hobby plan caps cron jobs to once-daily; minute-cadence
+       requires Pro ($20/mo). Workaround: GitHub Actions runs the cron at
+       5-min cadence (free-tier minimum). To get sub-minute latency,
+       upgrade Vercel to Pro and re-add the `crons` block to vercel.json:
+         { "path": "/api/cron/index-events", "schedule": "* * * * *" }
+       The route handler is unchanged either way.
+
+  9.5b Helius is no longer required — the cron-based indexer reads logs
+       directly from Alchemy RPC via getSignaturesForAddress + getTransaction.
+       The /api/webhook/helius endpoint stays live as a fallback; both
+       paths converge on `ingestTransactions` in apps/web/src/server/indexer.ts.
 
   9.6  Solana program upgrades require ~5 SOL of free liquidity on the
        upgrade-authority key (current owner DbR1a1...XpRH) to fund the
