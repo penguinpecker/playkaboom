@@ -10,10 +10,24 @@ export class ApiClientError extends Error {
   }
 }
 
+/** Privy access-token resolver. Set once at app boot via `setAuthTokenResolver`
+ * and every authed API call will attach it as `Authorization: Bearer …`. */
+type TokenResolver = () => Promise<string | null>;
+let resolveToken: TokenResolver = async () => null;
+export function setAuthTokenResolver(fn: TokenResolver): void {
+  resolveToken = fn;
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await resolveToken().catch(() => null);
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 async function post<TIn extends object, TOut>(path: string, body: TIn): Promise<TOut> {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+    credentials: "include",
     body: JSON.stringify(body, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
   });
   const json = (await res.json()) as Record<string, unknown>;

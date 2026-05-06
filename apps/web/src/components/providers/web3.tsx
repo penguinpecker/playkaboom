@@ -1,13 +1,24 @@
 "use client";
 import type { ReactNode } from "react";
-import { PrivyProvider } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
 import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 import { ConnectionProvider } from "@solana/wallet-adapter-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CLUSTER, RPC_URL } from "@/lib/cluster";
+import { setAuthTokenResolver } from "@/lib/api";
 
 const solanaConnectors = toSolanaWalletConnectors();
+
+/** Wires Privy's `getAccessToken()` into the auth-fetch helper so every
+ * authed API call attaches `Authorization: Bearer <privy token>`. */
+function PrivyAuthBridge({ children }: { children: ReactNode }) {
+  const { getAccessToken } = usePrivy();
+  useEffect(() => {
+    setAuthTokenResolver(() => getAccessToken());
+  }, [getAccessToken]);
+  return <>{children}</>;
+}
 
 export function Web3Provider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -47,7 +58,9 @@ export function Web3Provider({ children }: { children: ReactNode }) {
       }}
     >
       <ConnectionProvider endpoint={RPC_URL}>
-        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+        <QueryClientProvider client={queryClient}>
+          <PrivyAuthBridge>{children}</PrivyAuthBridge>
+        </QueryClientProvider>
       </ConnectionProvider>
     </PrivyProvider>
   );
