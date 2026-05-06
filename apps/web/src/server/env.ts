@@ -24,6 +24,45 @@ export function houseAuthority(): Keypair {
   return cachedHouseKey;
 }
 
+export function useTurnkey(): boolean {
+  return (process.env.USE_TURNKEY ?? "").toLowerCase() === "true";
+}
+
+let cachedHousePubkey: PublicKey | null = null;
+export function housePubkey(): PublicKey {
+  if (cachedHousePubkey) return cachedHousePubkey;
+  if (useTurnkey()) {
+    const raw = process.env.TURNKEY_HOUSE_PUBKEY;
+    if (!raw) throw new Error("TURNKEY_HOUSE_PUBKEY is not set");
+    cachedHousePubkey = new PublicKey(raw);
+  } else {
+    cachedHousePubkey = houseAuthority().publicKey;
+  }
+  return cachedHousePubkey;
+}
+
+export interface TurnkeyConfig {
+  organizationId: string;
+  apiPublicKey: string;
+  apiPrivateKey: string;
+  housePubkey: string;
+}
+
+let cachedTurnkeyConfig: TurnkeyConfig | null = null;
+export function turnkeyConfig(): TurnkeyConfig {
+  if (cachedTurnkeyConfig) return cachedTurnkeyConfig;
+  const organizationId = process.env.TURNKEY_ORG_ID;
+  const apiPublicKey = process.env.TURNKEY_API_PUBLIC_KEY;
+  const apiPrivateKey = process.env.TURNKEY_API_PRIVATE_KEY;
+  const housePubkey = process.env.TURNKEY_HOUSE_PUBKEY;
+  if (!organizationId) throw new Error("TURNKEY_ORG_ID is not set");
+  if (!apiPublicKey) throw new Error("TURNKEY_API_PUBLIC_KEY is not set");
+  if (!apiPrivateKey) throw new Error("TURNKEY_API_PRIVATE_KEY is not set");
+  if (!housePubkey) throw new Error("TURNKEY_HOUSE_PUBKEY is not set");
+  cachedTurnkeyConfig = { organizationId, apiPublicKey, apiPrivateKey, housePubkey };
+  return cachedTurnkeyConfig;
+}
+
 let cachedSessionKey: Buffer | null = null;
 export function sessionEncKey(): Buffer {
   if (cachedSessionKey) return cachedSessionKey;

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { deriveVaultPda } from "@playkaboom/sdk";
-import { houseAuthority, programId } from "@/server/env";
+import { housePubkey, programId } from "@/server/env";
 import { getConnection } from "@/server/connection";
 import { jsonError } from "@/server/api-helpers";
 
@@ -18,7 +18,7 @@ export async function GET() {
       vaultPda: vaultPda.toBase58(),
       vaultBalanceSol: lamports / LAMPORTS_PER_SOL,
       vaultBalanceLamports: lamports,
-      houseAuthority: houseAuthority().publicKey.toBase58(),
+      houseAuthority: housePubkey().toBase58(),
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
