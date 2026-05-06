@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
@@ -8,6 +8,15 @@ import { useGame } from "@/hooks/useGame";
 import { useVaultMaxBet } from "@/hooks/useContracts";
 import { usePythSolUsd, formatUsd, solToUsd } from "@/hooks/use-pyth";
 import { GAME_CONFIG } from "@/lib/chain";
+
+// Hard lockout window after a click fires. The Privy popup + RPC simulate +
+// tx send round-trip can take a few seconds, and during that window React
+// hasn't repainted the disabled state yet. Without this, fast double-clicks
+// race past the `isStarting` guard and try to open a second start_game tx
+// against the same player PDA — which the program rejects, leaving the
+// player thinking the game is "stuck". 5s is well past the worst-case
+// confirm latency we see on devnet.
+const ENGAGE_LOCKOUT_MS = 5_000;
 
 export function BetControls() {
   const { state, setBet, setMineCount, startGame, cashOut } = useGame();
@@ -18,6 +27,10 @@ export function BetControls() {
   const { data: maxBetWei } = useVaultMaxBet();
   const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
+  // Synchronous lockout — flipped on click before any React re-render so a
+  // second click in the same event-loop tick is dropped.
+  const lockoutUntilRef = useRef(0);
+  const [lockoutRemaining, setLockoutRemaining] = useState(0);
 
   const isPlaying = state.status === "playing";
   const isStarting = state.status === "starting";
@@ -25,6 +38,7 @@ export function BetControls() {
   const safeTilesTotal = GAME_CONFIG.GRID_SIZE - state.mineCount;
   const progress = isPlaying ? Math.round((state.safeTiles.size / safeTilesTotal) * 100) : 0;
   const maxBet = maxBetWei ? Number(maxBetWei) / LAMPORTS_PER_SOL : 999;
+  const engageLocked = lockoutRemaining > 0;
 
   useEffect(() => {
     if (!publicKey || !connection) return;
@@ -46,12 +60,42 @@ export function BetControls() {
     };
   }, [publicKey, connection]);
 
+  // Drive the visible countdown while the lockout is active. Cleared once
+  // it reaches 0 or the component unmounts.
+  useEffect(() => {
+    if (!engageLocked) return;
+    const tick = () => {
+      const remaining = Math.max(0, lockoutUntilRef.current - Date.now());
+      setLockoutRemaining(remaining);
+    };
+    const i = setInterval(tick, 100);
+    return () => clearInterval(i);
+  }, [engageLocked]);
+
+  // Release the lockout the moment the store transitions out of "starting".
+  // status → "playing" means success (the CASH OUT button takes over anyway,
+  // but we clear so the next round starts fresh).
+  // status → "idle" means the tx was rejected/failed — let the player retry
+  // without staring at a 5s countdown for no reason.
+  useEffect(() => {
+    if (state.status === "playing" || state.status === "idle") {
+      lockoutUntilRef.current = 0;
+      setLockoutRemaining(0);
+    }
+  }, [state.status]);
+
   const handleStart = () => {
     if (!authenticated) {
       login();
       return;
     }
+    // Drop redundant clicks: ref check is synchronous so it catches the
+    // double-tap before the disabled prop or store status can update.
+    if (Date.now() < lockoutUntilRef.current) return;
+    if (isStarting || isPlaying) return;
     if (state.bet > walletBalance || state.bet > maxBet) return;
+    lockoutUntilRef.current = Date.now() + ENGAGE_LOCKOUT_MS;
+    setLockoutRemaining(ENGAGE_LOCKOUT_MS);
     void startGame();
   };
 
@@ -147,8 +191,8 @@ export function BetControls() {
         {!isPlaying && state.status !== "cashing" ? (
           <button
             onClick={handleStart}
-            disabled={isStarting || !authenticated}
-            className="w-full mt-8 py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-black text-lg tracking-[0.2em] glow-primary hover:brightness-125 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50"
+            disabled={isStarting || engageLocked || !authenticated}
+            className="w-full mt-8 py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-black text-lg tracking-[0.2em] glow-primary hover:brightness-125 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed disabled:grayscale"
           >
             {isStarting ? (
               <>
@@ -159,6 +203,16 @@ export function BetControls() {
                   progress_activity
                 </span>
                 CONFIRMING...
+              </>
+            ) : engageLocked ? (
+              <>
+                <span
+                  className="material-symbols-outlined animate-spin"
+                  style={{ fontSize: 24 }}
+                >
+                  progress_activity
+                </span>
+                LOCKED · {Math.ceil(lockoutRemaining / 1000)}s
               </>
             ) : !authenticated ? (
               <>
