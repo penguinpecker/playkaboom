@@ -18,13 +18,10 @@ export const metadata: Metadata = {
     "Provably fair 4×4 Mines on Solana. Server-assisted commit-reveal, fully on-chain settlement.",
   applicationName: "PlayKaboom",
   manifest: "/manifest.json",
-  icons: {
-    icon: [
-      { url: "/kaboom-logo.png", type: "image/png" },
-      { url: "/icons/icon.svg", type: "image/svg+xml" },
-    ],
-    apple: [{ url: "/kaboom-logo.png", type: "image/png" }],
-  },
+  // Favicon + apple-touch-icon resolve via Next.js file-convention from
+  // app/icon.png + app/apple-icon.png — the metadata.icons field would
+  // override that. We keep only the OG image declaration in openGraph
+  // below (no auto-resolution exists for it).
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

@@ -34,6 +34,8 @@ export default function ReferralsPage() {
   const [pendingRef, setPendingRef] = useState<string | null>(null);
   const [refCode, setRefCode] = useState<string | null>(null);
   const [refClicks, setRefClicks] = useState<number | null>(null);
+  const [refSignups, setRefSignups] = useState<number | null>(null);
+  const [refConfirmed, setRefConfirmed] = useState<number | null>(null);
   const { getAccessToken } = usePrivy();
 
   useEffect(() => {
@@ -48,6 +50,8 @@ export default function ReferralsPage() {
     if (!address) {
       setRefCode(null);
       setRefClicks(null);
+      setRefSignups(null);
+      setRefConfirmed(null);
       return;
     }
     let cancelled = false;
@@ -60,10 +64,17 @@ export default function ReferralsPage() {
           cache: "no-store",
         });
         if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { code: string; clickCount: number };
+        const data = (await res.json()) as {
+          code: string;
+          clickCount: number;
+          signupCount: number;
+          confirmedCount: number;
+        };
         if (!cancelled) {
           setRefCode(data.code);
           setRefClicks(data.clickCount);
+          setRefSignups(data.signupCount);
+          setRefConfirmed(data.confirmedCount);
         }
       } catch {
         /* silent — page still works without the short link, falls back below */
@@ -222,9 +233,19 @@ export default function ReferralsPage() {
                 Your referral link
               </h2>
               {refClicks != null && (
-                <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
-                  <span className="text-primary font-bold">{refClicks}</span> visits
-                </span>
+                <div className="flex gap-3 font-headline text-[10px] uppercase tracking-widest">
+                  <span className="text-on-surface-variant">
+                    <span className="text-primary font-bold">{refClicks}</span> visits
+                  </span>
+                  <span className="text-on-surface-variant/60">→</span>
+                  <span className="text-on-surface-variant">
+                    <span className="text-secondary font-bold">{refSignups ?? 0}</span> signups
+                  </span>
+                  <span className="text-on-surface-variant/60">→</span>
+                  <span className="text-on-surface-variant">
+                    <span className="text-emerald font-bold">{refConfirmed ?? 0}</span> confirmed
+                  </span>
+                </div>
               )}
             </div>
             <div className="flex gap-2 mb-3">

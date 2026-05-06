@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { CLUSTER, RPC_URL } from "@/lib/cluster";
 import { setAuthTokenResolver } from "@/lib/api";
+import { useReferralSignupAttribution } from "@/hooks/use-referral";
 
 const solanaConnectors = toSolanaWalletConnectors();
 
@@ -17,6 +18,10 @@ function PrivyAuthBridge({ children }: { children: ReactNode }) {
   useEffect(() => {
     setAuthTokenResolver(() => getAccessToken());
   }, [getAccessToken]);
+  // Fires /api/ref/signup the first time a wallet connects on a browser
+  // carrying the kb.ref.sid cookie. Mounted here so it covers every page,
+  // including ones the visitor lands on after the /r/<code> redirect.
+  useReferralSignupAttribution();
   return <>{children}</>;
 }
 

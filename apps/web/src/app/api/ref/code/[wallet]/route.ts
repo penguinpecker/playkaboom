@@ -33,6 +33,10 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
       wallet: row.wallet,
       url: `/r/${row.code}`,
       clickCount: row.click_count,
+      // Funnel: clicks → signups (wallet connected) → confirmed (set_referrer
+      // landed on-chain). Both are 0 until backfilled by future visits.
+      signupCount: row.signup_count ?? 0,
+      confirmedCount: row.confirmed_count ?? 0,
       lastVisitedAt: row.last_visited_at,
     });
   } catch (err) {
