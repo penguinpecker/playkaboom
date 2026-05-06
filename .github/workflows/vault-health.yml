@@ -1,0 +1,31 @@
+name: Vault health probe
+# Polls /api/cron/vault-health every 15 minutes. The endpoint reads the
+# Vault + V2State PDAs, computes calc_health_bps, and pings ALERT_WEBHOOK_URL
+# if the vault is paused, health < 50%, or balance is low. Idempotent.
+#
+# Requires repo secret CRON_SECRET (same one /api/cron/index-events uses).
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hit probe
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -eu
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "CRON_SECRET secret not configured" >&2
+            exit 1
+          fi
+          response=$(curl -sS -w "\nHTTP %{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            https://www.playkaboom.gg/api/cron/vault-health)
+          echo "$response"
+          echo "$response" | tail -n1 | grep -q "HTTP 200"

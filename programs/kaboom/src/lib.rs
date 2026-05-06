@@ -414,16 +414,17 @@ pub mod kaboom {
             .ok_or(KaboomError::MathOverflow)?;
 
         game.status = GameStatus::Won;
-        let max_payout_release = game.max_payout;
 
         let vault = &mut ctx.accounts.vault;
         vault.total_payouts = vault.total_payouts.saturating_add(payout);
 
-        // Release this game's obligation from the running counter.
-        let v2 = &mut ctx.accounts.v2_state;
-        v2.total_outstanding_max_payout = v2
-            .total_outstanding_max_payout
-            .saturating_sub(max_payout_release);
+        // NOTE: do NOT release `total_outstanding_max_payout` here.
+        // settle_game / close_unsettled_game / refund_expired are the
+        // single owners of obligation release. Releasing here AND in
+        // settle_game caused a double-decrement on every cashed-out
+        // win (saturating_sub clamped to 0, so health was over-reported
+        // afterwards). Fixed 2026-05-07: every game-end path now
+        // decrements obligations exactly once.
 
         emit!(GameWon {
             player: game.player,
