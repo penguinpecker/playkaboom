@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { PrivyClient, type AuthTokenClaims } from "@privy-io/server-auth";
 import { PublicKey } from "@solana/web3.js";
 import { ApiError } from "./api-helpers";
+import { logger } from "./logger";
 
 let cachedClient: PrivyClient | null = null;
 
@@ -47,14 +48,31 @@ export async function verifyPrivyAuth(req: NextRequest): Promise<VerifiedRequest
   let claims: AuthTokenClaims;
   try {
     claims = await privy().verifyAuthToken(token);
-  } catch {
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "verifyAuthToken failed",
+    );
     throw new ApiError(401, "Invalid auth token");
   }
 
   const userId = claims.userId;
-  // Pull the user record so we know which wallets are theirs.
-  const user = await privy().getUserById(userId).catch(() => null);
-  if (!user) throw new ApiError(401, "User not found");
+  // Pull the user record so we know which wallets are theirs. Surface the
+  // actual error in the response — silently swallowing made every
+  // mis-configuration look like "User not found" which masked the real cause
+  // (most often: PRIVY_APP_SECRET mismatched with NEXT_PUBLIC_PRIVY_APP_ID).
+  let user: Awaited<ReturnType<PrivyClient["getUserById"]>> | null;
+  try {
+    user = await privy().getUserById(userId);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.warn({ userId, err: msg }, "getUserById failed");
+    throw new ApiError(401, `Privy lookup failed: ${msg}`);
+  }
+  if (!user) {
+    logger.warn({ userId }, "getUserById returned null");
+    throw new ApiError(401, "User not found in Privy");
+  }
 
   const wallets: PublicKey[] = [];
   for (const acc of user.linkedAccounts ?? []) {
