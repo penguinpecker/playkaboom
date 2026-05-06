@@ -12,7 +12,7 @@ import { verifyPlayerAuth } from "@/server/auth";
 import { checkTile, saltBuffer } from "@/server/game";
 import { decryptSession, encryptSession } from "@/server/session";
 import { sendHouseTx } from "@/server/solana";
-import { houseAuthority, programId } from "@/server/env";
+import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     }
 
     const playerPk = new PublicKey(body.player);
-    const housePk = houseAuthority().publicKey;
+    const housePk = housePubkey();
     const ctx = { programId: programId() };
 
     const { isMine, updated } = checkTile(session, body.tileIndex);

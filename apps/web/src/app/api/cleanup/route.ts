@@ -14,7 +14,7 @@ import { saltBuffer } from "@/server/game";
 import { decryptSession } from "@/server/session";
 import { sendHouseTx } from "@/server/solana";
 import { getConnection } from "@/server/connection";
-import { houseAuthority, programId } from "@/server/env";
+import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
             buildSettleGame({
               ctx,
               player: playerPk,
-              houseAuthority: houseAuthority().publicKey,
+              houseAuthority: housePubkey(),
               mineLayout: session.mineLayout,
               salt: saltBuffer(session),
             }),

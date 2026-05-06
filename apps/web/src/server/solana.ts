@@ -5,8 +5,9 @@ import {
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
-import { houseAuthority, programId } from "./env";
+import { programId } from "./env";
 import { getConnection } from "./connection";
+import { getHouseSigner } from "./turnkey-signer";
 import { deriveGamePda } from "@playkaboom/sdk";
 import { logger } from "./logger";
 
@@ -19,7 +20,7 @@ const COMPUTE_LIMIT = 200_000;
  */
 export async function sendHouseTx(instructions: TransactionInstruction[]): Promise<string> {
   const conn = getConnection();
-  const house = houseAuthority();
+  const house = getHouseSigner();
   const tx = new Transaction();
   tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: COMPUTE_PRICE_MICROLAMPORTS }));
   tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_LIMIT }));
@@ -28,8 +29,8 @@ export async function sendHouseTx(instructions: TransactionInstruction[]): Promi
   tx.recentBlockhash = blockhash;
   tx.lastValidBlockHeight = lastValidBlockHeight;
   tx.feePayer = house.publicKey;
-  tx.sign(house);
-  const sig = await conn.sendRawTransaction(tx.serialize(), {
+  const signed = await house.signTransaction(tx);
+  const sig = await conn.sendRawTransaction(signed.serialize(), {
     skipPreflight: false,
     maxRetries: 3,
     preflightCommitment: "confirmed",
