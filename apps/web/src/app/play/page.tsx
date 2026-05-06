@@ -2,10 +2,13 @@
 import { Grid } from "@/components/game/Grid";
 import { BetControls } from "@/components/game/BetControls";
 import { useGame } from "@/hooks/useGame";
+import { useGameResume } from "@/hooks/use-game-resume";
 import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
 import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 
 export default function PlayPage() {
+  // Auto-recover an in-flight game from any device on mount.
+  useGameResume();
   const { state } = useGame();
   const { data: vaultBal } = useVaultBalance();
   const { data: vaultHealth } = useVaultHealth();
