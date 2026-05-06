@@ -21,6 +21,8 @@ export interface ReferralCodeRow {
   code: string;
   wallet: string;
   click_count: number;
+  signup_count: number;
+  confirmed_count: number;
   last_visited_at: string | null;
 }
 

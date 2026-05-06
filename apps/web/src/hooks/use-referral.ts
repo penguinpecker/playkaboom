@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction } from "@solana/web3.js";
@@ -48,6 +48,58 @@ export function useReferralCapture(): string | null {
 }
 
 /**
+ * Mounts in the app shell — the moment a wallet first connects on a
+ * browser carrying a kb.ref.sid cookie (set by /r/<code>), pings
+ * /api/ref/signup so the server marks that visit as a signup conversion.
+ *
+ * Idempotent server-side via the unique partial index on
+ * referral_visits(session_id) WHERE wallet IS NOT NULL — extra calls
+ * silently no-op, so this is safe to fire on every wallet change.
+ *
+ * We track which wallet we've already pinged in a per-session ref to
+ * avoid even sending the request when we already know the answer.
+ */
+export function useReferralSignupAttribution() {
+  const { authenticated, getAccessToken } = usePrivy();
+  const { wallets } = useSolanaWallets();
+  const wallet = wallets[0];
+  // Track which wallet we've already pinged for in a ref so we don't
+  // re-fire on every render. Survives the lifetime of the page.
+  const pingedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!authenticated || !wallet?.address) return;
+    if (pingedFor.current === wallet.address) return;
+    if (typeof document === "undefined") return;
+    // Quick client-side gate — if there's no kb.ref.sid cookie, don't
+    // bother hitting the server. Saves a request for the 99% of wallet
+    // connects that didn't come from a /r/<code> click.
+    if (!document.cookie.includes("kb.ref.sid=")) {
+      pingedFor.current = wallet.address;
+      return;
+    }
+    pingedFor.current = wallet.address;
+    void (async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+        await fetch("/api/ref/signup", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ wallet: wallet.address }),
+          credentials: "include",
+        });
+      } catch {
+        /* analytics — silent */
+      }
+    })();
+  }, [authenticated, wallet?.address, getAccessToken]);
+}
+
+/**
  * Reads the on-chain ReferralAccount for any pubkey. Live polling.
  */
 export function useReferralAccount(referrer: string | null | undefined) {
@@ -75,7 +127,7 @@ export function useReferralAccount(referrer: string | null | undefined) {
  */
 export function useReferralActions() {
   const { connection } = useConnection();
-  const { authenticated, login } = usePrivy();
+  const { authenticated, login, getAccessToken } = usePrivy();
   const { wallets } = useSolanaWallets();
   const { signTransaction } = useStandardSignTransaction();
   const wallet = wallets[0];
@@ -138,9 +190,29 @@ export function useReferralActions() {
       if (typeof window !== "undefined") localStorage.removeItem(REFERRER_LOCAL_KEY);
       // Invalidate stats so referrer field refreshes
       queryClient.invalidateQueries({ queryKey: ["playerStats"] });
+      // Tell the server: this set_referrer just landed, mark the
+      // attribution row confirmed. Best-effort — the on-chain ix is
+      // already done, this is just analytics so we don't block on it.
+      void (async () => {
+        try {
+          const token = await getAccessToken();
+          if (!token) return;
+          await fetch("/api/ref/confirm", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ wallet: wallet.address, signature: sig }),
+            credentials: "include",
+          });
+        } catch {
+          /* analytics — silent */
+        }
+      })();
       return sig;
     },
-    [authenticated, wallet, signAndSend, login, queryClient],
+    [authenticated, wallet, signAndSend, login, queryClient, getAccessToken],
   );
 
   const claim = useCallback(async (): Promise<string> => {
