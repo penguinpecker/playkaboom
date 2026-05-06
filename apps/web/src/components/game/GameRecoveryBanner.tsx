@@ -11,7 +11,11 @@ import {
   Transaction,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { buildCloseUnsettledGame } from "@playkaboom/sdk";
+import {
+  buildCloseGame,
+  buildCloseUnsettledGame,
+  buildRefundExpired,
+} from "@playkaboom/sdk";
 import { confirmByPolling } from "@/lib/confirm";
 import { PROGRAM_ID } from "@/lib/cluster";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
@@ -67,14 +71,37 @@ export function GameRecoveryBanner({ info }: Props) {
     toast("Game resumed — pick up where you left off", "success");
   }, [info.pendingGameToken, setGameToken, setStatus, toast]);
 
+  // Pick the right ix based on the on-chain GameStatus. Calling the wrong one
+  // throws GameNotFinished/GameNotExpired (custom error 0x1782 / 0x1781).
+  const buildRecoveryIx = useCallback(
+    (player: PublicKey) => {
+      const ctx = { programId: PROGRAM_ID };
+      switch (info.status) {
+        case "Playing":
+          // Refunds bet to player and closes the PDA. Requires start + 300 slots.
+          return buildRefundExpired({ ctx, player });
+        case "Won":
+        case "Lost":
+          // Rent-only reclaim. Cash-out (Won) or implicit forfeit (Lost) already
+          // moved the SOL on-chain. Requires start + 600 slots.
+          return buildCloseUnsettledGame({ ctx, player });
+        case "Expired":
+          // refund_expired already ran; just clean up the PDA.
+          return buildCloseGame({ ctx, player });
+        default:
+          // Unknown / null — best-effort fallback to refund_expired so the
+          // player at least gets their bet back if the status field was lost.
+          return buildRefundExpired({ ctx, player });
+      }
+    },
+    [info.status],
+  );
+
   const forceClose = useCallback(async () => {
     if (busy || !wallet) return;
     setBusy(true);
     try {
-      const ix = buildCloseUnsettledGame({
-        ctx: { programId: PROGRAM_ID },
-        player: new PublicKey(wallet.address),
-      });
+      const ix = buildRecoveryIx(new PublicKey(wallet.address));
       const tx = new Transaction().add(ix);
       const { blockhash, lastValidBlockHeight } =
         await connection.getLatestBlockhash("confirmed");
@@ -92,7 +119,11 @@ export function GameRecoveryBanner({ info }: Props) {
           : (signed as Transaction).serialize();
       const sig = await connection.sendRawTransaction(raw, { skipPreflight: false });
       await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
-      toast("Stuck game closed — wallet unblocked", "success");
+      const successMsg =
+        info.status === "Playing"
+          ? "Bet refunded — wallet unblocked"
+          : "Stuck game closed — wallet unblocked";
+      toast(successMsg, "success");
       // Refresh the probe so the banner hides and BetControls becomes available.
       info.refresh();
     } catch (err) {
@@ -101,9 +132,18 @@ export function GameRecoveryBanner({ info }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [busy, wallet, connection, signTransaction, info, toast]);
+  }, [busy, wallet, connection, signTransaction, buildRecoveryIx, info, toast]);
 
   if (!info.active) return null;
+
+  const isPlaying = info.status === "Playing" || info.status === null;
+  // Active = no on-chain settlement yet, bet still locked. Refund returns it.
+  // Won/Lost = SOL already moved on-chain; close just reclaims rent.
+  const closeLabel = isPlaying ? "REFUND BET" : "FORCE CLOSE";
+  const closeBusyLabel = isPlaying ? "REFUNDING…" : "CLOSING…";
+  const closeFootnote = isPlaying
+    ? "refund_expired returns your full bet · ~0.002 SOL rent also reclaimed"
+    : "close_unsettled_game · ~0.002 SOL rent returned (cash-out already paid)";
 
   // ─── Recoverable: Resume vs forfeit ───────────────────────────────────
   if (info.recoverable) {
@@ -135,17 +175,19 @@ export function GameRecoveryBanner({ info }: Props) {
             className="px-4 py-3 border border-outline-variant/30 text-on-surface-variant font-headline font-bold text-xs tracking-widest hover:bg-surface-container hover:text-on-surface active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             title={
               info.refundable
-                ? "Force-close this game (forfeit it on-chain). PDA rent returns to your wallet."
+                ? isPlaying
+                  ? "Forfeit this game on-chain and refund the full bet to your wallet."
+                  : "Force-close this game. PDA rent returns to your wallet."
                 : `Closable in ${countdownLabel(info.secondsUntilRefund)}`
             }
           >
-            {info.refundable
-              ? "FORCE CLOSE"
-              : `${countdownLabel(info.secondsUntilRefund)}`}
+            {info.refundable ? closeLabel : countdownLabel(info.secondsUntilRefund)}
           </button>
         </div>
         <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
-          Resume = same mine layout · Force close = forfeit, reclaim slot
+          {isPlaying
+            ? "Resume = same mine layout · Refund bet = forfeit, get bet back"
+            : "Resume = same mine layout · Force close = reclaim slot"}
         </p>
       </section>
     );
@@ -179,13 +221,13 @@ export function GameRecoveryBanner({ info }: Props) {
         className="w-full py-3 border-2 border-tertiary text-tertiary font-headline font-bold text-xs tracking-widest hover:bg-tertiary/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {busy
-          ? "CLOSING…"
+          ? closeBusyLabel
           : info.refundable
-            ? "FORCE CLOSE STUCK GAME"
+            ? `${closeLabel} STUCK GAME`
             : `READY IN ${countdownLabel(info.secondsUntilRefund)}…`}
       </button>
       <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
-        Calls close_unsettled_game · ~0.002 SOL rent returned
+        {closeFootnote}
       </p>
     </section>
   );

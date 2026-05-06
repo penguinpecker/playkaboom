@@ -45,10 +45,16 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     const game = decodeGameSession(info.data);
     const session = await loadSession(player);
 
-    // Compute refund window: refund_expired requires `now > start + 300 slots`.
+    // Compute the recovery window. The program has three distinct ixs depending
+    // on game status — each has its own slot timer:
+    //   Playing  → refund_expired         (start + 300, refunds bet)
+    //   Won/Lost → close_unsettled_game   (start + 600, reclaims rent)
+    //   Expired  → close_game             (no slot guard — already past 300)
     const currentSlot = await conn.getSlot("confirmed");
     const startSlot = Number(game.startSlot);
-    const expirySlot = startSlot + 300;
+    const expirySlots =
+      game.status === "Playing" ? 300 : game.status === "Expired" ? 0 : 600;
+    const expirySlot = startSlot + expirySlots;
     const slotsUntilRefund = expirySlot - currentSlot;
     const refundable = slotsUntilRefund <= 0;
     const secondsUntilRefund = refundable ? 0 : Math.max(0, Math.ceil(slotsUntilRefund * 0.4));
