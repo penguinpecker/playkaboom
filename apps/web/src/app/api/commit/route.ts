@@ -27,7 +27,18 @@ export async function POST(req: NextRequest) {
 
     const playerPk = new PublicKey(body.player);
 
-    if (await playerHasActiveGame(playerPk)) {
+    // Run the two RPC checks in parallel — they're independent and each
+    // costs ~150-300ms on Alchemy. Sequential they cumulatively add ~500ms
+    // to engage-bet latency; parallel they share that window.
+    const [activeGame, slot] = await Promise.all([
+      playerHasActiveGame(playerPk),
+      // `processed` is fine here: we just need a recent slot for the
+      // session start_slot (used for the refund window). Saves ~150ms vs
+      // confirmed because processed lands on the leader's first response.
+      getConnection().getSlot("processed"),
+    ]);
+
+    if (activeGame) {
       throw new ApiError(409, "Active game exists. Close it first.", { needsCleanup: true });
     }
 
@@ -42,7 +53,6 @@ export async function POST(req: NextRequest) {
     // Mirror the encrypted session to Supabase keyed by GameSession PDA so
     // the player can recover from any device. Function returns the same
     // ciphertext we'd have produced with encryptSession alone.
-    const slot = await getConnection().getSlot("confirmed");
     const gameToken = await saveSession(body.player, payload, slot, {
       betLamports: BigInt(body.betLamports),
       mineCount: body.mineCount,
