@@ -47,9 +47,34 @@ pub const REFERRAL_GOLD_BPS: u16 = 70; // 0.70%
 pub const SILVER_VOLUME_LAMPORTS: u64 = 10_000_000_000; // 10 SOL
 pub const GOLD_VOLUME_LAMPORTS: u64 = 100_000_000_000; // 100 SOL
 
+// ─── Phase 2: LP vault constants ────────────────────────────────────────────
+
+/// Locked anti-inflation seed at v2 init (1 SOL). Carved from existing vault
+/// balance — no extra SOL required from owner. Defends against the ERC-4626
+/// first-depositor donation attack by ensuring `total_units` starts large.
+pub const ANTI_INFLATION_SEED_LAMPORTS: u64 = 1_000_000_000;
+
+/// Default cooldown between `request_withdraw` and `complete_withdraw`.
+/// 3 days at ~400ms/slot ≈ 648,000 slots. Configurable via `update_v2_config`.
+pub const DEFAULT_WITHDRAW_COOLDOWN_SLOTS: u64 = 648_000;
+
+/// Default minimum house ownership floor (50%). Configurable both directions.
+pub const DEFAULT_MIN_HOUSE_SHARE_BPS: u16 = 5_000;
+
+/// Default per-user position cap (10% of vault, multiplied by health).
+pub const DEFAULT_MAX_USER_POSITION_BPS: u16 = 1_000;
+
+/// Default health buffer required before any new bet or LP deposit (10%).
+pub const DEFAULT_MIN_HEALTH_BPS: u16 = 1_000;
+
+/// Default minimum LP deposit (0.01 SOL — anti-dust).
+pub const DEFAULT_MIN_LP_DEPOSIT_LAMPORTS: u64 = 10_000_000;
+
 // ─── PDA seeds ───────────────────────────────────────────────────────────────
 
 pub const VAULT_SEED: &[u8] = b"kaboom_vault";
+pub const VAULT_V2_SEED: &[u8] = b"kaboom_v2_state";
+pub const LP_SEED: &[u8] = b"kaboom_lp";
 pub const GAME_SEED: &[u8] = b"kaboom_game";
 pub const STATS_SEED: &[u8] = b"kaboom_stats";
 pub const REFERRAL_SEED: &[u8] = b"kaboom_referral";
@@ -192,17 +217,25 @@ pub mod kaboom {
         let rent = Rent::get()?.minimum_balance(Vault::SPACE);
         let available = vault_lamports.saturating_sub(rent);
 
-        let max_bet = mul_div_floor(available, vault.max_bet_bps as u64, BPS)?;
+        // Health-factor scales the static caps. Pre-fund-transfer health uses
+        // the *current* vault assets and the proposed obligation includes this
+        // bet's worst-case payout.
+        let v2 = &ctx.accounts.v2_state;
+        let pre_health = calc_health_bps(v2, available)?;
+        let effective_max_bet_bps = (vault.max_bet_bps as u64)
+            .checked_mul(pre_health as u64)
+            .ok_or(KaboomError::MathOverflow)?
+            / BPS;
+        let effective_max_payout_bps = (vault.max_payout_bps as u64)
+            .checked_mul(pre_health as u64)
+            .ok_or(KaboomError::MathOverflow)?
+            / BPS;
+        let max_bet = mul_div_floor(available, effective_max_bet_bps, BPS)?;
         require!(bet <= max_bet, KaboomError::BetExceedsMax);
 
-        let worst_safe = GRID_SIZE.saturating_sub(mine_count);
-        let worst_multiplier = calc_multiplier(worst_safe, mine_count, vault.house_edge_bps)?;
-        let worst_payout = (bet as u128)
-            .checked_mul(worst_multiplier as u128)
-            .ok_or(KaboomError::MathOverflow)?
-            .checked_div(BPS as u128)
-            .ok_or(KaboomError::MathOverflow)?;
-        let max_payout = mul_div_floor(available, vault.max_payout_bps as u64, BPS)? as u128;
+        let worst_payout_u64 = worst_case_payout(bet, mine_count, vault.house_edge_bps)?;
+        let worst_payout = worst_payout_u64 as u128;
+        let max_payout = mul_div_floor(available, effective_max_payout_bps, BPS)? as u128;
         require!(
             worst_payout <= max_payout,
             KaboomError::VaultInsufficientFunds
@@ -247,10 +280,21 @@ pub mod kaboom {
         game.mine_layout = 0;
         game.salt = [0u8; 32];
         game.version = 1;
+        game.max_payout = worst_payout_u64;
 
         let vault_mut = &mut ctx.accounts.vault;
         vault_mut.total_games = vault_mut.total_games.saturating_add(1);
         vault_mut.total_wagered = vault_mut.total_wagered.saturating_add(bet);
+
+        // Track new obligation; enforce health floor on post-bet vault state.
+        let v2_mut = &mut ctx.accounts.v2_state;
+        v2_mut.total_outstanding_max_payout = v2_mut
+            .total_outstanding_max_payout
+            .checked_add(worst_payout_u64)
+            .ok_or(KaboomError::MathOverflow)?;
+        // bet just transferred in → assets grew; health check on new state.
+        let new_assets = available.saturating_add(bet);
+        enforce_min_health(v2_mut, new_assets)?;
 
         emit!(GameStarted {
             player: game.player,
@@ -366,9 +410,16 @@ pub mod kaboom {
             .ok_or(KaboomError::MathOverflow)?;
 
         game.status = GameStatus::Won;
+        let max_payout_release = game.max_payout;
 
         let vault = &mut ctx.accounts.vault;
         vault.total_payouts = vault.total_payouts.saturating_add(payout);
+
+        // Release this game's obligation from the running counter.
+        let v2 = &mut ctx.accounts.v2_state;
+        v2.total_outstanding_max_payout = v2
+            .total_outstanding_max_payout
+            .saturating_sub(max_payout_release);
 
         emit!(GameWon {
             player: game.player,
@@ -436,6 +487,16 @@ pub mod kaboom {
         game.mine_layout = mine_layout;
         game.salt = salt;
         game.settled = true;
+        let max_payout_release = game.max_payout;
+
+        // Release this game's obligation BEFORE referral payout / unit value
+        // recompute, so health/unit_value reflect the post-resolution state.
+        {
+            let v2 = &mut ctx.accounts.v2_state;
+            v2.total_outstanding_max_payout = v2
+                .total_outstanding_max_payout
+                .saturating_sub(max_payout_release);
+        }
 
         // Update player stats.
         let stats = &mut ctx.accounts.player_stats;
@@ -549,6 +610,22 @@ pub mod kaboom {
             verified: true,
             slot: Clock::get()?.slot,
         });
+
+        // Recompute unit_value snapshot for indexers / APY.
+        {
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let assets_now = vault_assets(&vault_info)?;
+            let v2 = &ctx.accounts.v2_state;
+            let h = calc_health_bps(v2, assets_now)?;
+            emit!(VaultUnitValueUpdated {
+                vault: ctx.accounts.vault.key(),
+                vault_assets: assets_now,
+                total_units: v2.total_units,
+                health_bps: h,
+                slot: Clock::get()?.slot,
+            });
+        }
+
         emit!(StatsUpdated {
             player: stats.player,
             games_played: stats.games_played,
@@ -623,6 +700,12 @@ pub mod kaboom {
             .ok_or(KaboomError::MathOverflow)?;
 
         game.status = GameStatus::Expired;
+        let max_payout_release = game.max_payout;
+
+        let v2 = &mut ctx.accounts.v2_state;
+        v2.total_outstanding_max_payout = v2
+            .total_outstanding_max_payout
+            .saturating_sub(max_payout_release);
 
         emit!(GameRefunded {
             player: game.player,
@@ -845,6 +928,404 @@ pub mod kaboom {
         });
         Ok(())
     }
+
+    // ═══ Phase 2: LP vault ════════════════════════════════════════════════════
+
+    /// One-shot migration. Carves the existing vault balance into:
+    ///   seed_units   = ANTI_INFLATION_SEED_LAMPORTS (locked forever)
+    ///   house_units  = vault_assets - seed_units
+    ///   total_units  = vault_assets
+    ///
+    /// All Phase 2 config takes default values. Owner can adjust later via
+    /// `update_v2_config`. Owner-signed (Squads). Idempotent by virtue of `init`
+    /// on `v2_state` — second call fails.
+    pub fn initialize_v2(ctx: Context<InitializeV2>) -> Result<()> {
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let assets = vault_assets(&vault_info)?;
+        require!(
+            assets >= ANTI_INFLATION_SEED_LAMPORTS,
+            KaboomError::InsufficientLiquidity
+        );
+
+        let seed = ANTI_INFLATION_SEED_LAMPORTS as u128;
+        let house = (assets - ANTI_INFLATION_SEED_LAMPORTS) as u128;
+        let total = assets as u128;
+
+        let v2 = &mut ctx.accounts.v2_state;
+        v2.bump = ctx.bumps.v2_state;
+        v2.total_outstanding_max_payout = 0;
+        v2.total_units = total;
+        v2.house_units = house;
+        v2.house_pending_units = 0;
+        v2.house_pending_unlock_slot = 0;
+        v2.seed_units = seed;
+        v2.total_pending_units = 0;
+        v2.min_house_share_bps = DEFAULT_MIN_HOUSE_SHARE_BPS;
+        v2.max_user_position_bps = DEFAULT_MAX_USER_POSITION_BPS;
+        v2.min_health_bps = DEFAULT_MIN_HEALTH_BPS;
+        v2.withdraw_cooldown_slots = DEFAULT_WITHDRAW_COOLDOWN_SLOTS;
+        v2.min_lp_deposit = DEFAULT_MIN_LP_DEPOSIT_LAMPORTS;
+
+        emit!(V2Initialized {
+            vault: ctx.accounts.vault.key(),
+            seed_units: seed,
+            house_units: house,
+            total_units: total,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    /// Owner-only Phase 2 config update.
+    pub fn update_v2_config(
+        ctx: Context<UpdateV2Config>,
+        min_house_share_bps: Option<u16>,
+        max_user_position_bps: Option<u16>,
+        min_health_bps: Option<u16>,
+        withdraw_cooldown_slots: Option<u64>,
+        min_lp_deposit: Option<u64>,
+    ) -> Result<()> {
+        let v2 = &mut ctx.accounts.v2_state;
+        if let Some(v) = min_house_share_bps {
+            require!(v <= BPS as u16, KaboomError::InvalidConfig);
+            v2.min_house_share_bps = v;
+        }
+        if let Some(v) = max_user_position_bps {
+            require!(v <= BPS as u16, KaboomError::InvalidConfig);
+            v2.max_user_position_bps = v;
+        }
+        if let Some(v) = min_health_bps {
+            require!(v <= BPS as u16, KaboomError::InvalidConfig);
+            v2.min_health_bps = v;
+        }
+        if let Some(v) = withdraw_cooldown_slots {
+            v2.withdraw_cooldown_slots = v;
+        }
+        if let Some(v) = min_lp_deposit {
+            v2.min_lp_deposit = v;
+        }
+        emit!(V2ConfigUpdated {
+            vault: ctx.accounts.vault.key(),
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    /// User deposits SOL into the vault → mints `units` to their LpPosition.
+    pub fn lp_deposit(ctx: Context<LpDeposit>, amount: u64) -> Result<()> {
+        let v2_min = ctx.accounts.v2_state.min_lp_deposit;
+        require!(!ctx.accounts.vault.paused, KaboomError::VaultPaused);
+        require!(amount >= v2_min, KaboomError::DepositBelowMin);
+
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let assets_pre = vault_assets(&vault_info)?;
+        let total_units_pre = ctx.accounts.v2_state.total_units;
+
+        let units_minted = deposit_to_units(amount, assets_pre, total_units_pre)?;
+        require!(units_minted > 0, KaboomError::MathOverflow);
+
+        // Transfer SOL into vault.
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.user.to_account_info(),
+                    to: vault_info.clone(),
+                },
+            ),
+            amount,
+        )?;
+
+        let assets_after = assets_pre.saturating_add(amount);
+        let v2 = &mut ctx.accounts.v2_state;
+        let total_units_after = total_units_pre
+            .checked_add(units_minted)
+            .ok_or(KaboomError::MathOverflow)?;
+        v2.total_units = total_units_after;
+
+        // Initialise position if first deposit.
+        let position = &mut ctx.accounts.position;
+        if position.user == Pubkey::default() {
+            position.user = ctx.accounts.user.key();
+            position.bump = ctx.bumps.position;
+            position.created_slot = Clock::get()?.slot;
+        }
+        position.units = position
+            .units
+            .checked_add(units_minted)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        // Enforce house floor + user cap on the post-state.
+        let user_units_after = user_units_total(v2)?;
+        enforce_house_floor(v2.house_units, user_units_after, v2.min_house_share_bps)?;
+
+        let position_units = position
+            .units
+            .checked_add(position.pending_units)
+            .ok_or(KaboomError::MathOverflow)?;
+        let position_value = units_to_assets(position_units, assets_after, v2.total_units)?;
+        let h = calc_health_bps(v2, assets_after)?;
+        enforce_user_position_cap(position_value, assets_after, h, v2.max_user_position_bps)?;
+        enforce_min_health(v2, assets_after)?;
+
+        emit!(LpDeposited {
+            user: ctx.accounts.user.key(),
+            amount_lamports: amount,
+            units_minted,
+            total_units_after,
+            vault_assets_after: assets_after,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn request_withdraw(ctx: Context<UserLpAction>, units: u128) -> Result<()> {
+        let position = &mut ctx.accounts.position;
+        let v2 = &mut ctx.accounts.v2_state;
+
+        require!(
+            position.pending_units == 0,
+            KaboomError::PendingWithdrawAlreadyExists
+        );
+        require!(units > 0, KaboomError::InvalidAmount);
+        require!(units <= position.units, KaboomError::InsufficientUnits);
+
+        position.units = position
+            .units
+            .checked_sub(units)
+            .ok_or(KaboomError::MathOverflow)?;
+        position.pending_units = units;
+        let unlock = Clock::get()?
+            .slot
+            .saturating_add(v2.withdraw_cooldown_slots);
+        position.pending_unlock_slot = unlock;
+
+        v2.total_pending_units = v2
+            .total_pending_units
+            .checked_add(units)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        emit!(LpWithdrawRequested {
+            user: ctx.accounts.user.key(),
+            units,
+            unlock_slot: unlock,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn cancel_withdraw(ctx: Context<UserLpAction>) -> Result<()> {
+        let position = &mut ctx.accounts.position;
+        let v2 = &mut ctx.accounts.v2_state;
+        require!(
+            position.pending_units > 0,
+            KaboomError::NoPendingWithdraw
+        );
+        let units = position.pending_units;
+        position.units = position
+            .units
+            .checked_add(units)
+            .ok_or(KaboomError::MathOverflow)?;
+        position.pending_units = 0;
+        position.pending_unlock_slot = 0;
+        v2.total_pending_units = v2
+            .total_pending_units
+            .checked_sub(units)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        emit!(LpWithdrawCancelled {
+            user: ctx.accounts.user.key(),
+            units_returned: units,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn complete_withdraw(ctx: Context<UserLpAction>) -> Result<()> {
+        let position = &mut ctx.accounts.position;
+        let v2 = &mut ctx.accounts.v2_state;
+        require!(
+            position.pending_units > 0,
+            KaboomError::NoPendingWithdraw
+        );
+        let now = Clock::get()?.slot;
+        require!(
+            now >= position.pending_unlock_slot,
+            KaboomError::CooldownNotElapsed
+        );
+
+        let units = position.pending_units;
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let assets_pre = vault_assets(&vault_info)?;
+        let assets_out = units_to_assets(units, assets_pre, v2.total_units)?;
+        require!(
+            assets_out <= assets_pre,
+            KaboomError::InsufficientLiquidity
+        );
+
+        // Burn units, decrement counters, transfer SOL out.
+        position.pending_units = 0;
+        position.pending_unlock_slot = 0;
+        v2.total_pending_units = v2
+            .total_pending_units
+            .checked_sub(units)
+            .ok_or(KaboomError::MathOverflow)?;
+        v2.total_units = v2
+            .total_units
+            .checked_sub(units)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        if assets_out > 0 {
+            **vault_info.try_borrow_mut_lamports()? = vault_info
+                .lamports()
+                .checked_sub(assets_out)
+                .ok_or(KaboomError::MathOverflow)?;
+            let user_info = ctx.accounts.user.to_account_info();
+            **user_info.try_borrow_mut_lamports()? = user_info
+                .lamports()
+                .checked_add(assets_out)
+                .ok_or(KaboomError::MathOverflow)?;
+        }
+
+        let assets_after = assets_pre.saturating_sub(assets_out);
+        emit!(LpWithdrawCompleted {
+            user: ctx.accounts.user.key(),
+            units_burned: units,
+            amount_lamports: assets_out,
+            total_units_after: v2.total_units,
+            vault_assets_after: assets_after,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn close_lp_position(ctx: Context<CloseLpPosition>) -> Result<()> {
+        let position = &ctx.accounts.position;
+        require!(
+            position.units == 0 && position.pending_units == 0,
+            KaboomError::LpPositionNotEmpty
+        );
+        emit!(LpPositionClosed {
+            user: ctx.accounts.user.key(),
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    // ─── House LP ─────────────────────────────────────────────────────────────
+
+    pub fn house_deposit(ctx: Context<HouseDepositCtx>, amount: u64) -> Result<()> {
+        require!(amount > 0, KaboomError::InvalidAmount);
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let assets_pre = vault_assets(&vault_info)?;
+        let total_units_pre = ctx.accounts.v2_state.total_units;
+        let units_minted = deposit_to_units(amount, assets_pre, total_units_pre)?;
+        require!(units_minted > 0, KaboomError::MathOverflow);
+
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.owner.to_account_info(),
+                    to: vault_info.clone(),
+                },
+            ),
+            amount,
+        )?;
+
+        let v2 = &mut ctx.accounts.v2_state;
+        v2.total_units = total_units_pre
+            .checked_add(units_minted)
+            .ok_or(KaboomError::MathOverflow)?;
+        v2.house_units = v2
+            .house_units
+            .checked_add(units_minted)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        emit!(HouseDeposited {
+            amount_lamports: amount,
+            units_minted,
+            total_units_after: v2.total_units,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn house_request_withdraw(ctx: Context<HouseLpAction>, units: u128) -> Result<()> {
+        let v2 = &mut ctx.accounts.v2_state;
+        require!(v2.house_pending_units == 0, KaboomError::PendingWithdrawAlreadyExists);
+        require!(units > 0, KaboomError::InvalidAmount);
+        require!(units <= v2.house_units, KaboomError::InsufficientUnits);
+
+        // Floor check on the post-request state. house_pending_units is NOT
+        // counted in the numerator (per design — pending units are exiting).
+        let house_after = v2.house_units.checked_sub(units).ok_or(KaboomError::MathOverflow)?;
+        let user_total = user_units_total(v2)?;
+        enforce_house_floor(house_after, user_total, v2.min_house_share_bps)?;
+
+        v2.house_units = house_after;
+        v2.house_pending_units = units;
+        let unlock = Clock::get()?.slot.saturating_add(v2.withdraw_cooldown_slots);
+        v2.house_pending_unlock_slot = unlock;
+
+        emit!(HouseWithdrawRequested {
+            units,
+            unlock_slot: unlock,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn house_cancel_withdraw(ctx: Context<HouseLpAction>) -> Result<()> {
+        let v2 = &mut ctx.accounts.v2_state;
+        require!(v2.house_pending_units > 0, KaboomError::NoPendingWithdraw);
+        let units = v2.house_pending_units;
+        v2.house_units = v2.house_units.checked_add(units).ok_or(KaboomError::MathOverflow)?;
+        v2.house_pending_units = 0;
+        v2.house_pending_unlock_slot = 0;
+
+        emit!(HouseWithdrawCancelled {
+            units_returned: units,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    pub fn house_complete_withdraw(ctx: Context<HouseLpAction>) -> Result<()> {
+        let v2 = &mut ctx.accounts.v2_state;
+        require!(v2.house_pending_units > 0, KaboomError::NoPendingWithdraw);
+        let now = Clock::get()?.slot;
+        require!(now >= v2.house_pending_unlock_slot, KaboomError::CooldownNotElapsed);
+
+        let units = v2.house_pending_units;
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let assets_pre = vault_assets(&vault_info)?;
+        let assets_out = units_to_assets(units, assets_pre, v2.total_units)?;
+        require!(assets_out <= assets_pre, KaboomError::InsufficientLiquidity);
+
+        v2.house_pending_units = 0;
+        v2.house_pending_unlock_slot = 0;
+        v2.total_units = v2.total_units.checked_sub(units).ok_or(KaboomError::MathOverflow)?;
+
+        if assets_out > 0 {
+            **vault_info.try_borrow_mut_lamports()? = vault_info
+                .lamports()
+                .checked_sub(assets_out)
+                .ok_or(KaboomError::MathOverflow)?;
+            let owner_info = ctx.accounts.owner.to_account_info();
+            **owner_info.try_borrow_mut_lamports()? = owner_info
+                .lamports()
+                .checked_add(assets_out)
+                .ok_or(KaboomError::MathOverflow)?;
+        }
+
+        emit!(HouseWithdrawCompleted {
+            units_burned: units,
+            amount_lamports: assets_out,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
 }
 
 // ─── Multiplier ──────────────────────────────────────────────────────────────
@@ -904,6 +1385,130 @@ fn mul_div_floor(a: u64, num: u64, den: u64) -> Result<u64> {
     u64::try_from(v).map_err(|_| KaboomError::MathOverflow.into())
 }
 
+/// Worst-case payout for a freshly-started game given (bet, mine_count, edge).
+fn worst_case_payout(bet: u64, mine_count: u8, house_edge_bps: u16) -> Result<u64> {
+    let worst_safe = GRID_SIZE.saturating_sub(mine_count);
+    let worst_multiplier = calc_multiplier(worst_safe, mine_count, house_edge_bps)?;
+    mul_div_floor(bet, worst_multiplier, BPS)
+}
+
+// ─── Phase 2: LP / health-factor helpers ─────────────────────────────────────
+
+fn vault_assets(vault_info: &AccountInfo) -> Result<u64> {
+    let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+    Ok(vault_info.lamports().saturating_sub(rent))
+}
+
+/// units = amount × total_units / vault_assets_pre  (floor div, vault-favorable)
+/// First deposit (total_units == 0): units = amount (1 lamport = 1 unit).
+fn deposit_to_units(amount: u64, vault_assets_pre: u64, total_units: u128) -> Result<u128> {
+    if total_units == 0 {
+        return Ok(amount as u128);
+    }
+    require!(vault_assets_pre > 0, KaboomError::MathOverflow);
+    (amount as u128)
+        .checked_mul(total_units)
+        .ok_or(KaboomError::MathOverflow.into())
+        .and_then(|v| v.checked_div(vault_assets_pre as u128).ok_or(KaboomError::MathOverflow.into()))
+}
+
+/// assets = units × vault_assets / total_units  (floor div)
+fn units_to_assets(units: u128, vault_assets: u64, total_units: u128) -> Result<u64> {
+    if total_units == 0 || units == 0 {
+        return Ok(0);
+    }
+    let v = units
+        .checked_mul(vault_assets as u128)
+        .ok_or(KaboomError::MathOverflow)?
+        .checked_div(total_units)
+        .ok_or(KaboomError::MathOverflow)?;
+    u64::try_from(v).map_err(|_| KaboomError::MathOverflow.into())
+}
+
+fn user_units_total(v2: &VaultV2State) -> Result<u128> {
+    v2.total_units
+        .checked_sub(v2.seed_units)
+        .and_then(|v| v.checked_sub(v2.house_units))
+        .and_then(|v| v.checked_sub(v2.house_pending_units))
+        .ok_or(KaboomError::MathOverflow.into())
+}
+
+fn calc_health_bps(v2: &VaultV2State, vault_assets_now: u64) -> Result<u16> {
+    if vault_assets_now == 0 {
+        return Ok(0);
+    }
+    let pending_value = units_to_assets(v2.total_pending_units, vault_assets_now, v2.total_units)?;
+    let obligations = v2
+        .total_outstanding_max_payout
+        .checked_add(pending_value)
+        .ok_or(KaboomError::MathOverflow)?;
+    let free = vault_assets_now.saturating_sub(obligations);
+    let h = (free as u128)
+        .checked_mul(BPS as u128)
+        .ok_or(KaboomError::MathOverflow)?
+        .checked_div(vault_assets_now as u128)
+        .ok_or(KaboomError::MathOverflow)?;
+    Ok(u16::try_from(h.min(BPS as u128)).unwrap())
+}
+
+fn enforce_min_health(v2: &VaultV2State, vault_assets_now: u64) -> Result<()> {
+    if v2.min_health_bps == 0 {
+        return Ok(());
+    }
+    let h = calc_health_bps(v2, vault_assets_now)?;
+    require!(h >= v2.min_health_bps, KaboomError::HealthFloorBreached);
+    Ok(())
+}
+
+fn enforce_house_floor(
+    house_units_after: u128,
+    user_units_total_after: u128,
+    min_house_share_bps: u16,
+) -> Result<()> {
+    if min_house_share_bps == 0 {
+        return Ok(());
+    }
+    let denom = house_units_after
+        .checked_add(user_units_total_after)
+        .ok_or(KaboomError::MathOverflow)?;
+    if denom == 0 {
+        return Ok(());
+    }
+    let lhs = house_units_after
+        .checked_mul(BPS as u128)
+        .ok_or(KaboomError::MathOverflow)?;
+    let rhs = (min_house_share_bps as u128)
+        .checked_mul(denom)
+        .ok_or(KaboomError::MathOverflow)?;
+    require!(lhs >= rhs, KaboomError::HouseShareFloorBreached);
+    Ok(())
+}
+
+fn enforce_user_position_cap(
+    user_position_value: u64,
+    vault_assets_now: u64,
+    health_bps_value: u16,
+    max_user_position_bps: u16,
+) -> Result<()> {
+    if max_user_position_bps == 0 {
+        return Ok(());
+    }
+    let cap = (vault_assets_now as u128)
+        .checked_mul(max_user_position_bps as u128)
+        .ok_or(KaboomError::MathOverflow)?
+        .checked_div(BPS as u128)
+        .ok_or(KaboomError::MathOverflow)?
+        .checked_mul(health_bps_value as u128)
+        .ok_or(KaboomError::MathOverflow)?
+        .checked_div(BPS as u128)
+        .ok_or(KaboomError::MathOverflow)?;
+    require!(
+        (user_position_value as u128) <= cap,
+        KaboomError::UserPositionCapExceeded
+    );
+    Ok(())
+}
+
 // ─── Accounts ────────────────────────────────────────────────────────────────
 
 #[account]
@@ -941,6 +1546,62 @@ impl Vault {
         + 32; // pending_owner
 }
 
+/// Phase 2 LP / health-factor state. Stored in a separate PDA so we can extend
+/// without reallocating the existing `Vault` (which v1 deployed at a fixed
+/// size). All Phase 2 ixs load both `Vault` and `VaultV2State`.
+#[account]
+pub struct VaultV2State {
+    pub bump: u8,
+
+    // Health / obligation tracking
+    /// Sum across every active GameSession of `bet × (multiplier @ settled-on-mine_count = 0)`.
+    /// Maintained O(1) by start_game (++) and settle_game/cash_out/refund_expired (--).
+    pub total_outstanding_max_payout: u64,
+
+    // LP unit accounting
+    pub total_units: u128,           // seed + house + sum(user units + pending)
+    pub house_units: u128,           // house's LP position; obeys cooldown
+    pub house_pending_units: u128,
+    pub house_pending_unlock_slot: u64,
+    pub seed_units: u128,            // anti-inflation seed; never moves
+    pub total_pending_units: u128,   // sum of USER pending_units (not house's)
+
+    // Phase 2 config (all owner-settable via update_v2_config)
+    pub min_house_share_bps: u16,
+    pub max_user_position_bps: u16,
+    pub min_health_bps: u16,
+    pub withdraw_cooldown_slots: u64,
+    pub min_lp_deposit: u64,
+
+    pub _reserved: [u8; 64],
+}
+
+impl VaultV2State {
+    pub const SPACE: usize = 8   // disc
+        + 1                       // bump
+        + 8                       // total_outstanding_max_payout
+        + 16 + 16 + 16 + 8 + 16 + 16 // 5 u128 + 1 u64 in LP block
+        + 2 + 2 + 2               // 3 u16 bps
+        + 8 + 8                   // withdraw_cooldown_slots + min_lp_deposit
+        + 64;                     // reserved
+}
+
+/// Per-user LP position. PDA seeds: [LP_SEED, user.key()].
+#[account]
+pub struct LpPosition {
+    pub user: Pubkey,
+    pub units: u128,
+    pub pending_units: u128,
+    pub pending_unlock_slot: u64,
+    pub created_slot: u64,
+    pub bump: u8,
+    pub _reserved: [u8; 32],
+}
+
+impl LpPosition {
+    pub const SPACE: usize = 8 + 32 + 16 + 16 + 8 + 8 + 1 + 32;
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GameStatus {
     Playing,
@@ -967,7 +1628,11 @@ pub struct GameSession {
     pub mine_layout: u16,
     pub salt: [u8; 32],
     pub version: u8,
-    pub _reserved: [u8; 32],
+    /// Worst-case payout reserved at start_game; used to decrement
+    /// `VaultV2State.total_outstanding_max_payout` on resolution. Old games
+    /// (started pre-v2) have this as 0 — handled gracefully.
+    pub max_payout: u64,
+    pub _reserved: [u8; 24],
 }
 
 impl GameSession {
@@ -977,7 +1642,7 @@ impl GameSession {
         + 2 + 2 + 1
         + 8 + 8 + 8
         + 1 + 2 + 32
-        + 1 + 32;
+        + 1 + 8 + 24;
 }
 
 /// Per-player lifetime stats. Source of truth for leaderboards.
@@ -1099,6 +1764,9 @@ pub struct StartGame<'info> {
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
 
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
     #[account(
         init,
         payer = player,
@@ -1144,6 +1812,9 @@ pub struct CashOut<'info> {
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
 
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
     #[account(
         mut,
         seeds = [GAME_SEED, game.player.as_ref()],
@@ -1160,6 +1831,9 @@ pub struct CashOut<'info> {
 pub struct SettleGame<'info> {
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
 
     #[account(
         mut,
@@ -1198,6 +1872,9 @@ pub struct ClaimReferral<'info> {
 pub struct RefundExpired<'info> {
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
 
     #[account(
         mut,
@@ -1270,6 +1947,140 @@ pub struct AcceptOwnership<'info> {
     pub new_owner: Signer<'info>,
 }
 
+// ─── Phase 2 Accounts ────────────────────────────────────────────────────────
+
+#[derive(Accounts)]
+pub struct InitializeV2<'info> {
+    #[account(
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(
+        init,
+        payer = owner,
+        seeds = [VAULT_V2_SEED],
+        bump,
+        space = VaultV2State::SPACE,
+    )]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateV2Config<'info> {
+    #[account(
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct LpDeposit<'info> {
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(
+        init_if_needed,
+        payer = user,
+        space = LpPosition::SPACE,
+        seeds = [LP_SEED, user.key().as_ref()],
+        bump,
+    )]
+    pub position: Account<'info, LpPosition>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UserLpAction<'info> {
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(
+        mut,
+        seeds = [LP_SEED, user.key().as_ref()],
+        bump = position.bump,
+        constraint = position.user == user.key() @ KaboomError::Unauthorized,
+    )]
+    pub position: Account<'info, LpPosition>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseLpPosition<'info> {
+    #[account(
+        mut,
+        seeds = [LP_SEED, user.key().as_ref()],
+        bump = position.bump,
+        constraint = position.user == user.key() @ KaboomError::Unauthorized,
+        close = user,
+    )]
+    pub position: Account<'info, LpPosition>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct HouseDepositCtx<'info> {
+    #[account(
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct HouseLpAction<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(mut)]
+    pub owner: Signer<'info>,
+}
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 #[error_code]
@@ -1332,6 +2143,31 @@ pub enum KaboomError {
     AddressNotInAllowlist,
     #[msg("No pending owner to accept or cancel.")]
     NoPendingOwner,
+    // ─── Phase 2: LP vault ──────────────────────────────────────────────────
+    #[msg("V2 already initialized.")]
+    V2AlreadyInitialized,
+    #[msg("V2 not yet initialized.")]
+    V2NotInitialized,
+    #[msg("Deposit below minimum.")]
+    DepositBelowMin,
+    #[msg("Deposit would exceed per-user position cap.")]
+    UserPositionCapExceeded,
+    #[msg("Deposit would push vault below minimum house share.")]
+    HouseShareFloorBreached,
+    #[msg("Deposit or new obligation would push health below minimum.")]
+    HealthFloorBreached,
+    #[msg("Pending withdrawal already exists; cancel it first.")]
+    PendingWithdrawAlreadyExists,
+    #[msg("No pending withdrawal to cancel or complete.")]
+    NoPendingWithdraw,
+    #[msg("Withdrawal cooldown not yet elapsed.")]
+    CooldownNotElapsed,
+    #[msg("Insufficient units in LP position.")]
+    InsufficientUnits,
+    #[msg("Vault has insufficient liquidity to honour this withdrawal.")]
+    InsufficientLiquidity,
+    #[msg("LP position still has units; cannot close.")]
+    LpPositionNotEmpty,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -1378,6 +2214,101 @@ pub struct OwnerAccepted {
     pub vault: Pubkey,
     pub old_owner: Pubkey,
     pub new_owner: Pubkey,
+    pub slot: u64,
+}
+
+// ─── Phase 2 events ──────────────────────────────────────────────────────────
+
+#[event]
+pub struct V2Initialized {
+    pub vault: Pubkey,
+    pub seed_units: u128,
+    pub house_units: u128,
+    pub total_units: u128,
+    pub slot: u64,
+}
+
+#[event]
+pub struct V2ConfigUpdated {
+    pub vault: Pubkey,
+    pub slot: u64,
+}
+
+#[event]
+pub struct LpDeposited {
+    pub user: Pubkey,
+    pub amount_lamports: u64,
+    pub units_minted: u128,
+    pub total_units_after: u128,
+    pub vault_assets_after: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct LpWithdrawRequested {
+    pub user: Pubkey,
+    pub units: u128,
+    pub unlock_slot: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct LpWithdrawCancelled {
+    pub user: Pubkey,
+    pub units_returned: u128,
+    pub slot: u64,
+}
+
+#[event]
+pub struct LpWithdrawCompleted {
+    pub user: Pubkey,
+    pub units_burned: u128,
+    pub amount_lamports: u64,
+    pub total_units_after: u128,
+    pub vault_assets_after: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct LpPositionClosed {
+    pub user: Pubkey,
+    pub slot: u64,
+}
+
+#[event]
+pub struct HouseDeposited {
+    pub amount_lamports: u64,
+    pub units_minted: u128,
+    pub total_units_after: u128,
+    pub slot: u64,
+}
+
+#[event]
+pub struct HouseWithdrawRequested {
+    pub units: u128,
+    pub unlock_slot: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct HouseWithdrawCancelled {
+    pub units_returned: u128,
+    pub slot: u64,
+}
+
+#[event]
+pub struct HouseWithdrawCompleted {
+    pub units_burned: u128,
+    pub amount_lamports: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct VaultUnitValueUpdated {
+    pub vault: Pubkey,
+    pub vault_assets: u64,
+    pub total_units: u128,
+    pub health_bps: u16,
     pub slot: u64,
 }
 
