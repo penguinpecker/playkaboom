@@ -19,6 +19,7 @@ import { apiCleanup, apiCommit, apiReveal, apiSettle, ApiClientError } from "@/l
 import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
 import { PROGRAM_ID } from "@/lib/cluster";
+import { decodeProgramError } from "@/lib/program-errors";
 import { useGameStore, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";
 import { useToast } from "@/components/providers/toast";
@@ -136,7 +137,7 @@ export function useGameActions(): ActionsResult {
       return false;
     } catch (err) {
       store.setStatus("idle");
-      store.setError(err instanceof Error ? err.message : "Cleanup failed");
+      store.setError(decodeProgramError(err instanceof Error ? err.message : "Cleanup failed"));
       return false;
     }
   }, [walletAddress, store, signAndSend]);
@@ -168,12 +169,14 @@ export function useGameActions(): ActionsResult {
           commit = await tryCommit();
         } catch (retryErr) {
           store.setStatus("idle");
-          store.setError(retryErr instanceof Error ? retryErr.message : "Failed to start");
+          store.setError(
+            decodeProgramError(retryErr instanceof Error ? retryErr.message : "Failed to start"),
+          );
           return;
         }
       } else {
         store.setStatus("idle");
-        store.setError(err instanceof Error ? err.message : "Failed to start");
+        store.setError(decodeProgramError(err instanceof Error ? err.message : "Failed to start"));
         return;
       }
     }
@@ -184,7 +187,7 @@ export function useGameActions(): ActionsResult {
       store.beginGame(commit.commitment, sig);
     } catch (err) {
       store.setStatus("idle");
-      store.setError(err instanceof Error ? err.message : "Sign failed");
+      store.setError(decodeProgramError(err instanceof Error ? err.message : "Sign failed"));
       // Game token still useful for cleanup
     }
   }, [authenticated, walletAddress, store, signAndSend, cleanupStuck, login]);
@@ -225,10 +228,13 @@ export function useGameActions(): ActionsResult {
           store.applySafeReveal(idx, next, data.signature);
         }
       } catch (err) {
+        const friendly = decodeProgramError(
+          err instanceof Error ? err.message : "Reveal failed",
+        );
         store.setStatus("playing");
         store.setPendingTile(null);
-        store.setError(err instanceof Error ? err.message : "Reveal failed");
-        toast(err instanceof Error ? err.message : "Reveal failed", "error");
+        store.setError(friendly);
+        toast(friendly, "error");
       }
     },
     [walletAddress, store, signAndSend, pushHistory, toast],
@@ -263,9 +269,12 @@ export function useGameActions(): ActionsResult {
           .catch(() => {});
       }, 3000);
     } catch (err) {
+      const friendly = decodeProgramError(
+        err instanceof Error ? err.message : "Cash out failed",
+      );
       store.setStatus("playing");
-      store.setError(err instanceof Error ? err.message : "Cash out failed");
-      toast(err instanceof Error ? err.message : "Cash out failed", "error");
+      store.setError(friendly);
+      toast(friendly, "error");
     }
   }, [walletAddress, store, signAndSend, pushHistory, toast]);
 
