@@ -100,12 +100,14 @@ function buildWriteIx(
   offset: number,
   bytes: Buffer,
 ): TransactionInstruction {
-  const data = Buffer.alloc(4 + 4 + 4 + bytes.length);
-  data.writeUInt32LE(1, 0); // Write
-  data.writeUInt32LE(offset, 4);
-  // Vec<u8> length prefix is 4-byte u32 little-endian
-  data.writeUInt32LE(bytes.length, 8);
-  bytes.copy(data, 12);
+  // BPFLoaderUpgradeable uses bincode serialization. Vec<u8> length is
+  // a u64 little-endian (8 bytes), NOT u32. Discovered the hard way —
+  // u32 prefix returns "invalid instruction data" from the loader.
+  const data = Buffer.alloc(4 + 4 + 8 + bytes.length);
+  data.writeUInt32LE(1, 0); // Write tag
+  data.writeUInt32LE(offset, 4); // offset (u32 LE)
+  data.writeBigUInt64LE(BigInt(bytes.length), 8); // Vec<u8> length (u64 LE)
+  bytes.copy(data, 16);
   return new TransactionInstruction({
     programId: BPF_LOADER_UPGRADEABLE,
     keys: [
