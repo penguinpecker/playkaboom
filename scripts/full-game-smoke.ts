@@ -251,22 +251,33 @@ async function main() {
   const revealSig = await send(conn, null, [revealIx], [], house.pubkey, house);
   console.log("[win] reveal_tile (safe):", revealSig);
 
-  // Cash out (player signs).
+  // Cash out (player signs). NOTE: as of the 2026-05-07 obligation fix,
+  // cash_out no longer decrements total_outstanding_max_payout — settle_game
+  // is the sole release point for both Won and Lost games. See
+  // docs/security/program-audit.md for the lifecycle table.
   const cashIx = buildCashOut({ ctx, player: player.publicKey });
   const cashSig = await send(conn, player, [cashIx], [player]);
   console.log("[win] cash_out:", cashSig);
 
   const obligationsAfterCash = await readObligation(conn, programId);
   await expect(
-    "obligation decremented on cash_out",
-    obligationsAfterCash <= obligationsBefore,
+    "obligation unchanged on cash_out (release moved to settle_game)",
+    obligationsAfterCash === obligationsAfterStart,
     `${obligationsAfterStart} → ${obligationsAfterCash}`,
   );
 
-  // Settle with the proof (house signs).
+  // Settle with the proof (house signs). This is where the obligation gets
+  // released for the Won path.
   const settleIx = buildSettleGame({ ctx, player: player.publicKey, houseAuthority: house.pubkey, mineLayout: layout1, salt: salt1 });
   const settleSig = await send(conn, null, [settleIx], [], house.pubkey, house);
   console.log("[win] settle_game:", settleSig);
+
+  const obligationsAfterSettleWin = await readObligation(conn, programId);
+  await expect(
+    "obligation decremented on settle_game (Won path)",
+    obligationsAfterSettleWin <= obligationsBefore,
+    `${obligationsAfterCash} → ${obligationsAfterSettleWin}`,
+  );
 
   // close_game so the player can replay.
   await send(conn, player, [buildCloseGame({ ctx, player: player.publicKey })], [player]);
