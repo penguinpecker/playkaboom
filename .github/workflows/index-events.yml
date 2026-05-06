@@ -1,0 +1,31 @@
+name: Index program events
+# Polls /api/cron/index-events every 5 minutes (GH Actions free-tier cron
+# minimum). The endpoint pages getSignaturesForAddress against Alchemy RPC,
+# decodes events, and writes Supabase. Idempotent — safe to retry.
+#
+# Requires repo secret CRON_SECRET (must match the value set in Vercel env).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Hit indexer
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -eu
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "CRON_SECRET secret not configured" >&2
+            exit 1
+          fi
+          response=$(curl -sS -w "\nHTTP %{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            https://playkaboom.gg/api/cron/index-events)
+          echo "$response"
+          echo "$response" | tail -n1 | grep -q "HTTP 200"
