@@ -149,43 +149,44 @@ export function GlobalActivityFeed({
               <a
                 key={e.signature}
                 href={`/verify/${e.signature}`}
-                className={`flex items-center gap-3 px-4 py-3 hover:bg-surface-container transition-colors ${
+                className={`block px-4 py-3 hover:bg-surface-container transition-colors ${
                   isNew ? "animate-feed-row-in" : ""
                 }`}
               >
-                {/* Outcome pill */}
-                <span
-                  className={`font-headline text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 shrink-0 ${
-                    won ? "bg-emerald/15 text-emerald" : "bg-error/15 text-error/80"
-                  }`}
-                >
-                  {won ? "WIN" : "LOSS"}
-                </span>
-                {/* Sentence body */}
-                <p className="flex-1 font-mono text-xs text-on-surface-variant truncate">
-                  <span className="text-on-surface font-bold">{fmtShort(e.player)}</span>{" "}
-                  {won ? "won" : "lost"}{" "}
+                {/* Constrain row content to a centered max-width so on wide
+                    viewports it doesn't sprawl to the edges. */}
+                <div className="flex items-center justify-center gap-3 max-w-xl mx-auto">
                   <span
-                    className={`font-headline font-bold ${
-                      won ? "text-emerald" : "text-error/80"
+                    className={`font-headline text-[9px] font-bold tracking-widest uppercase px-1.5 py-0.5 shrink-0 ${
+                      won ? "bg-emerald/15 text-emerald" : "bg-error/15 text-error/80"
                     }`}
                   >
-                    {fmtSol(won ? e.payout : e.bet)} SOL
+                    {won ? "WIN" : "LOSS"}
                   </span>
-                  {won && mult > 0 && (
-                    <>
-                      {" "}
-                      <span className="text-primary">×{mult.toFixed(2)}</span>
-                    </>
-                  )}{" "}
-                  <span className="text-on-surface-variant/50">
-                    · {e.mineCount} mine{e.mineCount === 1 ? "" : "s"}
+                  <p className="font-mono text-xs text-on-surface-variant text-center truncate">
+                    <span className="text-on-surface font-bold">{fmtShort(e.player)}</span>{" "}
+                    {won ? "won" : "lost"}{" "}
+                    <span
+                      className={`font-headline font-bold ${
+                        won ? "text-emerald" : "text-error/80"
+                      }`}
+                    >
+                      {fmtSol(won ? e.payout : e.bet)} SOL
+                    </span>
+                    {won && mult > 0 && (
+                      <>
+                        {" "}
+                        <span className="text-primary">×{mult.toFixed(2)}</span>
+                      </>
+                    )}{" "}
+                    <span className="text-on-surface-variant/50">
+                      · {e.mineCount} mine{e.mineCount === 1 ? "" : "s"}
+                    </span>
+                  </p>
+                  <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/50 shrink-0">
+                    {fmtAgo(e.time)}
                   </span>
-                </p>
-                {/* Time-ago, right-anchored */}
-                <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/50 shrink-0">
-                  {fmtAgo(e.time)}
-                </span>
+                </div>
               </a>
             );
           })}
