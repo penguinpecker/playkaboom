@@ -19,8 +19,11 @@ export const metadata: Metadata = {
   applicationName: "PlayKaboom",
   manifest: "/manifest.json",
   icons: {
-    icon: [{ url: "/icons/icon.svg", type: "image/svg+xml" }],
-    apple: [{ url: "/icons/icon.svg", type: "image/svg+xml" }],
+    icon: [
+      { url: "/kaboom-logo.png", type: "image/png" },
+      { url: "/icons/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: [{ url: "/kaboom-logo.png", type: "image/png" }],
   },
   appleWebApp: {
     capable: true,
@@ -32,7 +35,7 @@ export const metadata: Metadata = {
     siteName: "PlayKaboom",
     title: "PlayKaboom — On-chain Mines on Solana",
     description: "Provably fair 4×4 Mines. SHA-256 commit-reveal. Built on Solana.",
-    images: [{ url: "/icons/icon.svg", width: 512, height: 512 }],
+    images: [{ url: "/kaboom-logo.png", width: 400, height: 400 }],
   },
   twitter: {
     card: "summary_large_image",
