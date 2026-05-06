@@ -1,7 +1,16 @@
 import "server-only";
 import { extractEventsFromLogs, type KaboomEvent } from "@playkaboom/sdk";
+import type { PostgrestError } from "@supabase/supabase-js";
 import { supabaseAdmin } from "./db/supabase";
 import { logger } from "./logger";
+
+/** Throw on Postgrest errors so they surface in `ingestTransactions`'s catch
+ * block (logged + counted) instead of being silently swallowed. */
+function check(table: string, ev: string, res: { error: PostgrestError | null }): void {
+  if (res.error) {
+    throw new Error(`[${ev}→${table}] ${res.error.code ?? ""} ${res.error.message}`);
+  }
+}
 
 /** Minimal payload shape needed to apply an event — works for both Helius
  * webhook payloads and our own cron-fetched transactions. */
@@ -90,7 +99,10 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "GameSettled": {
-      await db
+      // The settle tx may be separate from the win/lose tx (cash_out path),
+      // so we match by GameSession PDA instead of tx signature.
+      const game = ev.game.toBase58();
+      const upd = await db
         .from("games")
         .update({
           mine_layout: ev.mineLayout,
@@ -99,19 +111,21 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           commitment: ev.commitment.toString("hex"),
           salt: ev.salt.toString("hex"),
         })
-        .eq("signature", tx.signature);
+        .eq("game", game);
+      check("games", "GameSettled.update", upd);
       if (ev.verified) {
-        logger.info({ sig: tx.signature, player: ev.player.toBase58() }, "settle verified");
+        logger.info({ sig: tx.signature, game, player: ev.player.toBase58() }, "settle verified");
       }
       break;
     }
     case "GameWon": {
-      await db.from("games").upsert(
+      const res = await db.from("games").upsert(
         {
           signature: tx.signature,
+          game: ev.game.toBase58(),
           player: ev.player.toBase58(),
           bet: Number(ev.bet),
-          mine_count: 0,
+          mine_count: 0, // sentinel — filled in by GameSettled handler keyed on `game`
           outcome: "won",
           payout: Number(ev.payout),
           multiplier_bps: Number(ev.multiplierBps),
@@ -123,12 +137,14 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
+      check("games", "GameWon.upsert", res);
       break;
     }
     case "GameLost": {
-      await db.from("games").upsert(
+      const res = await db.from("games").upsert(
         {
           signature: tx.signature,
+          game: ev.game.toBase58(),
           player: ev.player.toBase58(),
           bet: Number(ev.bet),
           mine_count: 0,
@@ -143,6 +159,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
+      check("games", "GameLost.upsert", res);
       break;
     }
     case "ReferrerSet": {
