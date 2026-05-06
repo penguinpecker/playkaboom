@@ -3,9 +3,9 @@
 A self-contained status doc you can paste into a new Claude session.
 Refreshed 2026-05-07. Full session-by-session log in `records.txt`.
 
-## STATUS — 2026-05-07 (head commit `f18ee7f` + a few followups)
+## STATUS — 2026-05-07 (audit-fix patch deployed via Squads multisig)
 
-**Live on devnet, 100% functional from CLI; every privileged authority on Squads or Turnkey.**
+**Live on devnet at slot 460574105. Every privileged authority on Squads or Turnkey. Every test in the suite passing.**
 
 | Authority | Address | Type |
 |---|---|---|
@@ -18,7 +18,7 @@ Refreshed 2026-05-07. Full session-by-session log in `records.txt`.
 
 **Zero single-key authorities in production.** A stolen deployer key (`DbR1a1Cu…`) gets you nothing of value: can't upgrade, can't drain treasury, can't sign as house, can't change config.
 
-### Tests passing on live devnet
+### Tests passing on live devnet (post audit-fix deploy)
 
 | Suite | Status | Tx evidence (final) |
 |---|---|---|
@@ -29,35 +29,54 @@ Refreshed 2026-05-07. Full session-by-session log in `records.txt`.
 | Stuck-game recovery (refund_expired + neg test) | ✓ | inline |
 | Vault kill-switch (pause/unpause via Squads) | ✓ | `4HVtRFc3…Cujqk` |
 | Treasury withdraw + allowlist enforcement | ✓ | `frVXrNyA…ZbT6i` |
-| Referral end-to-end | partial | step 6 verified math; step 7 caught a bug (see below) |
+| **Referral end-to-end (set_referrer fix verified)** | ✓ | `3KVfzJKy…ACfg` |
+| **Squads-controlled program upgrade** | ✓ | `27N3qu88…wDiTV` |
 
-### Bug caught this session (in code, fix not yet deployed)
+### Live program contains (as of slot 460574105)
 
-`set_referrer` reads `referrer_key = referral_account.referrer` (just-init'd, always `Pubkey::default()`) instead of `ctx.accounts.referrer.key()`. **Effect: every existing on-chain ReferralAccount has its `referrer` field stuck at `default`, and `claim_referral`'s `Unauthorized` constraint always fails — referral payouts are accruing to a single dead PDA nobody can claim.**
+- Obligation double-decrement fix (cash_out no longer releases; settle_game does)
+- Audit C1: explicit referral PDA derivation in `settle_game`
+- Audit C2: reject executable destinations in `withdraw_to_treasury`
+- Audit M3: `MIN_WITHDRAW_COOLDOWN_SLOTS=150` + `MIN_HEALTH_BPS_FLOOR=100` floors
+- Audit M5: aliasing assert in `withdraw_to_treasury`
+- Bug fix: `set_referrer` reads `referrer.key()` instead of just-init'd field
 
-Code fix is committed (lib.rs unchanged), program built clean. Pending devnet redeploy.
+### Three things to know about the Squads upgrade flow (lessons from this session)
 
-### Pending program upgrade (audit-fix patch + set_referrer fix)
+1. **Vec<u8> in BPF Upgradeable Loader Write ix is u64 LE length-prefixed**, not u32. The `scripts/upgrade-program-via-squads.ts` script is now correct. Symptom of getting it wrong: `invalid instruction data` on first chunk write.
+2. **ExtendProgram before upgrade if bytecode grew.** The script doesn't auto-extend yet (TODO). Symptom: `AccountDataTooSmall` on the multisig execute. Manual one-shot:
+   ```bash
+   # Build a small ix-only tx with BPFLoaderUpgradeable.ExtendProgram(4096)
+   # Single key, deployer signs, ~0.029 SOL paid.
+   # Then wait one slot before re-executing the multisig.
+   ```
+   Adding this to the upgrade script is on the punch list.
+3. **Squads SDK's `vaultTransactionExecute` throws "Cannot set property logs of Error which has only a getter"** on any failure. The on-chain logs are hidden. Workaround: build the ix via `multisig.instructions.vaultTransactionExecute()` and send the raw Transaction yourself — `error.transactionLogs` is then visible.
 
-Built locally as of this commit. Cannot deploy yet — deployer wallet is at 4.349 SOL, buffer rent is 4.524 SOL, devnet faucet is rate-limited. Top up the deployer to ≥5 SOL and run:
+### Pending for next session
 
-```bash
-PROGRAM_ID=4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT \
-SOLANA_RPC=https://api.devnet.solana.com \
-npx tsx scripts/upgrade-program-via-squads.ts
-```
+1. **Migrate legacy ReferralAccounts** — any wallet that called `set_referrer` before slot 460574105 has `ReferralAccount.referrer = Pubkey::default()`. Their `claim_referral` will fail `Unauthorized` even though they have accrued lamports. Two options:
+   - (Recommended) Add `repair_referral(referrer)` ix — Squads-signed one-shot per referrer that overwrites the field with the seed-derived pubkey. Idempotent.
+   - Relax the `claim_referral` constraint to fall back to seed-derived comparison. Simpler but slightly weakens the security check.
+2. **Browser end-to-end** — Privy embedded wallets, real game flow, mobile responsive checks.
+3. **Mark Sensitive in Vercel** — list in `docs/security/secrets.md`.
+4. **Wire `ALERT_WEBHOOK_URL`** in Vercel env so vault-health alerts actually fire (cron + endpoint already shipped).
+5. **Auto-extend in upgrade script** — detect `data_length < bytecode.length` and prepend ExtendProgram automatically.
+6. **C3/C4 operational policy**: configure Squads to refuse durable-nonce proposals; freeze `config_authority = None` once member set is finalized.
 
-That'll exercise the full Squads-multisig upgrade flow end-to-end as a side benefit.
+### Tx receipts from today (cross-reference)
 
-### Pending after the audit-fix deploy
-
-1. **Migrate broken referrals** — every existing `ReferralAccount.referrer` is `Pubkey::default()`. Two options:
-   - (Recommended) Add a `repair_referral` ix (Squads-signed) that overwrites the field with the seed-derived pubkey.
-   - Relax the `claim_referral` constraint to fall back to seed-derived comparison.
-2. **Re-run referral test** — should now pass step 7.
-3. **Browser end-to-end** — only-you can drive Privy.
-4. **Mark Sensitive in Vercel** — list in `docs/security/secrets.md`.
-5. **Wire `ALERT_WEBHOOK_URL`** in Vercel env so vault-health alerts actually fire (cron + endpoint already shipped).
+| What | Sig |
+|---|---|
+| Obligation fix deploy (single-key, before authority transfer) | `jX9qi7dB…8L` |
+| BPF upgrade authority → Squads | `5feDkeNT…NT8` |
+| Multisig smoke | `2b8yQGor…cNCK` |
+| Threshold negative test (final exec) | `3YUfhod8…JbJ5Q` |
+| Vault-paused emergency unpause | `4HVtRFc3…Cujqk` |
+| LP cooldown round-trip (complete_withdraw) | `2zDt5mFY…a3NK` |
+| Allowlist add → withdraw → remove (allowed withdraw) | `frVXrNyA…ZbT6i` |
+| **Audit-fix program upgrade (via Squads)** | `27N3qu88…wDiTV` |
+| **Referral set_referrer fix verified** | `3KVfzJKy…ACfg` |
 
 ## TL;DR
 

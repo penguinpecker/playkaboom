@@ -862,3 +862,75 @@ SESSION STATS:
   - 2 new docs (threat-model.md + program-audit.md)
   - 0 production incidents
 
+
+================================================================================
+SESSION LOG ADDENDUM: 2026-05-07 — audit-fix patch deployed via Squads
+================================================================================
+
+After top-up, ran scripts/upgrade-program-via-squads.ts. Hit two issues
+during execution worth recording for the next-session deploy runbook:
+
+ISSUE 1 — wrong Vec<u8> length encoding in BPFLoaderUpgradeable.Write.
+  My script encoded the chunk length as u32 LE; loader uses bincode
+  which requires u64 LE. Symptom: "invalid instruction data" on the
+  first chunk write. Fixed by switching `writeUInt32LE(bytes.length, 8)`
+  to `writeBigUInt64LE(BigInt(bytes.length), 8)` and bumping the data
+  buffer base offset from 12 → 16. Committed.
+
+ISSUE 2 — ProgramData account too small for the new bytecode.
+  Old bytecode was 648_056 bytes; new bytecode is 649_928 bytes
+  (audit-fix patch added ~2 KB of error path + extra checks). The
+  ProgramData account was sized for the original deploy and the
+  loader rejected the upgrade with "ProgramData account not large
+  enough" (AccountDataTooSmall). Fix: prepend a
+  BPFLoaderUpgradeable.ExtendProgram(4096) ix as a separate tx
+  before the multisig execute. ExtendProgram is permissionless
+  (any payer covers the rent); cost was ~0.029 SOL.
+  Workflow note: after ExtendProgram, must wait one slot before
+  executing the upgrade in the next tx — same-block deploy + upgrade
+  triggers "Program was deployed in this block already".
+
+ISSUE 3 — Squads SDK error wrapper bug (not on-chain, just observability).
+  multisig.rpc.vaultTransactionExecute throws "Cannot set property
+  logs of Error which has only a getter" on any failure, hiding the
+  actual logs. Workaround: build the execute ix via
+  multisig.instructions.vaultTransactionExecute() and send the raw
+  Transaction yourself — error.transactionLogs is then accessible.
+
+DEPLOYED via Squads multisig (transactionIndex 14):
+  ExtendProgram(4096):                  inline (one-shot tx by deployer)
+  vaultTransactionExecute(idx=14):      27N3qu88…wDiTV
+  Program upgraded — new slot 460574105, data_length 648_056 → 652_152
+  Authority unchanged: At5oBj3K…fbJjVh (Squads 2/2)
+
+POST-DEPLOY VERIFICATION:
+  scripts/test-referral-end-to-end.ts now PASSES all 7 steps:
+    set_referrer:  2go4PcRn…6hRi
+    start_game:    3Diqy6db…yyJi
+    reveal_tile:   VsMQ3jky…AYdUu
+    cash_out:      5YECrDR8…oBNC6
+    settle_game:   2v2j5esX…1DDaw  (accrued += 25_000, volume += 5_000_000)
+    claim_referral: 3KVfzJKy…ACfg  (referrer paid +0.000020 SOL net of fees)
+
+  set_referrer fix confirmed: ReferralAccount.referrer field now
+  correctly equals the actual referrer pubkey (not Pubkey::default()),
+  enabling claim_referral to satisfy its constraint.
+
+LIVE PROGRAM CONTAINS (as of slot 460574105):
+  - obligation double-decrement fix (cash_out no longer releases obligation)
+  - C1: explicit referral PDA derivation in settle_game
+  - C2: reject executable destinations in withdraw_to_treasury
+  - M3: MIN_WITHDRAW_COOLDOWN_SLOTS=150 + MIN_HEALTH_BPS_FLOOR=100 floors
+  - M5: aliasing assert in withdraw_to_treasury
+  - bug fix: set_referrer reads referrer.key() not the just-init'd field
+
+DEFERRED to next session:
+  - Migration for legacy ReferralAccounts created BEFORE the set_referrer
+    fix. They have referrer field = Pubkey::default(); claim_referral
+    will fail Unauthorized for their owners. Two options outlined in
+    HANDOFF.md: (a) repair_referral one-shot ix, (b) constraint
+    relaxation. Recommend (a).
+  - Browser end-to-end test (Privy can't be driven from CLI).
+  - Mark Sensitive in Vercel.
+  - Wire ALERT_WEBHOOK_URL.
+
