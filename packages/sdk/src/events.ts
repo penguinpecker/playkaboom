@@ -43,6 +43,12 @@ class EventReader {
     this.offset += n;
     return slice;
   }
+  u128(): bigint {
+    const lo = this.data.readBigUInt64LE(this.offset);
+    const hi = this.data.readBigUInt64LE(this.offset + 8);
+    this.offset += 16;
+    return (hi << 64n) | lo;
+  }
 }
 
 // ── Event payloads ───────────────────────────────────────────────────────────
@@ -122,6 +128,95 @@ export interface ReferralClaimedEvent {
   slot: bigint;
 }
 
+// Phase 2 event payloads ------------------------------------------------------
+
+export interface V2InitializedEvent {
+  kind: "V2Initialized";
+  vault: PublicKey;
+  seedUnits: bigint;
+  houseUnits: bigint;
+  totalUnits: bigint;
+  slot: bigint;
+}
+
+export interface LpDepositedEvent {
+  kind: "LpDeposited";
+  user: PublicKey;
+  amountLamports: bigint;
+  unitsMinted: bigint;
+  totalUnitsAfter: bigint;
+  vaultAssetsAfter: bigint;
+  slot: bigint;
+}
+
+export interface LpWithdrawRequestedEvent {
+  kind: "LpWithdrawRequested";
+  user: PublicKey;
+  units: bigint;
+  unlockSlot: bigint;
+  slot: bigint;
+}
+
+export interface LpWithdrawCancelledEvent {
+  kind: "LpWithdrawCancelled";
+  user: PublicKey;
+  unitsReturned: bigint;
+  slot: bigint;
+}
+
+export interface LpWithdrawCompletedEvent {
+  kind: "LpWithdrawCompleted";
+  user: PublicKey;
+  unitsBurned: bigint;
+  amountLamports: bigint;
+  totalUnitsAfter: bigint;
+  vaultAssetsAfter: bigint;
+  slot: bigint;
+}
+
+export interface LpPositionClosedEvent {
+  kind: "LpPositionClosed";
+  user: PublicKey;
+  slot: bigint;
+}
+
+export interface HouseDepositedEvent {
+  kind: "HouseDeposited";
+  amountLamports: bigint;
+  unitsMinted: bigint;
+  totalUnitsAfter: bigint;
+  slot: bigint;
+}
+
+export interface HouseWithdrawRequestedEvent {
+  kind: "HouseWithdrawRequested";
+  units: bigint;
+  unlockSlot: bigint;
+  slot: bigint;
+}
+
+export interface HouseWithdrawCancelledEvent {
+  kind: "HouseWithdrawCancelled";
+  unitsReturned: bigint;
+  slot: bigint;
+}
+
+export interface HouseWithdrawCompletedEvent {
+  kind: "HouseWithdrawCompleted";
+  unitsBurned: bigint;
+  amountLamports: bigint;
+  slot: bigint;
+}
+
+export interface VaultUnitValueUpdatedEvent {
+  kind: "VaultUnitValueUpdated";
+  vault: PublicKey;
+  vaultAssets: bigint;
+  totalUnits: bigint;
+  healthBps: number;
+  slot: bigint;
+}
+
 export type KaboomEvent =
   | StatsUpdatedEvent
   | GameSettledEvent
@@ -130,7 +225,18 @@ export type KaboomEvent =
   | ReferrerSetEvent
   | ReferralAccruedEvent
   | ReferralTierChangedEvent
-  | ReferralClaimedEvent;
+  | ReferralClaimedEvent
+  | V2InitializedEvent
+  | LpDepositedEvent
+  | LpWithdrawRequestedEvent
+  | LpWithdrawCancelledEvent
+  | LpWithdrawCompletedEvent
+  | LpPositionClosedEvent
+  | HouseDepositedEvent
+  | HouseWithdrawRequestedEvent
+  | HouseWithdrawCancelledEvent
+  | HouseWithdrawCompletedEvent
+  | VaultUnitValueUpdatedEvent;
 
 // ── Decoders by name ─────────────────────────────────────────────────────────
 
@@ -249,6 +355,144 @@ const EVENTS: Record<
         kind: "ReferralClaimed",
         referrer: r.pk(),
         amount: r.u64(),
+        slot: r.u64(),
+      };
+    },
+  },
+  V2Initialized: {
+    disc: eventDiscriminator("V2Initialized"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "V2Initialized",
+        vault: r.pk(),
+        seedUnits: r.u128(),
+        houseUnits: r.u128(),
+        totalUnits: r.u128(),
+        slot: r.u64(),
+      };
+    },
+  },
+  LpDeposited: {
+    disc: eventDiscriminator("LpDeposited"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "LpDeposited",
+        user: r.pk(),
+        amountLamports: r.u64(),
+        unitsMinted: r.u128(),
+        totalUnitsAfter: r.u128(),
+        vaultAssetsAfter: r.u64(),
+        slot: r.u64(),
+      };
+    },
+  },
+  LpWithdrawRequested: {
+    disc: eventDiscriminator("LpWithdrawRequested"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "LpWithdrawRequested",
+        user: r.pk(),
+        units: r.u128(),
+        unlockSlot: r.u64(),
+        slot: r.u64(),
+      };
+    },
+  },
+  LpWithdrawCancelled: {
+    disc: eventDiscriminator("LpWithdrawCancelled"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "LpWithdrawCancelled",
+        user: r.pk(),
+        unitsReturned: r.u128(),
+        slot: r.u64(),
+      };
+    },
+  },
+  LpWithdrawCompleted: {
+    disc: eventDiscriminator("LpWithdrawCompleted"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "LpWithdrawCompleted",
+        user: r.pk(),
+        unitsBurned: r.u128(),
+        amountLamports: r.u64(),
+        totalUnitsAfter: r.u128(),
+        vaultAssetsAfter: r.u64(),
+        slot: r.u64(),
+      };
+    },
+  },
+  LpPositionClosed: {
+    disc: eventDiscriminator("LpPositionClosed"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return { kind: "LpPositionClosed", user: r.pk(), slot: r.u64() };
+    },
+  },
+  HouseDeposited: {
+    disc: eventDiscriminator("HouseDeposited"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "HouseDeposited",
+        amountLamports: r.u64(),
+        unitsMinted: r.u128(),
+        totalUnitsAfter: r.u128(),
+        slot: r.u64(),
+      };
+    },
+  },
+  HouseWithdrawRequested: {
+    disc: eventDiscriminator("HouseWithdrawRequested"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "HouseWithdrawRequested",
+        units: r.u128(),
+        unlockSlot: r.u64(),
+        slot: r.u64(),
+      };
+    },
+  },
+  HouseWithdrawCancelled: {
+    disc: eventDiscriminator("HouseWithdrawCancelled"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "HouseWithdrawCancelled",
+        unitsReturned: r.u128(),
+        slot: r.u64(),
+      };
+    },
+  },
+  HouseWithdrawCompleted: {
+    disc: eventDiscriminator("HouseWithdrawCompleted"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "HouseWithdrawCompleted",
+        unitsBurned: r.u128(),
+        amountLamports: r.u64(),
+        slot: r.u64(),
+      };
+    },
+  },
+  VaultUnitValueUpdated: {
+    disc: eventDiscriminator("VaultUnitValueUpdated"),
+    decode: (data) => {
+      const r = new EventReader(data);
+      return {
+        kind: "VaultUnitValueUpdated",
+        vault: r.pk(),
+        vaultAssets: r.u64(),
+        totalUnits: r.u128(),
+        healthBps: r.u16(),
         slot: r.u64(),
       };
     },

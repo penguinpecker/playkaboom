@@ -1,0 +1,124 @@
+"use client";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useConnection } from "@solana/wallet-adapter-react";
+import { usePrivy } from "@privy-io/react-auth";
+import {
+  useSolanaWallets as useWallets,
+  useStandardSignTransaction,
+} from "@privy-io/react-auth/solana";
+import { LAMPORTS_PER_SOL, PublicKey, Transaction } from "@solana/web3.js";
+import { deserializeIx } from "@playkaboom/sdk";
+import {
+  apiVaultCancelWithdraw,
+  apiVaultCompleteWithdraw,
+  apiVaultDeposit,
+  apiVaultPosition,
+  apiVaultRequestWithdraw,
+  apiVaultState,
+  type VaultPositionResponse,
+  type VaultStateResponse,
+} from "@/lib/api";
+
+export function useVaultState() {
+  return useQuery<VaultStateResponse>({
+    queryKey: ["vault-state"],
+    queryFn: apiVaultState,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useLpPosition(wallet?: string) {
+  return useQuery<VaultPositionResponse>({
+    queryKey: ["lp-position", wallet],
+    queryFn: () => {
+      if (!wallet) throw new Error("no wallet");
+      return apiVaultPosition(wallet);
+    },
+    enabled: !!wallet,
+    refetchInterval: 30_000,
+  });
+}
+
+export function useLpActions() {
+  const { authenticated, login } = usePrivy();
+  const { wallets } = useWallets();
+  const { signTransaction } = useStandardSignTransaction();
+  const { connection } = useConnection();
+  const qc = useQueryClient();
+
+  const wallet = wallets[0];
+  const walletAddress = wallet?.address;
+
+  const signAndSend = useCallback(
+    async (instructionResp: { instruction: Parameters<typeof deserializeIx>[0] }) => {
+      if (!wallet) throw new Error("Connect wallet first");
+      const ix = deserializeIx(instructionResp.instruction);
+      const tx = new Transaction().add(ix);
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.lastValidBlockHeight = lastValidBlockHeight;
+      tx.feePayer = new PublicKey(wallet.address);
+      const serialized = tx.serialize({ requireAllSignatures: false });
+      const { signedTransaction } = await signTransaction({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        transaction: serialized as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        wallet: wallet as any,
+      });
+      const sig = await connection.sendRawTransaction(
+        Buffer.from(signedTransaction as unknown as Uint8Array),
+        { skipPreflight: false, maxRetries: 3 },
+      );
+      await connection.confirmTransaction(
+        { signature: sig, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      qc.invalidateQueries({ queryKey: ["vault-state"] });
+      qc.invalidateQueries({ queryKey: ["lp-position", wallet.address] });
+      return sig;
+    },
+    [wallet, connection, signTransaction, qc],
+  );
+
+  const deposit = useCallback(
+    async (sol: string | number) => {
+      if (!walletAddress) throw new Error("no wallet");
+      const lamports = BigInt(Math.floor(Number(sol) * LAMPORTS_PER_SOL));
+      const resp = await apiVaultDeposit({ player: walletAddress, amountLamports: lamports });
+      return signAndSend(resp);
+    },
+    [walletAddress, signAndSend],
+  );
+
+  const requestWithdraw = useCallback(
+    async (units: bigint) => {
+      if (!walletAddress) throw new Error("no wallet");
+      const resp = await apiVaultRequestWithdraw({ player: walletAddress, units });
+      return signAndSend(resp);
+    },
+    [walletAddress, signAndSend],
+  );
+
+  const cancelWithdraw = useCallback(async () => {
+    if (!walletAddress) throw new Error("no wallet");
+    const resp = await apiVaultCancelWithdraw({ player: walletAddress });
+    return signAndSend(resp);
+  }, [walletAddress, signAndSend]);
+
+  const completeWithdraw = useCallback(async () => {
+    if (!walletAddress) throw new Error("no wallet");
+    const resp = await apiVaultCompleteWithdraw({ player: walletAddress });
+    return signAndSend(resp);
+  }, [walletAddress, signAndSend]);
+
+  return {
+    authenticated,
+    login,
+    walletAddress,
+    deposit,
+    requestWithdraw,
+    cancelWithdraw,
+    completeWithdraw,
+  };
+}

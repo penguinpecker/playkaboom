@@ -70,3 +70,90 @@ export async function apiCleanup(input: {
 }): Promise<CleanupResponse> {
   return post("/api/cleanup", input);
 }
+
+// ── Vault LP API ──────────────────────────────────────────────────────────────
+export interface VaultStateResponse {
+  v2Initialized: boolean;
+  programId: string;
+  vaultPda: string;
+  vaultBalanceLamports: string;
+  vaultAssetsLamports?: string;
+  vaultBalanceSol: number;
+  totalUnits?: string;
+  totalPendingUnits?: string;
+  unitValueE18?: string;
+  healthBps?: number;
+  minHealthBps?: number;
+  effectiveMaxBetSol?: number;
+  effectiveMaxPayoutSol?: number;
+  effectiveMaxUserDepositSol?: number;
+  withdrawCooldownSlots?: string;
+  withdrawCooldownDays?: number;
+  minLpDepositLamports?: string;
+  apy30d?: number | null;
+  timestamp: string;
+}
+export async function apiVaultState(): Promise<VaultStateResponse> {
+  const res = await fetch("/api/vault/state", { cache: "no-store" });
+  const json = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) throw new ApiClientError(res.status, json);
+  return json as unknown as VaultStateResponse;
+}
+
+export interface VaultPositionResponse {
+  wallet: string;
+  units: string;
+  pendingUnits: string;
+  pendingUnlockSlot: string;
+  currentValueLamports: string;
+  currentValueSol: number;
+  deposited: number;
+  withdrawn: number;
+  netDeposited: number;
+  pnlLamports: number;
+  pnlPercent: number | null;
+  history: Array<{
+    signature: string;
+    action: string;
+    units_delta: string;
+    lamports_delta: number;
+    slot: number;
+    block_time: string | null;
+  }>;
+}
+export async function apiVaultPosition(wallet: string): Promise<VaultPositionResponse> {
+  const res = await fetch(`/api/vault/position/${wallet}`, { cache: "no-store" });
+  const json = (await res.json()) as Record<string, unknown>;
+  if (!res.ok) throw new ApiClientError(res.status, json);
+  return json as unknown as VaultPositionResponse;
+}
+
+export interface IxResponse { instruction: SerializedIx }
+export async function apiVaultDeposit(input: {
+  player: string;
+  amountLamports: bigint;
+}): Promise<IxResponse> {
+  return post("/api/vault/deposit", {
+    player: input.player,
+    amountLamports: input.amountLamports.toString(),
+  });
+}
+export async function apiVaultRequestWithdraw(input: {
+  player: string;
+  units: bigint;
+}): Promise<IxResponse> {
+  return post("/api/vault/request-withdraw", {
+    player: input.player,
+    units: input.units.toString(),
+  });
+}
+export async function apiVaultCancelWithdraw(input: {
+  player: string;
+}): Promise<IxResponse> {
+  return post("/api/vault/cancel-withdraw", input);
+}
+export async function apiVaultCompleteWithdraw(input: {
+  player: string;
+}): Promise<IxResponse> {
+  return post("/api/vault/complete-withdraw", input);
+}

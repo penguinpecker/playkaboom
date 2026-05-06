@@ -57,3 +57,45 @@ export interface ReferralEventRow {
   occurred_at: string;
   slot: number;
 }
+
+export interface LpPositionRow {
+  user_address: string;
+  units: string; // numeric — kept as string to preserve u128 precision
+  pending_units: string;
+  pending_unlock_slot: number;
+  cumulative_deposited: number;
+  cumulative_withdrawn: number;
+  first_action_at: string | null;
+  last_action_at: string;
+  updated_at: string;
+}
+
+export interface LpActionRow {
+  signature: string;
+  user_address: string;
+  action:
+    | "deposit"
+    | "request_withdraw"
+    | "cancel_withdraw"
+    | "complete_withdraw"
+    | "house_deposit"
+    | "house_request_withdraw"
+    | "house_cancel_withdraw"
+    | "house_complete_withdraw";
+  units_delta: string;
+  lamports_delta: number;
+  unit_value_lamports: string;
+  slot: number;
+  block_time: string | null;
+  created_at: string;
+}
+
+export interface VaultUnitValueRow {
+  slot: number;
+  vault_assets: number;
+  total_units: string;
+  unit_value_e18: string;
+  health_bps: number;
+  block_time: string | null;
+  created_at: string;
+}

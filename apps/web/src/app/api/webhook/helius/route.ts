@@ -248,5 +248,224 @@ async function applyEvent(
         .eq("referrer", ev.referrer.toBase58());
       break;
     }
+
+    // ─── Phase 2: LP vault events ─────────────────────────────────────────
+    case "LpDeposited": {
+      const userKey = ev.user.toBase58();
+      const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
+      const unitValue =
+        ev.totalUnitsAfter > 0n
+          ? (BigInt(ev.vaultAssetsAfter) * (10n ** 18n)) / ev.totalUnitsAfter
+          : 0n;
+      await db.from("lp_actions").upsert(
+        {
+          signature: tx.signature,
+          user_address: userKey,
+          action: "deposit",
+          units_delta: ev.unitsMinted.toString(),
+          lamports_delta: Number(ev.amountLamports),
+          unit_value_lamports: unitValue.toString(),
+          slot,
+          block_time: blockTime,
+        },
+        { onConflict: "signature" },
+      );
+      const { data: row } = await db
+        .from("lp_positions")
+        .select("units, pending_units, cumulative_deposited, first_action_at")
+        .eq("user_address", userKey)
+        .maybeSingle();
+      await db.from("lp_positions").upsert(
+        {
+          user_address: userKey,
+          units: ((BigInt(row?.units ?? "0") + ev.unitsMinted)).toString(),
+          pending_units: row?.pending_units ?? "0",
+          cumulative_deposited:
+            (row?.cumulative_deposited ?? 0) + Number(ev.amountLamports),
+          first_action_at: row?.first_action_at ?? blockTime,
+          last_action_at: blockTime,
+        },
+        { onConflict: "user_address" },
+      );
+      break;
+    }
+    case "LpWithdrawRequested": {
+      const userKey = ev.user.toBase58();
+      const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
+      await db.from("lp_actions").upsert(
+        {
+          signature: tx.signature,
+          user_address: userKey,
+          action: "request_withdraw",
+          units_delta: (-ev.units).toString(),
+          lamports_delta: 0,
+          unit_value_lamports: "0",
+          slot,
+          block_time: blockTime,
+        },
+        { onConflict: "signature" },
+      );
+      const { data: row } = await db
+        .from("lp_positions")
+        .select("units, pending_units")
+        .eq("user_address", userKey)
+        .maybeSingle();
+      const oldUnits = BigInt(row?.units ?? "0");
+      const oldPending = BigInt(row?.pending_units ?? "0");
+      await db
+        .from("lp_positions")
+        .update({
+          units: (oldUnits - ev.units).toString(),
+          pending_units: (oldPending + ev.units).toString(),
+          pending_unlock_slot: Number(ev.unlockSlot),
+          last_action_at: blockTime,
+        })
+        .eq("user_address", userKey);
+      break;
+    }
+    case "LpWithdrawCancelled": {
+      const userKey = ev.user.toBase58();
+      const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
+      await db.from("lp_actions").upsert(
+        {
+          signature: tx.signature,
+          user_address: userKey,
+          action: "cancel_withdraw",
+          units_delta: ev.unitsReturned.toString(),
+          lamports_delta: 0,
+          unit_value_lamports: "0",
+          slot,
+          block_time: blockTime,
+        },
+        { onConflict: "signature" },
+      );
+      const { data: row } = await db
+        .from("lp_positions")
+        .select("units, pending_units")
+        .eq("user_address", userKey)
+        .maybeSingle();
+      const oldUnits = BigInt(row?.units ?? "0");
+      const oldPending = BigInt(row?.pending_units ?? "0");
+      await db
+        .from("lp_positions")
+        .update({
+          units: (oldUnits + ev.unitsReturned).toString(),
+          pending_units: (oldPending - ev.unitsReturned).toString(),
+          pending_unlock_slot: 0,
+          last_action_at: blockTime,
+        })
+        .eq("user_address", userKey);
+      break;
+    }
+    case "LpWithdrawCompleted": {
+      const userKey = ev.user.toBase58();
+      const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
+      const unitValue =
+        ev.totalUnitsAfter > 0n
+          ? (BigInt(ev.vaultAssetsAfter) * (10n ** 18n)) / ev.totalUnitsAfter
+          : 0n;
+      await db.from("lp_actions").upsert(
+        {
+          signature: tx.signature,
+          user_address: userKey,
+          action: "complete_withdraw",
+          units_delta: (-ev.unitsBurned).toString(),
+          lamports_delta: -Number(ev.amountLamports),
+          unit_value_lamports: unitValue.toString(),
+          slot,
+          block_time: blockTime,
+        },
+        { onConflict: "signature" },
+      );
+      const { data: row } = await db
+        .from("lp_positions")
+        .select("pending_units, cumulative_withdrawn")
+        .eq("user_address", userKey)
+        .maybeSingle();
+      const oldPending = BigInt(row?.pending_units ?? "0");
+      await db
+        .from("lp_positions")
+        .update({
+          pending_units: (oldPending - ev.unitsBurned).toString(),
+          pending_unlock_slot: 0,
+          cumulative_withdrawn:
+            (row?.cumulative_withdrawn ?? 0) + Number(ev.amountLamports),
+          last_action_at: blockTime,
+        })
+        .eq("user_address", userKey);
+      break;
+    }
+    case "VaultUnitValueUpdated": {
+      const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
+      const unitValue =
+        ev.totalUnits > 0n
+          ? (BigInt(ev.vaultAssets) * (10n ** 18n)) / ev.totalUnits
+          : 0n;
+      await db.from("vault_unit_value_history").upsert(
+        {
+          slot,
+          vault_assets: Number(ev.vaultAssets),
+          total_units: ev.totalUnits.toString(),
+          unit_value_e18: unitValue.toString(),
+          health_bps: ev.healthBps,
+          block_time: blockTime,
+        },
+        { onConflict: "slot" },
+      );
+      break;
+    }
+    case "HouseDeposited":
+    case "HouseWithdrawRequested":
+    case "HouseWithdrawCancelled":
+    case "HouseWithdrawCompleted":
+    case "V2Initialized":
+    case "LpPositionClosed": {
+      // Tracked in actions log only — internal accounting, never returned by
+      // public API. Index under sentinel `__house__` for house ops.
+      const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
+      const userKey = ev.kind === "LpPositionClosed" ? ev.user.toBase58() : "__house__";
+      const action =
+        ev.kind === "HouseDeposited"
+          ? "house_deposit"
+          : ev.kind === "HouseWithdrawRequested"
+            ? "house_request_withdraw"
+            : ev.kind === "HouseWithdrawCancelled"
+              ? "house_cancel_withdraw"
+              : ev.kind === "HouseWithdrawCompleted"
+                ? "house_complete_withdraw"
+                : null;
+      if (action) {
+        const unitsDelta =
+          ev.kind === "HouseDeposited"
+            ? ev.unitsMinted
+            : ev.kind === "HouseWithdrawCompleted"
+              ? -ev.unitsBurned
+              : ev.kind === "HouseWithdrawCancelled"
+                ? ev.unitsReturned
+                : ev.kind === "HouseWithdrawRequested"
+                  ? -ev.units
+                  : 0n;
+        const lamportsDelta =
+          ev.kind === "HouseDeposited"
+            ? Number(ev.amountLamports)
+            : ev.kind === "HouseWithdrawCompleted"
+              ? -Number(ev.amountLamports)
+              : 0;
+        await db.from("lp_actions").upsert(
+          {
+            signature: tx.signature,
+            user_address: userKey,
+            action,
+            units_delta: unitsDelta.toString(),
+            lamports_delta: lamportsDelta,
+            unit_value_lamports: "0",
+            slot,
+            block_time: blockTime,
+          },
+          { onConflict: "signature" },
+        );
+      }
+      break;
+    }
   }
 }
