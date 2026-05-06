@@ -1,7 +1,7 @@
 "use client";
 import { Grid } from "@/components/game/Grid";
 import { BetControls } from "@/components/game/BetControls";
-import { StuckGameBanner } from "@/components/game/StuckGameBanner";
+import { GameRecoveryBanner } from "@/components/game/GameRecoveryBanner";
 import { useGame } from "@/hooks/useGame";
 import { useGameResume } from "@/hooks/use-game-resume";
 import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
@@ -58,7 +58,7 @@ export default function PlayPage() {
       </div>
       <div className="grid grid-cols-12 gap-8">
         <div className="col-span-12 lg:col-span-4 space-y-6">
-          <StuckGameBanner info={stuckInfo} />
+          <GameRecoveryBanner info={stuckInfo} />
           <BetControls />
           <section className="bg-surface-container-low p-6 stealth-card border border-outline-variant/10">
             <h2 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-4">
