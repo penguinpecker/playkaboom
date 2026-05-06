@@ -61,7 +61,10 @@ import {
   deriveVaultPda,
 } from "@playkaboom/sdk";
 
-const TEST_COOLDOWN_SLOTS = 30n;
+// Must be ≥ MIN_WITHDRAW_COOLDOWN_SLOTS (150) once the audit-fix program
+// upgrade lands. Pre-upgrade, any value works; using 200 to be forward
+// compatible with both the current and the patched program.
+const TEST_COOLDOWN_SLOTS = 200n;
 const DEFAULT_COOLDOWN_SLOTS = 648_000n;
 const DEPOSIT_LAMPORTS = 50_000_000n; // 0.05 SOL
 const AIRDROP_LAMPORTS = 500_000_000; // 0.5 SOL

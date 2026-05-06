@@ -62,6 +62,19 @@ pub const ANTI_INFLATION_SEED_LAMPORTS: u64 = 1_000_000_000;
 /// 3 days at ~400ms/slot ≈ 648,000 slots. Configurable via `update_v2_config`.
 pub const DEFAULT_WITHDRAW_COOLDOWN_SLOTS: u64 = 648_000;
 
+/// Floor for `update_v2_config(withdraw_cooldown_slots = ...)`. Prevents
+/// a Squads vote (or future config-update path) from setting cooldown to
+/// zero, which would re-enable atomic donate-and-withdraw NAV griefing
+/// (threat-model.md §M3). 1 minute (~150 slots) is the minimum we'll
+/// allow even for testing — long enough that a single block can't
+/// sandwich a deposit + complete_withdraw.
+pub const MIN_WITHDRAW_COOLDOWN_SLOTS: u64 = 150;
+
+/// Floor for `update_v2_config(min_health_bps = ...)`. Zero would let a
+/// single vote disable the health-floor enforcement; we require any
+/// configuration to leave at least a 1% safety buffer.
+pub const MIN_HEALTH_BPS_FLOOR: u16 = 100;
+
 /// Default minimum house ownership floor (50%). Configurable both directions.
 pub const DEFAULT_MIN_HOUSE_SHARE_BPS: u16 = 5_000;
 
@@ -545,8 +558,22 @@ pub mod kaboom {
         }
 
         // Referral credit, if referrer is set AND ReferralAccount provided.
+        // C1 fix (2026-05-07): explicitly assert the supplied account is the
+        // canonical PDA for stats.referrer before any lamport movement. The
+        // Account::try_from below already validates discriminator + program-
+        // owner, and the ra.referrer field-equality check below also catches
+        // most substitution attacks — but explicit PDA derivation is the
+        // belt-and-suspenders we want here. See threat-model.md §C1.
         if let Some(referrer_key) = stats.referrer {
             if let Some(referral_info) = ctx.remaining_accounts.first() {
+                let (expected_referral_pda, _) = Pubkey::find_program_address(
+                    &[REFERRAL_SEED, referrer_key.as_ref()],
+                    &crate::ID,
+                );
+                require!(
+                    referral_info.key() == expected_referral_pda,
+                    KaboomError::ReferralMismatch
+                );
                 let mut ra: Account<ReferralAccount> = Account::try_from(referral_info)?;
                 require!(ra.referrer == referrer_key, KaboomError::ReferralMismatch);
 
@@ -771,6 +798,25 @@ pub mod kaboom {
 
         let vault = &ctx.accounts.vault;
         let dest_key = ctx.accounts.destination.key();
+
+        // C2 fix (2026-05-07): refuse executable destinations. The runtime
+        // silently demotes write-perm on executables / sysvars / precompiles,
+        // and a future feature-gate could brick a previously-fine address.
+        // Defense-in-depth — see threat-model.md §C2.
+        require!(
+            !ctx.accounts.destination.executable,
+            KaboomError::InvalidAmount
+        );
+
+        // M5 fix (2026-05-07): explicit aliasing guard so destination ≠ vault.
+        // Belt-and-suspenders for pre-Anchor-1.0 (we're 0.31.1); prevents a
+        // self-transfer that other paths might allow if seeds were ever
+        // misconfigured.
+        require!(
+            dest_key != ctx.accounts.vault.key(),
+            KaboomError::InvalidConfig
+        );
+
         let allowed = vault
             .withdraw_allowlist
             .iter()
@@ -1029,10 +1075,23 @@ pub mod kaboom {
             v2.max_user_position_bps = v;
         }
         if let Some(v) = min_health_bps {
-            require!(v <= BPS as u16, KaboomError::InvalidConfig);
+            // M3 fix (2026-05-07): require a non-zero floor so a misconfig
+            // can't turn off health enforcement entirely. See
+            // threat-model.md §M3.
+            require!(
+                v >= MIN_HEALTH_BPS_FLOOR && v <= BPS as u16,
+                KaboomError::InvalidConfig
+            );
             v2.min_health_bps = v;
         }
         if let Some(v) = withdraw_cooldown_slots {
+            // M3 fix (2026-05-07): require a non-zero floor so cooldown can
+            // never be set to 0 (would re-enable atomic donate-and-withdraw
+            // NAV griefing — see threat-model.md §H2 + §M3).
+            require!(
+                v >= MIN_WITHDRAW_COOLDOWN_SLOTS,
+                KaboomError::InvalidConfig
+            );
             v2.withdraw_cooldown_slots = v;
         }
         if let Some(v) = min_lp_deposit {
