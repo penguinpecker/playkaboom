@@ -49,6 +49,8 @@ export interface GameSessionAccount {
   mineLayout: number;
   salt: Buffer;
   version: number;
+  /** Worst-case payout reserved on start_game (Phase 2). 0 for v1 sessions. */
+  maxPayout: bigint;
 }
 
 export interface PlayerStatsAccount {
@@ -273,6 +275,7 @@ export function decodeGameSession(data: Buffer): GameSessionAccount {
   const mineLayout = r.u16();
   const salt = r.bytes(32);
   const version = r.u8();
+  const maxPayout = r.u64();
   return {
     player,
     bump,
@@ -289,6 +292,7 @@ export function decodeGameSession(data: Buffer): GameSessionAccount {
     settled,
     mineLayout,
     salt,
+    maxPayout,
     version,
   };
 }

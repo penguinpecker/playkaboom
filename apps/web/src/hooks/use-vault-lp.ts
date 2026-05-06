@@ -9,6 +9,7 @@ import {
 } from "@privy-io/react-auth/solana";
 import { LAMPORTS_PER_SOL, PublicKey, Transaction } from "@solana/web3.js";
 import { deserializeIx } from "@playkaboom/sdk";
+import { confirmByPolling } from "@/lib/confirm";
 import {
   apiVaultCancelWithdraw,
   apiVaultCompleteWithdraw,
@@ -70,10 +71,7 @@ export function useLpActions() {
         Buffer.from(signedTransaction as unknown as Uint8Array),
         { skipPreflight: false, maxRetries: 3 },
       );
-      await connection.confirmTransaction(
-        { signature: sig, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
+      await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       qc.invalidateQueries({ queryKey: ["vault-state"] });
       qc.invalidateQueries({ queryKey: ["lp-position", wallet.address] });
       return sig;
