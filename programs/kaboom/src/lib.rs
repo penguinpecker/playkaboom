@@ -94,6 +94,7 @@ pub mod kaboom {
         vault.version = 1;
         vault.allowlist_count = 0;
         vault.withdraw_allowlist = [Pubkey::default(); MAX_ALLOWLIST];
+        vault.pending_owner = Pubkey::default();
 
         emit!(VaultInitialized {
             vault: vault.key(),
@@ -784,6 +785,66 @@ pub mod kaboom {
         });
         Ok(())
     }
+
+    /// Step 1 of two-step ownership transfer: current owner proposes a new owner.
+    /// Stored in `vault.pending_owner` until the new owner accepts (or current
+    /// owner cancels). Setting `new_owner = current owner` or zero is rejected.
+    pub fn propose_owner(ctx: Context<UpdateVault>, new_owner: Pubkey) -> Result<()> {
+        require!(new_owner != Pubkey::default(), KaboomError::InvalidConfig);
+        require!(
+            new_owner != ctx.accounts.vault.owner,
+            KaboomError::InvalidConfig
+        );
+        let vault = &mut ctx.accounts.vault;
+        vault.pending_owner = new_owner;
+        emit!(OwnerProposed {
+            vault: vault.key(),
+            current_owner: vault.owner,
+            proposed_owner: new_owner,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    /// Defensive: current owner cancels a pending transfer.
+    pub fn cancel_proposed_owner(ctx: Context<UpdateVault>) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        require!(
+            vault.pending_owner != Pubkey::default(),
+            KaboomError::NoPendingOwner
+        );
+        vault.pending_owner = Pubkey::default();
+        emit!(OwnerProposalCancelled {
+            vault: vault.key(),
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    /// Step 2 of two-step ownership transfer: the proposed new owner signs to accept.
+    /// After this lands, `vault.owner` is updated and `pending_owner` is cleared.
+    /// All subsequent privileged ops require the new owner's signature.
+    pub fn accept_ownership(ctx: Context<AcceptOwnership>) -> Result<()> {
+        let vault = &mut ctx.accounts.vault;
+        require!(
+            vault.pending_owner != Pubkey::default(),
+            KaboomError::NoPendingOwner
+        );
+        require!(
+            vault.pending_owner == ctx.accounts.new_owner.key(),
+            KaboomError::Unauthorized
+        );
+        let old_owner = vault.owner;
+        vault.owner = vault.pending_owner;
+        vault.pending_owner = Pubkey::default();
+        emit!(OwnerAccepted {
+            vault: vault.key(),
+            old_owner,
+            new_owner: vault.owner,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
 }
 
 // ─── Multiplier ──────────────────────────────────────────────────────────────
@@ -862,7 +923,11 @@ pub struct Vault {
     pub version: u8,
     pub allowlist_count: u8,
     pub withdraw_allowlist: [Pubkey; MAX_ALLOWLIST],
-    pub _reserved: [u8; 32],
+    /// Pending new owner for the two-step ownership transfer flow. Cleared on
+    /// `accept_ownership` or `cancel_proposed_owner`. `Pubkey::default()` (all
+    /// zeros) means "no pending transfer." Backwards-compatible with v1 vaults
+    /// — the byte slot was previously `_reserved: [u8; 32]`, also zero-init.
+    pub pending_owner: Pubkey,
 }
 
 impl Vault {
@@ -873,7 +938,7 @@ impl Vault {
         + 8 + 8 + 8    // 3 u64 counters
         + 1 + 1 + 1    // paused + version + allowlist_count
         + 32 * MAX_ALLOWLIST
-        + 32; // _reserved
+        + 32; // pending_owner
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -1191,6 +1256,20 @@ pub struct UpdateVault<'info> {
     pub owner: Signer<'info>,
 }
 
+/// Accounts for `accept_ownership` — signed by the proposed new owner, not the current owner.
+#[derive(Accounts)]
+pub struct AcceptOwnership<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.pending_owner == new_owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    pub new_owner: Signer<'info>,
+}
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 #[error_code]
@@ -1251,6 +1330,8 @@ pub enum KaboomError {
     AlreadyAllowlisted,
     #[msg("Address is not on the allowlist.")]
     AddressNotInAllowlist,
+    #[msg("No pending owner to accept or cancel.")]
+    NoPendingOwner,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -1275,6 +1356,28 @@ pub struct VaultFunded {
 #[event]
 pub struct VaultUpdated {
     pub vault: Pubkey,
+    pub slot: u64,
+}
+
+#[event]
+pub struct OwnerProposed {
+    pub vault: Pubkey,
+    pub current_owner: Pubkey,
+    pub proposed_owner: Pubkey,
+    pub slot: u64,
+}
+
+#[event]
+pub struct OwnerProposalCancelled {
+    pub vault: Pubkey,
+    pub slot: u64,
+}
+
+#[event]
+pub struct OwnerAccepted {
+    pub vault: Pubkey,
+    pub old_owner: Pubkey,
+    pub new_owner: Pubkey,
     pub slot: u64,
 }
 
