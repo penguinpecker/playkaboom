@@ -13,6 +13,7 @@ import {
 import { useToast } from "@/hooks/useToast";
 import { CLUSTER, CLUSTER_LABEL, accountExplorer } from "@/lib/cluster";
 import { CONTRACTS } from "@/lib/chain";
+import { VaultLpPanel } from "@/components/vault/lp-panel";
 
 const RISK_LABELS = ["Healthy", "Caution", "Emergency"];
 const RISK_COLORS = ["text-emerald", "text-amber", "text-error"];
@@ -76,7 +77,9 @@ export default function VaultPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6">
+      <VaultLpPanel />
+
+      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6 mt-6">
         <div className="bg-surface-container-low p-6 border border-outline-variant/10 stealth-card">
           <h2 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-4">
             Vault Health
