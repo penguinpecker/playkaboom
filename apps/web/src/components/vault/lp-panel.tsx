@@ -24,6 +24,7 @@ export function VaultLpPanel() {
   const { toast } = useToast();
 
   const [amount, setAmount] = useState("0.1");
+  const [withdrawSol, setWithdrawSol] = useState("");
   const [busy, setBusy] = useState(false);
   const [currentSlot, setCurrentSlot] = useState<number | null>(null);
 
@@ -186,27 +187,96 @@ export function VaultLpPanel() {
                 </p>
               )}
               {pendingUnits > 0n && (
-                <div className="mt-3 p-3 bg-amber/10 border border-amber/30 rounded">
-                  <div className="font-headline text-[10px] uppercase tracking-widest text-amber mb-1">
-                    Pending withdrawal
+                <div className="mt-3 p-3 bg-surface-container-low border border-outline-variant/10">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`status-dot ${cooldownReady ? "bg-emerald" : "bg-tertiary"}`} />
+                    <div className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
+                      Pending withdrawal
+                    </div>
                   </div>
-                  <div className="text-xs">
+                  <div className="font-mono text-xs text-on-surface">
                     {(Number(pendingUnits) / LAMPORTS_PER_SOL).toFixed(4)} units ·{" "}
-                    <span className={cooldownReady ? "text-emerald" : "text-amber"}>
+                    <span className={cooldownReady ? "text-emerald" : "text-tertiary"}>
                       {cooldownLabel}
                     </span>
                   </div>
                 </div>
               )}
-              {totalUnits > 0n && pendingUnits === 0n && (
-                <button
-                  disabled={busy}
-                  onClick={run("Withdraw request", () => requestWithdraw(positionUnits))}
-                  className="w-full mt-3 py-2.5 border border-amber/40 text-amber font-headline font-bold text-xs tracking-widest hover:bg-amber/10 active:scale-95 transition-all disabled:opacity-50"
-                >
-                  REQUEST WITHDRAWAL (3d cooldown)
-                </button>
-              )}
+              {positionUnits > 0n && pendingUnits === 0n && (() => {
+                const positionSol = (Number(positionUnits) * (state?.unitValueE18 ? Number(BigInt(state.unitValueE18)) / 1e18 : 1)) / LAMPORTS_PER_SOL;
+                const inputSol = Number(withdrawSol);
+                const valid = Number.isFinite(inputSol) && inputSol > 0 && inputSol <= positionSol + 1e-9;
+                // Convert SOL → units: floor(amount_lamports * total_units / vault_assets).
+                // We approximate with the user's local position ratio for the preview;
+                // on-chain math is the source of truth.
+                const wantUnits = (() => {
+                  if (!valid) return 0n;
+                  const ratio = Number(positionUnits) / Math.max(1, positionSol * LAMPORTS_PER_SOL);
+                  return BigInt(Math.floor(inputSol * LAMPORTS_PER_SOL * ratio));
+                })();
+                const isFull = valid && wantUnits >= positionUnits - 1n;
+                const fmtSolInput = (n: number) =>
+                  n.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+                return (
+                  <div className="mt-4 pt-3 border-t border-outline-variant/10">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
+                        Withdraw amount (SOL)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setWithdrawSol(fmtSolInput(positionSol))}
+                        className="font-headline text-[10px] uppercase tracking-widest text-primary hover:text-primary-container transition-colors"
+                      >
+                        MAX {positionSol.toFixed(4)}
+                      </button>
+                    </div>
+                    <input
+                      type="number"
+                      step="0.001"
+                      min="0"
+                      max={positionSol}
+                      value={withdrawSol}
+                      onChange={(e) => setWithdrawSol(e.target.value)}
+                      placeholder={`0.0000`}
+                      className="w-full bg-surface-container-low border-none font-headline font-bold text-lg text-primary px-3 py-2 outline-none focus:ring-0"
+                    />
+                    <div className="grid grid-cols-3 gap-1 mt-2">
+                      {[25, 50, 100].map((pct) => (
+                        <button
+                          key={pct}
+                          type="button"
+                          onClick={() => setWithdrawSol(fmtSolInput((positionSol * pct) / 100))}
+                          className="bg-surface-container-highest py-1.5 font-headline text-[10px] font-bold text-on-surface hover:bg-primary/20 transition-colors"
+                        >
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      disabled={busy || !valid}
+                      onClick={run("Withdraw request", () =>
+                        requestWithdraw(isFull ? positionUnits : wantUnits),
+                      )}
+                      className="w-full mt-3 py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-bold text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                      title={
+                        valid
+                          ? `Burns ${((Number(wantUnits) / Number(positionUnits)) * 100).toFixed(1)}% of your position into a 3-day cooldown`
+                          : "Enter an amount up to your position size"
+                      }
+                    >
+                      {busy
+                        ? "REQUESTING…"
+                        : valid
+                          ? `REQUEST WITHDRAW · ${inputSol.toFixed(4)} SOL`
+                          : "ENTER AMOUNT"}
+                    </button>
+                    <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
+                      3-day cooldown · pending units keep earning P&L · cancel anytime before unlock
+                    </p>
+                  </div>
+                );
+              })()}
               {pendingUnits > 0n && !cooldownReady && (
                 <button
                   disabled={busy}
