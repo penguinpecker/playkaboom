@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
   useSolanaWallets as useWallets,
@@ -61,6 +61,29 @@ export function GameRecoveryBanner({ info }: Props) {
   const wallet = wallets[0];
   const setGameToken = useGameStore((s) => s.setGameToken);
   const setStatus = useGameStore((s) => s.setStatus);
+
+  // Smooth 1-second countdown between API polls. The session probe runs
+  // every 15s, which left the visible countdown stuttering ("28s" → wait
+  // 15s → "13s" → wait 15s → "ready"). We capture the seconds and
+  // wall-clock at every poll, then re-render every 1s with the
+  // interpolated remainder.
+  const baseSecondsRef = useRef(info.secondsUntilRefund);
+  const baseAtRef = useRef(Date.now());
+  useEffect(() => {
+    baseSecondsRef.current = info.secondsUntilRefund;
+    baseAtRef.current = Date.now();
+  }, [info.secondsUntilRefund]);
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (info.secondsUntilRefund <= 0 && info.refundable) return;
+    const i = setInterval(() => forceTick((t) => t + 1), 1_000);
+    return () => clearInterval(i);
+  }, [info.secondsUntilRefund, info.refundable]);
+  const elapsed = Math.floor((Date.now() - baseAtRef.current) / 1000);
+  const liveSecondsUntilRefund = Math.max(0, baseSecondsRef.current - elapsed);
+  // If the on-chain expiry has passed but the API hasn't re-polled yet,
+  // the button should still be enabled — the program will succeed.
+  const liveRefundable = info.refundable || liveSecondsUntilRefund === 0;
 
   const resume = useCallback(() => {
     if (!info.pendingGameToken) {
@@ -175,18 +198,18 @@ export function GameRecoveryBanner({ info }: Props) {
             RESUME GAME
           </button>
           <button
-            disabled={busy || !info.refundable}
+            disabled={busy || !liveRefundable}
             onClick={() => void forceClose()}
             className="px-4 py-3 border border-outline-variant/30 text-on-surface-variant font-headline font-bold text-xs tracking-widest hover:bg-surface-container hover:text-on-surface active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
             title={
-              info.refundable
+              liveRefundable
                 ? isPlaying
                   ? "Forfeit this game on-chain and refund the full bet to your wallet."
                   : "Force-close this game. PDA rent returns to your wallet."
-                : `Closable in ${countdownLabel(info.secondsUntilRefund)}`
+                : `Closable in ${countdownLabel(liveSecondsUntilRefund)}`
             }
           >
-            {info.refundable ? closeLabel : countdownLabel(info.secondsUntilRefund)}
+            {liveRefundable ? closeLabel : countdownLabel(liveSecondsUntilRefund)}
           </button>
         </div>
         <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
@@ -211,25 +234,25 @@ export function GameRecoveryBanner({ info }: Props) {
       <p className="font-mono text-xs text-on-surface-variant leading-relaxed mb-4">
         On-chain bet of <span className="text-on-surface font-bold">{fmtSol(info.betLamports)}</span>{" "}
         with no recoverable session.{" "}
-        {info.refundable ? (
+        {liveRefundable ? (
           <span className="text-emerald">Ready to close.</span>
         ) : (
           <>
             Closable in{" "}
-            <span className="text-on-surface">{countdownLabel(info.secondsUntilRefund)}</span>.
+            <span className="text-on-surface">{countdownLabel(liveSecondsUntilRefund)}</span>.
           </>
         )}
       </p>
       <button
-        disabled={busy || !info.refundable}
+        disabled={busy || !liveRefundable}
         onClick={() => void forceClose()}
         className="w-full py-3 border-2 border-tertiary text-tertiary font-headline font-bold text-xs tracking-widest hover:bg-tertiary/10 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
       >
         {busy
           ? closeBusyLabel
-          : info.refundable
+          : liveRefundable
             ? `${closeLabel} STUCK GAME`
-            : `READY IN ${countdownLabel(info.secondsUntilRefund)}…`}
+            : `READY IN ${countdownLabel(liveSecondsUntilRefund)}…`}
       </button>
       <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
         {closeFootnote}
