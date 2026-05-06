@@ -15,6 +15,8 @@ import {
 } from "@solana/web3.js";
 import { deserializeIx } from "@playkaboom/sdk";
 import { confirmByPolling } from "@/lib/confirm";
+import { buildPriorityIxs } from "@/lib/priority-fee";
+import { PROGRAM_ID } from "@/lib/cluster";
 import {
   apiVaultCancelWithdraw,
   apiVaultCompleteWithdraw,
@@ -63,8 +65,13 @@ export function useLpActions() {
     async (instructionResp: { instruction: Parameters<typeof deserializeIx>[0] }) => {
       if (!wallet) throw new Error("Connect wallet first");
       const ix = deserializeIx(instructionResp.instruction);
-      const tx = new Transaction().add(ix);
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
+        connection.getLatestBlockhash("confirmed"),
+        buildPriorityIxs(connection, PROGRAM_ID),
+      ]);
+      const tx = new Transaction();
+      for (const pix of priorityIxs) tx.add(pix);
+      tx.add(ix);
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);

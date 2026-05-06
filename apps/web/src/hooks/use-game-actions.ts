@@ -17,6 +17,8 @@ import { calcMultiplier } from "@playkaboom/shared";
 import { deserializeIx, type SerializedIx } from "@playkaboom/sdk";
 import { apiCleanup, apiCommit, apiReveal, apiSettle, ApiClientError } from "@/lib/api";
 import { confirmByPolling } from "@/lib/confirm";
+import { buildPriorityIxs } from "@/lib/priority-fee";
+import { PROGRAM_ID } from "@/lib/cluster";
 import { useGameStore, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";
 import { useToast } from "@/components/providers/toast";
@@ -56,10 +58,19 @@ export function useGameActions(): ActionsResult {
   const signAndSend = useCallback(
     async (ix: TransactionInstruction): Promise<string> => {
       if (!wallet) throw new Error("No wallet");
-      const tx = new Transaction().add(ix);
-      // `processed` blockhash is one slot newer than `confirmed` and still
-      // valid for the full ~150-block window — saves ~150-200ms vs confirmed.
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("processed");
+      // Run blockhash + priority-fee fetch in parallel so the priority-fee
+      // RPC roundtrip is overlapped with blockhash (already on the critical
+      // path). Net additional latency: ~0ms.
+      const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
+        // `processed` blockhash is one slot newer than `confirmed` and still
+        // valid for the full ~150-block window — saves ~150-200ms vs confirmed.
+        connection.getLatestBlockhash("processed"),
+        buildPriorityIxs(connection, PROGRAM_ID),
+      ]);
+      const tx = new Transaction();
+      // ComputeBudget ixs MUST come before the program ix in the tx order.
+      for (const pix of priorityIxs) tx.add(pix);
+      tx.add(ix);
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);

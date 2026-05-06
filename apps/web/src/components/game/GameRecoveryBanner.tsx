@@ -18,6 +18,7 @@ import {
 } from "@playkaboom/sdk";
 import { confirmByPolling } from "@/lib/confirm";
 import { PROGRAM_ID } from "@/lib/cluster";
+import { buildPriorityIxs } from "@/lib/priority-fee";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
 import { useGameStore } from "@/stores/game-store";
 import { useToast } from "@/components/providers/toast";
@@ -102,9 +103,13 @@ export function GameRecoveryBanner({ info }: Props) {
     setBusy(true);
     try {
       const ix = buildRecoveryIx(new PublicKey(wallet.address));
-      const tx = new Transaction().add(ix);
-      const { blockhash, lastValidBlockHeight } =
-        await connection.getLatestBlockhash("confirmed");
+      const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
+        connection.getLatestBlockhash("confirmed"),
+        buildPriorityIxs(connection, PROGRAM_ID),
+      ]);
+      const tx = new Transaction();
+      for (const pix of priorityIxs) tx.add(pix);
+      tx.add(ix);
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);
