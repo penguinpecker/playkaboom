@@ -645,3 +645,113 @@ NOT YET VERIFIED IN THIS SESSION (require browser / human):
 (Append future entries here as the system evolves. Do not delete prior
 entries — they are the audit trail. Format: ISO date + short title +
 relevant tx signatures or commit hashes + summary.)
+
+────────────────────────────────────────────────────────────────────────────────
+2026-05-06  Production debugging marathon — the bugs that landed in the live UI
+────────────────────────────────────────────────────────────────────────────────
+
+After Phase 3 was declared "shipped", every player-facing button still failed.
+Each below was a separate bug with a separate fix; landing them all let the
+flow Engage Bet → Sign → Play → Cash Out / Settle complete.
+
+Bug list, in the order they surfaced:
+
+1. CSP missed Alchemy domains.  Commit 6c61a74.
+   `connect-src` allowlist had `*.helius-rpc.com` etc. but not
+   `*.g.alchemy.com`. Browser refused every RPC call after the Helius→Alchemy
+   swap. Also flipped Cross-Origin-Opener-Policy from `same-origin` →
+   `same-origin-allow-popups` so Coinbase/Base wallet SDKs (loaded by Privy)
+   stop tripping their own console error.
+
+2. Privy access token never attached to authed fetches.  Commit ce8fe81.
+   apps/web/src/lib/api.ts's post() helper sent neither `Authorization` header
+   nor cookie credentials. Server-side auth.ts looked for either, so every
+   /api/commit / /api/reveal / /api/settle / /api/vault/* mutator returned 401.
+   Fix: setAuthTokenResolver() global + PrivyAuthBridge component that wires
+   `usePrivy().getAccessToken` once at mount; every subsequent post() attaches
+   `Authorization: Bearer <privy_token>`.
+
+3. Auth error swallowed.  Commit 6efd9b5.
+   The 401 said "User not found" for everything — auth.ts had
+   `.catch(() => null)` on getUserById which collapsed every distinct error
+   into one. Real underlying error revealed by removing the swallow:
+   "Invalid app ID or app secret" (PRIVY_APP_SECRET in env didn't match
+   NEXT_PUBLIC_PRIVY_APP_ID). Also added /api/whoami diagnostic endpoint
+   that returns env binding view + per-step auth failure reason.
+
+4. PRIVY_APP_SECRET was wrong in env.  Commit 6efd9b5 (env-only).
+   Old secret: 5mrFAm…JQRWKk4D5 (88 chars). New (correct) secret:
+   <redacted-privy-app-secret> (105 chars). Updated
+   in Vercel `production` + `development` and apps/web/.env.local.
+   Verified pair valid via direct PrivyClient.getUserById probe — Privy
+   now returns "User not found" for fake IDs (correct), previously
+   returned "Invalid app ID or app secret" (which is the wrong-credentials
+   error code).
+
+5. Alchemy doesn't expose `signatureSubscribe` over WS.  Commit 04d2126.
+   web3.js's default `connection.confirmTransaction(...)` listens via WS.
+   Alchemy returns "Method 'signatureSubscribe' not found" — wait spins
+   until blockhash expires. Every player tx looked stuck.
+   Fix: apps/web/src/lib/confirm.ts — polling-based confirm using
+   `getSignatureStatuses` (1 s cadence) and `getBlockHeight` (5 s cadence;
+   slot advances faster than block-height because of skipped slots, so
+   getSlot gives false-expired verdicts). Rate-limit aware: per-call
+   try/catch + exponential backoff up to 4 s, hard 90 s deadline. ~108
+   calls per worst-case confirmation = ~5,400 CU. Free Alchemy tier
+   supports ~2,200 confirmations/month; mainnet plan needs paid tier.
+
+6. SDK decodeGameSession didn't read max_payout (Phase 2 field).  Commit 04d2126.
+   Phase 2 added max_payout: u64 carved from the prior _reserved bytes
+   on GameSession. SDK's accounts.ts decoder skipped the new u64 entirely
+   so every read returned undefined. Fix: read r.u64() after version, add
+   maxPayout: bigint to GameSessionAccount.
+
+7. Wrong Privy hook for embedded wallets.  Commit b62ca15.
+   `useStandardSignTransaction` is for external Wallet-Standard wallets
+   (Phantom, Solflare via the standard interface) and expects pre-serialized
+   bytes representing a v0 VersionedTransaction. Project uses Privy embedded
+   wallets (config: embeddedWallets.solana.createOnLogin = "all-users") which
+   require `useSignTransaction`. The wrong hook surfaced as
+   "n.serializeMessage is not a function" because the standard handler tried
+   to deserialize our legacy serialized tx as VersionedTransaction (which has
+   .serialize() but not .serializeMessage()).
+   Fix: use-game-actions.ts and use-vault-lp.ts both switched to
+   useSignTransaction (takes Transaction object, returns signed Transaction).
+
+8. BigInt(NaN) crash in useGame.tsx.  Commit 1489acc.
+   Line 24 returned `BigInt(Date.parse(\`\${Date.now()}\`))` once status
+   flipped to "playing". Date.parse needs a date-formatted string, not a
+   unix-ms integer-as-string — so the result was NaN, BigInt(NaN) throws,
+   the page crashed on every re-render after the bet landed. Fix:
+   BigInt(Date.now()) directly — already a finite integer.
+
+9. games table never populated despite events firing.  Commit d0fdd2b.
+   Two compounding bugs:
+   (a) games_mine_count_range CHECK rejected mine_count=0; GameWon and
+       GameLost events don't carry mine_count (only GameSettled does),
+       so indexer used 0 as placeholder. Constraint failed silently
+       because `.upsert(...)` returns { error } rather than throwing,
+       and the handler ignored the result.
+   (b) Win path emits GameSettled in a SEPARATE tx from cash_out (only
+       lose path is atomic), so updating `games WHERE signature = sig`
+       never matched the win-tx row.
+   Fix: migration 20260506000004 relaxes mine_count to 0..12, adds
+   `game text` column for the GameSession PDA. Indexer GameWon/GameLost
+   stores game alongside outcome+payout; GameSettled UPDATEs by `game`
+   not `signature`. Added check() helper that throws on Postgrest errors
+   so this class of silent failure cannot recur.
+
+What I should have done differently (lessons):
+- READ the Privy hook docs end-to-end before picking one. Privy's typedefs
+  literally say "embedded → useSignTransaction; standard → useStandardSignTransaction".
+- TREAT @solana/web3.js defaults (Connection, confirmTransaction) as
+  suspect on non-default RPCs. Alchemy's docs explicitly note WS limits.
+- VERIFY auth-required routes with a synthetic bearer to confirm the
+  401 reason matches the *intended* failure mode, not a generic "User not found".
+- GREP for known footguns (BigInt(Date., Date.parse on numeric strings,
+  silent .catch(() => null)) before declaring "shipped".
+- DON'T claim end-to-end verified when only on-chain SDK calls were
+  exercised. Privy login, browser wallet popup, real domain redirects
+  cannot be driven from CLI; say so.
+
+────────────────────────────────────────────────────────────────────────────────

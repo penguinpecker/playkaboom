@@ -11,7 +11,7 @@ import { CleanupInput } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
-import { decryptSession } from "@/server/session";
+import { loadSession, deleteSession } from "@/server/session-store";
 import { sendHouseTx } from "@/server/solana";
 import { getConnection } from "@/server/connection";
 import { housePubkey, programId } from "@/server/env";
@@ -35,13 +35,20 @@ export async function POST(req: NextRequest) {
     const [gamePda] = deriveGamePda(ctx.programId, playerPk);
     const info = await getConnection().getAccountInfo(gamePda, "confirmed");
     if (!info) {
+      // Game closed on-chain; clear any stale server-side session.
+      await deleteSession(body.player);
       return NextResponse.json({ active: false });
     }
 
-    if (body.gameToken) {
-      try {
-        const session = decryptSession(body.gameToken);
-        if (session.player === body.player) {
+    // Try to recover the session from client OR server-side mirror.
+    let recoveredToken: string | null = null;
+    try {
+      const session = await loadSession(body.player, body.gameToken);
+      if (session && session.player === body.player) {
+        // We have a session — try to settle the game first (commit-reveal proof).
+        // This is the happy path when the player still wants to recover; if it
+        // fails (e.g. game state mismatch), we fall through to offer refund ix.
+        try {
           await sendHouseTx([
             buildSettleGame({
               ctx,
@@ -51,16 +58,24 @@ export async function POST(req: NextRequest) {
               salt: saltBuffer(session),
             }),
           ]);
+        } catch (settleErr) {
+          logger.warn(
+            { err: settleErr instanceof Error ? settleErr.message : settleErr },
+            "cleanup settle attempt failed",
+          );
         }
-      } catch (e) {
-        logger.warn({ err: e instanceof Error ? e.message : e }, "cleanup settle attempt failed");
+        // Re-issue the token so the client can resume revealing if appropriate.
+        recoveredToken = body.gameToken ?? null;
       }
+    } catch (e) {
+      logger.warn({ err: e instanceof Error ? e.message : e }, "cleanup recovery failed");
     }
 
     return NextResponse.json({
       active: true,
       closeInstruction: serializeIx(buildCloseGame({ ctx, player: playerPk })),
       refundInstruction: serializeIx(buildRefundExpired({ ctx, player: playerPk })),
+      recoveredGameToken: recoveredToken,
     });
   } catch (err) {
     return jsonError(err);
