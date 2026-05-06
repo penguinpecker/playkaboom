@@ -4,12 +4,13 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
 import {
   useSolanaWallets as useWallets,
-  useStandardSignTransaction,
+  useSignTransaction,
 } from "@privy-io/react-auth/solana";
 import {
   LAMPORTS_PER_SOL,
   PublicKey,
   Transaction,
+  VersionedTransaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { calcMultiplier } from "@playkaboom/shared";
@@ -37,7 +38,13 @@ interface ActionsResult {
 export function useGameActions(): ActionsResult {
   const { authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
-  const { signTransaction } = useStandardSignTransaction();
+  // useSignTransaction is for Privy embedded wallets and accepts a Transaction
+  // object directly (returns a signed Transaction). useStandardSignTransaction
+  // expects pre-serialized bytes for external Wallet-Standard wallets — wrong
+  // hook for our embedded-wallet config and was throwing
+  // "n.serializeMessage is not a function" because Privy's standard handler
+  // tried to deserialize our legacy-tx bytes as a VersionedTransaction.
+  const { signTransaction } = useSignTransaction();
   const { connection } = useConnection();
   const store = useGameStore();
   const pushHistory = useHistoryStore((s) => s.push);
@@ -54,15 +61,15 @@ export function useGameActions(): ActionsResult {
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);
-      const serialized = tx.serialize({ requireAllSignatures: false });
-      const { signedTransaction } = await signTransaction({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        transaction: serialized as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        wallet: wallet as any,
+      const signed = await signTransaction({
+        transaction: tx,
+        connection,
+        address: wallet.address,
       });
       const raw =
-        signedTransaction instanceof Uint8Array ? signedTransaction : Buffer.from(signedTransaction);
+        signed instanceof VersionedTransaction
+          ? signed.serialize()
+          : (signed as Transaction).serialize();
       const sig = await connection.sendRawTransaction(raw, { skipPreflight: false });
       await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       return sig;

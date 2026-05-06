@@ -5,9 +5,14 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
 import {
   useSolanaWallets as useWallets,
-  useStandardSignTransaction,
+  useSignTransaction,
 } from "@privy-io/react-auth/solana";
-import { LAMPORTS_PER_SOL, PublicKey, Transaction } from "@solana/web3.js";
+import {
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+} from "@solana/web3.js";
 import { deserializeIx } from "@playkaboom/sdk";
 import { confirmByPolling } from "@/lib/confirm";
 import {
@@ -44,7 +49,10 @@ export function useLpPosition(wallet?: string) {
 export function useLpActions() {
   const { authenticated, login } = usePrivy();
   const { wallets } = useWallets();
-  const { signTransaction } = useStandardSignTransaction();
+  // Embedded-wallet hook (takes a Transaction, returns a signed Transaction).
+  // useStandardSignTransaction is for external Wallet-Standard wallets and
+  // throws "n.serializeMessage is not a function" against legacy txs.
+  const { signTransaction } = useSignTransaction();
   const { connection } = useConnection();
   const qc = useQueryClient();
 
@@ -60,17 +68,19 @@ export function useLpActions() {
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);
-      const serialized = tx.serialize({ requireAllSignatures: false });
-      const { signedTransaction } = await signTransaction({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        transaction: serialized as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        wallet: wallet as any,
+      const signed = await signTransaction({
+        transaction: tx,
+        connection,
+        address: wallet.address,
       });
-      const sig = await connection.sendRawTransaction(
-        Buffer.from(signedTransaction as unknown as Uint8Array),
-        { skipPreflight: false, maxRetries: 3 },
-      );
+      const raw =
+        signed instanceof VersionedTransaction
+          ? signed.serialize()
+          : (signed as Transaction).serialize();
+      const sig = await connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
       await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       qc.invalidateQueries({ queryKey: ["vault-state"] });
       qc.invalidateQueries({ queryKey: ["lp-position", wallet.address] });
