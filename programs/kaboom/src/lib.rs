@@ -179,7 +179,13 @@ pub mod kaboom {
     /// Cannot reference yourself. Can be called before or after first game,
     /// but only succeeds if `player_stats.referrer == None`.
     pub fn set_referrer(ctx: Context<SetReferrer>) -> Result<()> {
-        let referrer_key = ctx.accounts.referral_account.referrer;
+        // FIX (2026-05-07): the referrer key MUST come from the AccountInfo's
+        // pubkey, not from the freshly-init'd ReferralAccount.referrer field
+        // (which is Pubkey::default() on first call). Previous implementation
+        // read referral_account.referrer first → set everything to default →
+        // every claim_referral failed `Unauthorized` because the field stayed
+        // zero. Caught by scripts/test-referral-end-to-end.ts on devnet.
+        let referrer_key = ctx.accounts.referrer.key();
         require!(
             referrer_key != ctx.accounts.player.key(),
             KaboomError::SelfReferral

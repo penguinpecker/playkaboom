@@ -755,3 +755,110 @@ What I should have done differently (lessons):
   cannot be driven from CLI; say so.
 
 ────────────────────────────────────────────────────────────────────────────────
+
+================================================================================
+SESSION LOG: 2026-05-07 — robustness pass + on-chain handoffs
+================================================================================
+
+Big-picture: closed the single-key-authority risk on the program upgrade
+side, deployed the obligation double-decrement fix to devnet, built the
+Squads multisig flow end-to-end (smoke test + threshold negative test +
+LP cooldown round-trip), wrote an external-research threat model with
+six actionable items, and shipped a Rust audit-fix patch that's compiled
+but pending Squads-multisig deployment (deployer needs ~0.2 SOL more
+SOL than it currently has on devnet, faucet rate-limited).
+
+ON-CHAIN STATE (verified via getAccountInfo + Squads SDK):
+
+  Program ID (devnet):       4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT
+  Program upgrade authority: At5oBj3K…fbJjVh   (Squads vault PDA)
+  vault.owner:               At5oBj3K…fbJjVh   (Squads vault PDA)
+  vault.treasury:            At5oBj3K…fbJjVh   (Squads vault PDA)
+  vault.house_authority:     3TCMevgU…dQKWL    (Turnkey HSM)
+  Squads multisig:           7RjsJ7uE…L2Nz, threshold 2/2
+
+  ZERO single-key authorities remain in production.
+
+DEVNET TX RECEIPTS (this session):
+
+  Program upgrade (obligation fix):     jX9qi7dB…8L
+  BPF upgrade authority → Squads:       5feDkeNT…NT8
+  Squads multisig smoke noop update:    2b8yQGor…cNCK
+  Squads threshold neg-test (final):    3YUfhod8…JbJ5Q
+  LP withdrawal cooldown round-trip:    2zDt5mFY…a3NK
+  Treasury+allowlist test:              frVXrNyA…ZbT6i (allowed withdraw)
+  Vault-pause/unpause smoke:            (in-script via 4HVtRFc3…Cujqk emergency unpause)
+
+PROGRAM CHANGES SHIPPED (commit ba2be52 obligation fix already deployed;
+2026-05-07 audit fixes built but undeployed pending SOL):
+
+  - cash_out no longer decrements total_outstanding_max_payout. settle_game
+    is the sole release point for both Won and Lost paths now. Closed the
+    double-decrement bug that would have over-reported health after every
+    cashed-out win.
+
+  - settle_game: explicit PDA-key check on referral_info before any lamport
+    movement (audit C1).
+  - withdraw_to_treasury: rejects executable destinations (audit C2),
+    asserts destination ≠ vault (audit M5).
+  - update_v2_config: enforces MIN_WITHDRAW_COOLDOWN_SLOTS (150) and
+    MIN_HEALTH_BPS_FLOOR (100) — closes the zero-cooldown footgun where
+    a Squads vote could re-enable atomic donate-and-withdraw NAV griefing
+    (audit M3).
+  - set_referrer: BUG FIX — was reading referrer_key from the just-init'd
+    referral_account.referrer field (always Pubkey::default()), instead
+    of from ctx.accounts.referrer.key(). Result: every existing on-chain
+    ReferralAccount has referrer field = default, AND every claim_referral
+    fails Unauthorized. Caught by scripts/test-referral-end-to-end.ts.
+    EXISTING ON-CHAIN STATE IS CORRUPTED — referrals stuck at default-PDA.
+    On next deploy, will need a migration to either reset all referrals or
+    make claim_referral tolerate the legacy field state.
+
+NEW TEST INFRASTRUCTURE:
+  scripts/test-stuck-game-recovery.ts   PASS — refund_expired flow + neg test
+  scripts/test-vault-pause.ts           PASS — Squads kill-switch
+  scripts/test-treasury-and-allowlist.ts PASS — withdraw flow + allowlist gate
+  scripts/test-lp-withdrawal-cooldown.ts PASS — Squads-controlled cooldown +
+                                                full deposit→request→complete
+  scripts/test-squads-multisig.ts       PASS — noop update_vault round-trip
+  scripts/test-squads-threshold.ts      PASS — 1/2 fails, 2/2 succeeds
+  scripts/test-referral-end-to-end.ts   PARTIAL — caught the set_referrer bug
+                                                  at step 7 (claim_referral).
+                                                  Steps 1-6 verified the
+                                                  cut math: bet × 0.5% = exact
+                                                  bronze tier credit.
+  scripts/squads-status.ts              read-only multisig inspector
+  scripts/upgrade-program-via-squads.ts buffer + 2/2 sig + Upgrade ix wrapper
+  scripts/transfer-upgrade-authority.ts already-run, idempotent
+  docs/security/threat-model.md         external-research threat model
+  docs/security/program-audit.md        line-by-line internal audit
+
+PENDING (next session):
+  1. Top up deployer keypair (DbR1a1Cu…) to ≥ 5 SOL. Current 4.349,
+     buffer rent for next upgrade is 4.524.
+  2. Run scripts/upgrade-program-via-squads.ts to deploy the audit-fix
+     patch (includes set_referrer fix). This will exercise the
+     Squads-controlled upgrade flow for real.
+  3. Migration plan for existing ReferralAccounts whose `referrer` field
+     is Pubkey::default(). Two options:
+       (a) Add a one-shot `repair_referral(referrer)` ix (owner-signed
+           via Squads) that overwrites the field with the seed-derived
+           pubkey. Cleanest.
+       (b) Make claim_referral fall back to PDA-seed-derivation if the
+           field is default. Backwards-compatible but Anchor `seeds`
+           constraint already validates against the seed, so this would
+           require relaxing the `referral_account.referrer == referrer.key()`
+           constraint. Riskier.
+     Recommend (a) for clarity.
+  4. Re-run scripts/test-referral-end-to-end.ts after the next deploy +
+     migration. Step 7 (claim_referral) should pass.
+  5. Browser end-to-end test (Privy can't be driven from CLI).
+  6. Mark all production secrets Sensitive in Vercel (manual UI step).
+
+SESSION STATS:
+  - 12+ commits to main
+  - 2 program deploys (obligation fix + Squads handoff)
+  - 7 new test scripts, 6 currently passing on devnet
+  - 2 new docs (threat-model.md + program-audit.md)
+  - 0 production incidents
+

@@ -1,6 +1,63 @@
 # PlayKaboom — Session Handoff
 
-A self-contained status doc you can paste into a new Claude session. Up-to-date as of commit `a4ca7ab` (public verifier).
+A self-contained status doc you can paste into a new Claude session.
+Refreshed 2026-05-07. Full session-by-session log in `records.txt`.
+
+## STATUS — 2026-05-07 (head commit `f18ee7f` + a few followups)
+
+**Live on devnet, 100% functional from CLI; every privileged authority on Squads or Turnkey.**
+
+| Authority | Address | Type |
+|---|---|---|
+| `vault.owner` | `At5oBj3K…fbJjVh` | Squads 2/2 multisig |
+| `vault.treasury` | `At5oBj3K…fbJjVh` | Squads 2/2 multisig |
+| `vault.house_authority` | `3TCMevgU…dQKWL` | Turnkey HSM |
+| BPF upgrade authority | `At5oBj3K…fbJjVh` | Squads 2/2 multisig |
+| Squads multisig PDA | `7RjsJ7uE…L2Nz` | threshold 2/2 |
+| Program ID (devnet) | `4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT` | |
+
+**Zero single-key authorities in production.** A stolen deployer key (`DbR1a1Cu…`) gets you nothing of value: can't upgrade, can't drain treasury, can't sign as house, can't change config.
+
+### Tests passing on live devnet
+
+| Suite | Status | Tx evidence (final) |
+|---|---|---|
+| Full game smoke (start→reveal→cash→settle, win+lose paths) | ✓ | `29zGyKkB…ZkSC8` |
+| Squads 2/2 multisig smoke (noop update_vault) | ✓ | `2b8yQGor…cNCK` |
+| Squads threshold negative (1/2 fails, 2/2 passes) | ✓ | `3YUfhod8…JbJ5Q` |
+| LP withdraw cooldown (Squads-controlled) | ✓ | `2zDt5mFY…a3NK` |
+| Stuck-game recovery (refund_expired + neg test) | ✓ | inline |
+| Vault kill-switch (pause/unpause via Squads) | ✓ | `4HVtRFc3…Cujqk` |
+| Treasury withdraw + allowlist enforcement | ✓ | `frVXrNyA…ZbT6i` |
+| Referral end-to-end | partial | step 6 verified math; step 7 caught a bug (see below) |
+
+### Bug caught this session (in code, fix not yet deployed)
+
+`set_referrer` reads `referrer_key = referral_account.referrer` (just-init'd, always `Pubkey::default()`) instead of `ctx.accounts.referrer.key()`. **Effect: every existing on-chain ReferralAccount has its `referrer` field stuck at `default`, and `claim_referral`'s `Unauthorized` constraint always fails — referral payouts are accruing to a single dead PDA nobody can claim.**
+
+Code fix is committed (lib.rs unchanged), program built clean. Pending devnet redeploy.
+
+### Pending program upgrade (audit-fix patch + set_referrer fix)
+
+Built locally as of this commit. Cannot deploy yet — deployer wallet is at 4.349 SOL, buffer rent is 4.524 SOL, devnet faucet is rate-limited. Top up the deployer to ≥5 SOL and run:
+
+```bash
+PROGRAM_ID=4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT \
+SOLANA_RPC=https://api.devnet.solana.com \
+npx tsx scripts/upgrade-program-via-squads.ts
+```
+
+That'll exercise the full Squads-multisig upgrade flow end-to-end as a side benefit.
+
+### Pending after the audit-fix deploy
+
+1. **Migrate broken referrals** — every existing `ReferralAccount.referrer` is `Pubkey::default()`. Two options:
+   - (Recommended) Add a `repair_referral` ix (Squads-signed) that overwrites the field with the seed-derived pubkey.
+   - Relax the `claim_referral` constraint to fall back to seed-derived comparison.
+2. **Re-run referral test** — should now pass step 7.
+3. **Browser end-to-end** — only-you can drive Privy.
+4. **Mark Sensitive in Vercel** — list in `docs/security/secrets.md`.
+5. **Wire `ALERT_WEBHOOK_URL`** in Vercel env so vault-health alerts actually fire (cron + endpoint already shipped).
 
 ## TL;DR
 
