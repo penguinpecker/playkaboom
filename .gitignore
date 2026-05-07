@@ -17,8 +17,8 @@ out
 target
 .anchor
 
-# rust
-Cargo.lock
+# rust — Cargo.lock is committed: workspace ships an Anchor program
+# (binary), not a library — solana-verify reproducible builds need pinned deps.
 
 # env
 .env
