@@ -23,6 +23,19 @@ use sha2::{Digest, Sha256};
 
 declare_id!("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 
+#[cfg(not(feature = "no-entrypoint"))]
+solana_security_txt::security_txt! {
+    name: "PlayKaboom",
+    project_url: "https://www.playkaboom.gg",
+    contacts: "link:https://x.com/playkaboom",
+    policy: "https://github.com/penguinpecker/playkaboom/blob/main/SECURITY.md",
+    preferred_languages: "en",
+    source_code: "https://github.com/penguinpecker/playkaboom",
+    source_revision: "main",
+    auditors: "Self-audited (sealevel-attacks + Slowmist + crytic/solana-lints checklists). Pending external audit.",
+    acknowledgements: "Thanks to the Neodyme, OtterSec, and Sec3 teams for their public Solana security research."
+}
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 pub const GRID_SIZE: u8 = 16;
