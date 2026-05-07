@@ -42,6 +42,12 @@ const csp = [
     "https://*.g.alchemy.com",
     "wss://*.g.alchemy.com",
     "https://hermes.pyth.network",
+    // Privy bundles WalletConnect for wallet picker. Explorer API hosts the
+    // wallet list; relay.walletconnect.{com,org} carries the v2 session WS.
+    "https://*.walletconnect.com",
+    "wss://*.walletconnect.com",
+    "https://*.walletconnect.org",
+    "wss://*.walletconnect.org",
   ].join(" "),
   "frame-src 'self' https://*.privy.io https://auth.privy.io https://challenges.cloudflare.com",
   "frame-ancestors 'none'",
