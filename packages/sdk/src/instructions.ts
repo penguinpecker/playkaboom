@@ -156,6 +156,30 @@ export function buildClaimReferral(args: ClaimReferralArgs): TransactionInstruct
   });
 }
 
+// ── repair_referral (owner-signed via Squads) ─────────────────────────────────
+export interface RepairReferralArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  referrer: PublicKey;
+}
+
+export function buildRepairReferral(args: RepairReferralArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [referralPda] = deriveReferralPda(args.ctx.programId, args.referrer);
+  const data = Buffer.alloc(8);
+  ixDiscriminator("repair_referral").copy(data, 0);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      readonly(vaultPda),
+      readonly(args.referrer),
+      writable(referralPda),
+      readonly(args.owner, true),
+    ],
+    data,
+  });
+}
+
 // ── reveal_tile ───────────────────────────────────────────────────────────────
 export interface RevealTileArgs {
   ctx: BuildContext;

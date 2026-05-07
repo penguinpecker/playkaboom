@@ -708,6 +708,37 @@ pub mod kaboom {
         Ok(())
     }
 
+    /// Owner-signed (Squads) one-shot migration for legacy `ReferralAccount`s.
+    /// Pre-2026-05-07 (commit 658251e), `set_referrer` wrote the field BEFORE
+    /// initialising it, so every account created before the fix has
+    /// `referrer = Pubkey::default()`. That makes their `claim_referral` fail
+    /// the `referral_account.referrer == referrer.key()` constraint forever.
+    ///
+    /// Idempotent: re-running on a correctly-set account is a no-op. Anchor's
+    /// seed constraint on `referral_account` guarantees `referrer.key()` is the
+    /// canonical PDA-derivation pubkey, so the value we write is safe.
+    pub fn repair_referral(ctx: Context<RepairReferral>) -> Result<()> {
+        let referral = &mut ctx.accounts.referral_account;
+        let referrer_key = ctx.accounts.referrer.key();
+
+        if referral.referrer == referrer_key {
+            return Ok(());
+        }
+
+        require!(
+            referral.referrer == Pubkey::default(),
+            KaboomError::Unauthorized
+        );
+
+        referral.referrer = referrer_key;
+
+        emit!(ReferralRepaired {
+            referrer: referrer_key,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
     /// Player recovers their bet if the house has gone silent past expiry.
     pub fn refund_expired(ctx: Context<RefundExpired>) -> Result<()> {
         let game = &mut ctx.accounts.game;
@@ -1968,6 +1999,30 @@ pub struct ClaimReferral<'info> {
 }
 
 #[derive(Accounts)]
+pub struct RepairReferral<'info> {
+    #[account(
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    /// CHECK: only used for seed derivation. The `seeds` constraint on
+    /// `referral_account` validates that `referrer.key()` is the canonical
+    /// PDA-derivation pubkey for that account.
+    pub referrer: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [REFERRAL_SEED, referrer.key().as_ref()],
+        bump = referral_account.bump,
+    )]
+    pub referral_account: Account<'info, ReferralAccount>,
+
+    pub owner: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct RefundExpired<'info> {
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Account<'info, Vault>,
@@ -2547,5 +2602,11 @@ pub struct ReferralTierChanged {
 pub struct ReferralClaimed {
     pub referrer: Pubkey,
     pub amount: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct ReferralRepaired {
+    pub referrer: Pubkey,
     pub slot: u64,
 }
