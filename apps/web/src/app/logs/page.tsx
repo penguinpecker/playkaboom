@@ -1,45 +1,68 @@
 "use client";
 import { useMemo, useState } from "react";
-import { formatEther, useAccount } from "@/lib/compat";
-import { useGameHistory } from "@/hooks/useGameHistory";
+import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { useAccount } from "@/lib/compat";
+import { useGlobalGames, type GlobalGame } from "@/hooks/use-global-games";
 import { useVaultMaxBet } from "@/hooks/useContracts";
 import { txExplorer } from "@/lib/cluster";
-import { ActivityFeed } from "@/components/logs/ActivityFeed";
+
+type FilterMode = "all" | "mine" | "wins";
 
 export default function LogsPage() {
-  useAccount();
-  const { history, refresh, clearHistory } = useGameHistory();
-  const { data: maxBetWei } = useVaultMaxBet();
-  const [filter, setFilter] = useState<"all" | "wins">("all");
+  const { address } = useAccount();
+  const { data: globalGames, isLoading, refetch, dataUpdatedAt } = useGlobalGames(200);
+  const { data: maxBetLamports } = useVaultMaxBet();
+  const [filter, setFilter] = useState<FilterMode>("all");
   const [page, setPage] = useState(1);
   const perPage = 15;
 
-  const filtered = useMemo(
-    () => (filter === "wins" ? history.filter((l) => l.won) : history),
-    [history, filter],
-  );
+  const filtered = useMemo(() => {
+    const all = globalGames ?? [];
+    if (filter === "wins") return all.filter((g) => g.outcome === "won");
+    if (filter === "mine") return address ? all.filter((g) => g.player === address) : [];
+    return all;
+  }, [globalGames, filter, address]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const paged = filtered.slice((page - 1) * perPage, page * perPage);
 
   const stats = useMemo(() => {
-    const wins = history.filter((g) => g.won);
-    const losses = history.filter((g) => !g.won);
-    const pnl =
-      wins.reduce((s, g) => s + g.payout - g.bet, 0) -
-      losses.reduce((s, g) => s + g.bet, 0);
+    if (filtered.length === 0) {
+      return { pnl: 0, winRate: 0, avgMult: 0, count: 0 };
+    }
+    let totalBet = 0n;
+    let totalPayout = 0n;
+    let wins = 0;
+    let multSum = 0;
+    for (const g of filtered) {
+      totalBet += BigInt(g.bet);
+      totalPayout += BigInt(g.payout);
+      if (g.outcome === "won") {
+        wins += 1;
+        multSum += g.multiplierBps / 10_000;
+      }
+    }
+    const pnlLamports = filter === "all"
+      ? totalBet - totalPayout // house perspective
+      : totalPayout - totalBet; // player perspective
     return {
-      pnl,
-      winRate: history.length > 0 ? (wins.length / history.length) * 100 : 0,
-      avgMult:
-        wins.length > 0 ? wins.reduce((s, g) => s + g.multiplier, 0) / wins.length : 0,
+      pnl: Number(pnlLamports) / LAMPORTS_PER_SOL,
+      winRate: (wins / filtered.length) * 100,
+      avgMult: wins > 0 ? multSum / wins : 0,
+      count: filtered.length,
     };
-  }, [history]);
+  }, [filtered, filter]);
 
-  const maxBet = maxBetWei ? Number(formatEther(maxBetWei)).toFixed(4) : "0.1100";
+  const maxBet = maxBetLamports
+    ? (Number(maxBetLamports) / LAMPORTS_PER_SOL).toFixed(4)
+    : "—";
 
-  const formatDate = (ts: number) => {
-    const d = new Date(ts);
+  const fmtSol = (lamportsStr: string) =>
+    (Number(BigInt(lamportsStr)) / LAMPORTS_PER_SOL).toFixed(3);
+  const fmtPlayer = (addr: string) => `${addr.slice(0, 4)}…${addr.slice(-4)}`;
+  const fmtTime = (iso: string | null) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
     return (
       d.getFullYear() +
       "-" +
@@ -55,19 +78,24 @@ export default function LogsPage() {
     );
   };
 
+  const lastSync = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
+  const lastSyncStr = lastSync
+    ? `${String(lastSync.getHours()).padStart(2, "0")}:${String(lastSync.getMinutes()).padStart(2, "0")}:${String(lastSync.getSeconds()).padStart(2, "0")}`
+    : "—";
+
   return (
     <div className="px-6 lg:px-8 pb-16 min-h-screen">
-      <div className="flex justify-between items-end mb-8">
+      <div className="flex flex-wrap justify-between items-end mb-8 gap-4">
         <div>
           <h1 className="font-headline text-5xl font-black italic tracking-tighter text-on-surface mb-2">
             COMBAT LOG
           </h1>
           <p className="font-body text-sm text-on-surface-variant max-w-lg">
-            Comprehensive archive of all tactical engagements. Cached locally with on-chain tx
-            verification via Solana explorer.
+            Live archive of every settled game across all operators. Auto-refreshes every 8s
+            from the on-chain indexer.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => {
               setFilter("all");
@@ -79,10 +107,20 @@ export default function LogsPage() {
           </button>
           <button
             onClick={() => {
+              setFilter("mine");
+              setPage(1);
+            }}
+            disabled={!address}
+            className={`px-4 py-2 font-headline text-[10px] font-bold tracking-widest transition-colors ${filter === "mine" ? "bg-tertiary/10 text-tertiary border border-tertiary/15" : "text-on-surface-variant/40 hover:text-on-surface"} disabled:opacity-30 disabled:hover:text-on-surface-variant/40`}
+          >
+            MY GAMES
+          </button>
+          <button
+            onClick={() => {
               setFilter("wins");
               setPage(1);
             }}
-            className={`px-4 py-2 font-headline text-[10px] font-bold tracking-widest transition-colors ${filter === "wins" ? "bg-primary/10 text-primary border border-primary/15" : "text-on-surface-variant/40 hover:text-on-surface"}`}
+            className={`px-4 py-2 font-headline text-[10px] font-bold tracking-widest transition-colors ${filter === "wins" ? "bg-emerald/10 text-emerald border border-emerald/15" : "text-on-surface-variant/40 hover:text-on-surface"}`}
           >
             WINS ONLY
           </button>
@@ -91,22 +129,31 @@ export default function LogsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-8 mb-8">
         <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg p-6">
-          <div className="flex items-center gap-2 mb-6">
-            <span className="status-dot" />
-            <span className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase">
-              Session Analytics
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <span className="status-dot bg-emerald" />
+              <span className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase">
+                {filter === "all"
+                  ? "Global Analytics"
+                  : filter === "mine"
+                    ? "My Analytics"
+                    : "Wins Analytics"}
+              </span>
+            </div>
+            <span className="font-headline text-[10px] text-on-surface-variant/50 tracking-widest uppercase">
+              Live · synced {lastSyncStr}
             </span>
           </div>
           <div className="grid grid-cols-3 gap-8">
             <div>
               <span className="font-headline text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
-                Total Profit
+                {filter === "all" ? "Vault P&L" : "Net P&L"}
               </span>
               <span
                 className={`font-headline text-3xl font-bold ${stats.pnl >= 0 ? "text-primary" : "text-error"}`}
               >
                 {stats.pnl >= 0 ? "+" : ""}
-                {stats.pnl.toFixed(3)} SOL
+                {stats.pnl.toFixed(4)} SOL
               </span>
               <div className="h-0.5 w-full bg-primary/20 mt-2">
                 <div
@@ -169,25 +216,17 @@ export default function LogsPage() {
             </div>
           </div>
           <button
-            onClick={() => refresh()}
+            onClick={() => void refetch()}
             className="w-full mt-4 py-2.5 bg-surface-container-highest border border-outline-variant/20 font-headline text-xs font-bold uppercase tracking-widest hover:border-primary transition-all"
           >
-            Refresh Logs
+            Refresh Now
           </button>
         </div>
       </div>
 
       <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg overflow-hidden">
         <div className="grid grid-cols-7 px-6 py-4 border-b border-outline-variant/10 bg-surface-container-high">
-          {[
-            "Event ID",
-            "Game Type",
-            "Bet Amount",
-            "Multiplier",
-            "Outcome",
-            "Date/Time",
-            "Action",
-          ].map((h, i) => (
+          {["Operator", "Game", "Bet", "Multiplier", "Outcome", "Time", "Action"].map((h, i) => (
             <span
               key={h}
               className={`font-headline text-[10px] tracking-widest text-on-surface-variant/40 uppercase ${i === 6 ? "text-right" : ""}`}
@@ -197,80 +236,84 @@ export default function LogsPage() {
           ))}
         </div>
 
-        {paged.length === 0 ? (
+        {isLoading ? (
+          <div className="px-6 py-12 text-center text-on-surface-variant text-sm">Loading…</div>
+        ) : paged.length === 0 ? (
           <div className="px-6 py-12 text-center text-on-surface-variant text-sm">
-            {history.length === 0 ? "No games played yet. Play a game to see logs." : "No matching games."}
+            {filter === "mine"
+              ? address
+                ? "You haven't played any games yet."
+                : "Connect your wallet to see your games."
+              : "No settled games yet. Be the first operator!"}
           </div>
         ) : (
-          paged.map((g) => (
-            <div
-              key={`${g.gameId}-${g.timestamp}`}
-              className="grid grid-cols-7 px-6 py-4 items-center border-b border-outline-variant/[0.04] hover:bg-surface-container-highest transition-colors"
-            >
-              <span className="font-headline text-sm text-on-surface">#K-{g.gameId.slice(-6)}</span>
-              <span className="px-2 py-0.5 bg-primary/10 text-primary font-headline text-[10px] font-bold tracking-widest w-fit rounded">
-                MINES
-              </span>
-              <span className="font-headline text-sm text-on-surface">
-                {g.bet.toFixed(3)} SOL
-              </span>
-              <span
-                className={`font-headline text-sm font-bold ${g.won ? "text-primary" : "text-on-surface-variant"}`}
+          paged.map((g: GlobalGame) => {
+            const won = g.outcome === "won";
+            const mult = won ? g.multiplierBps / 10_000 : 0;
+            return (
+              <div
+                key={g.signature}
+                className="grid grid-cols-7 px-6 py-4 items-center border-b border-outline-variant/[0.04] hover:bg-surface-container-highest transition-colors"
               >
-                {g.won ? g.multiplier.toFixed(2) : "0.00"}×
-              </span>
-              <div className="flex items-center gap-1.5">
                 <span
-                  className={`w-2 h-2 rounded-full ${g.won ? "bg-emerald" : "bg-error"}`}
-                />
-                <span
-                  className={`font-headline text-sm font-bold ${g.won ? "text-primary" : "text-error"}`}
+                  className={`font-mono text-sm ${g.player === address ? "text-tertiary font-bold" : "text-on-surface"}`}
                 >
-                  {g.won ? "+" : "-"}
-                  {(g.won ? g.payout : g.bet).toFixed(3)} SOL
+                  {fmtPlayer(g.player)}
                 </span>
+                <span className="px-2 py-0.5 bg-primary/10 text-primary font-headline text-[10px] font-bold tracking-widest w-fit rounded">
+                  MINES · {g.mineCount}
+                </span>
+                <span className="font-headline text-sm text-on-surface">
+                  {fmtSol(g.bet)} SOL
+                </span>
+                <span
+                  className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-on-surface-variant"}`}
+                >
+                  {won ? mult.toFixed(2) : "0.00"}×
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`w-2 h-2 rounded-full ${won ? "bg-emerald" : "bg-error"}`}
+                  />
+                  <span
+                    className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-error"}`}
+                  >
+                    {won ? "+" : "−"}
+                    {fmtSol(won ? g.payout : g.bet)} SOL
+                  </span>
+                </div>
+                <span className="font-headline text-xs text-on-surface-variant">
+                  {fmtTime(g.time)}
+                </span>
+                <div className="text-right flex justify-end gap-2">
+                  <a
+                    href={`/verify/${g.signature}`}
+                    title="Verify provable fairness"
+                    className="material-symbols-outlined text-on-surface-variant/40 hover:text-emerald transition-colors cursor-pointer"
+                    style={{ fontSize: 18 }}
+                  >
+                    verified
+                  </a>
+                  <a
+                    href={txExplorer(g.signature)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="View on Solscan"
+                    className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
+                    style={{ fontSize: 18 }}
+                  >
+                    open_in_new
+                  </a>
+                </div>
               </div>
-              <span className="font-headline text-xs text-on-surface-variant">
-                {formatDate(g.timestamp)}
-              </span>
-              <div className="text-right flex justify-end gap-2">
-                {g.txHash ? (
-                  <>
-                    <a
-                      href={`/verify/${g.txHash}`}
-                      title="Verify provable fairness"
-                      className="material-symbols-outlined text-on-surface-variant/40 hover:text-emerald transition-colors cursor-pointer"
-                      style={{ fontSize: 18 }}
-                    >
-                      verified
-                    </a>
-                    <a
-                      href={txExplorer(g.txHash)}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="View on Solscan"
-                      className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
-                      style={{ fontSize: 18 }}
-                    >
-                      visibility
-                    </a>
-                  </>
-                ) : (
-                  <span className="text-on-surface-variant/20">—</span>
-                )}
-              </div>
-            </div>
-          ))
+            );
+          })
         )}
 
-        <div className="px-6 py-4 flex justify-between items-center border-t border-outline-variant/10">
-          <span className="font-headline text-[10px] text-on-surface-variant/40 uppercase tracking-widest">
-            Showing {filtered.length > 0 ? (page - 1) * perPage + 1 : 0}-
-            {Math.min(page * perPage, filtered.length)} of {filtered.length} deployments
-          </span>
-          <div className="flex gap-1">
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-2 py-4 border-t border-outline-variant/10">
             <button
-              onClick={() => setPage(Math.max(1, page - 1))}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page <= 1}
               className="w-8 h-8 flex items-center justify-center font-headline text-[10px] text-on-surface-variant/30 disabled:opacity-20"
             >
@@ -286,29 +329,14 @@ export default function LogsPage() {
               </button>
             ))}
             <button
-              onClick={() => setPage(Math.min(totalPages, page + 1))}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages}
               className="w-8 h-8 flex items-center justify-center font-headline text-[10px] text-on-surface-variant/30 disabled:opacity-20"
             >
               ›
             </button>
           </div>
-        </div>
-      </div>
-
-      {history.length > 0 && (
-        <div className="mt-4 text-center">
-          <button
-            onClick={clearHistory}
-            className="font-headline text-[10px] text-on-surface-variant/30 hover:text-error transition-colors tracking-widest"
-          >
-            CLEAR LOCAL CACHE
-          </button>
-        </div>
-      )}
-
-      <div className="mt-10">
-        <ActivityFeed />
+        )}
       </div>
     </div>
   );
