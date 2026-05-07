@@ -16,10 +16,14 @@ export interface StuckGameInfo {
   betLamports: string | null;
   mineCount: number | null;
   /** Current GameSession status — drives which recovery ix the banner dispatches:
-   *    Playing  → refund_expired (refunds bet)
-   *    Won/Lost → close_unsettled_game (reclaims rent)
-   *    Expired  → close_game (no cooldown left). */
+   *    Playing                  → refund_expired (refunds bet)
+   *    Won/Lost & !settled      → close_unsettled_game (reclaims rent)
+   *    Won/Lost & settled, OR Expired → close_game (no cooldown). */
   status: OnChainGameStatus | null;
+  /** True if settle_game has already run for this game. When true and status
+   *  is Won/Lost, the recovery ix MUST be close_game, NOT close_unsettled_game
+   *  (the latter requires `!settled` and errors with GameAlreadySettled). */
+  settled: boolean;
   /** Slots until the appropriate recovery ix becomes callable. 0 if already refundable. */
   slotsUntilRefund: number;
   /** Wall-clock seconds until refundable. 0 if already refundable. */
@@ -49,6 +53,7 @@ const EMPTY_INFO: Omit<StuckGameInfo, "refresh"> = {
   betLamports: null,
   mineCount: null,
   status: null,
+  settled: false,
   slotsUntilRefund: 0,
   secondsUntilRefund: 0,
   refundable: false,
@@ -83,7 +88,12 @@ export function useGameResume(): StuckGameInfo {
         active: boolean;
         gameToken?: string | null;
         sessionRecovered?: boolean;
-        onChain?: { bet?: string; mineCount?: number; status?: OnChainGameStatus };
+        onChain?: {
+          bet?: string;
+          mineCount?: number;
+          status?: OnChainGameStatus;
+          settled?: boolean;
+        };
         refund?: {
           refundable: boolean;
           slotsUntilRefund: number;
@@ -108,6 +118,7 @@ export function useGameResume(): StuckGameInfo {
         betLamports: data.onChain?.bet ?? null,
         mineCount: data.onChain?.mineCount ?? null,
         status: data.onChain?.status ?? null,
+        settled: data.onChain?.settled ?? false,
         slotsUntilRefund: data.refund?.slotsUntilRefund ?? 0,
         secondsUntilRefund: data.refund?.secondsUntilRefund ?? 0,
         refundable: data.refund?.refundable ?? false,
