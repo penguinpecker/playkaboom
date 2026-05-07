@@ -35,6 +35,12 @@ const HEALTH_CRITICAL = 2_000; // 20%
 const HEALTH_WARN = 5_000; // 50%
 const RENT_FLOOR_LAMPORTS = 12_000_000n;
 const LOW_BALANCE_FLOOR_LAMPORTS = 1_000_000_000n + RENT_FLOOR_LAMPORTS;
+// House signer (Turnkey HSM) pays the fees on every reveal_tile + settle_game.
+// At ~0.0001 SOL/tx-pair worst case, 0.1 SOL ≈ 500 games. Warn early so ops
+// can top it up before the next round of plays starts erroring with
+// "Attempt to debit an account but found no record of a prior credit".
+const HOUSE_BALANCE_WARN_LAMPORTS = 100_000_000n; // 0.1 SOL
+const HOUSE_BALANCE_CRITICAL_LAMPORTS = 20_000_000n; // 0.02 SOL
 
 export async function GET(req: NextRequest) {
   try {
@@ -53,6 +59,8 @@ export async function GET(req: NextRequest) {
       conn.getAccountInfo(vaultPda, "confirmed"),
       conn.getAccountInfo(v2Pda, "confirmed"),
     ]);
+    // Fetch house signer balance after we know vault.house_authority.
+    // Done in a second round-trip to avoid coupling alert-shape to vault decode.
     if (!vaultInfo) {
       await sendAlert({
         severity: "critical",
@@ -63,6 +71,7 @@ export async function GET(req: NextRequest) {
     }
     const vault = decodeVault(vaultInfo.data);
     const v2 = v2Info ? decodeVaultV2State(v2Info.data) : null;
+    const houseLamports = BigInt(await conn.getBalance(vault.houseAuthority, "confirmed"));
 
     const lamportsBig = BigInt(lamports);
     const available =
@@ -89,7 +98,28 @@ export async function GET(req: NextRequest) {
       healthPct: `${(healthBps / 100).toFixed(1)}%`,
       paused: vault.paused,
       obligationsLamports: obligationsLamports.toString(),
+      house: vault.houseAuthority.toBase58(),
+      houseSol: (Number(houseLamports) / 1e9).toFixed(4),
     };
+
+    // House signer fuel — separate channel from vault solvency. Turnkey HSM
+    // (or whatever sits in vault.house_authority) needs SOL to pay tx fees
+    // for every reveal_tile + settle_game.
+    if (houseLamports < HOUSE_BALANCE_CRITICAL_LAMPORTS) {
+      await sendAlert({
+        severity: "critical",
+        title: "House signer balance critical",
+        description: `Turnkey/house wallet has ${(Number(houseLamports) / 1e9).toFixed(4)} SOL. Game txs will start failing imminently. Top up immediately.`,
+        fields: baseFields,
+      });
+    } else if (houseLamports < HOUSE_BALANCE_WARN_LAMPORTS) {
+      await sendAlert({
+        severity: "warn",
+        title: "House signer balance low",
+        description: `Turnkey/house wallet has ${(Number(houseLamports) / 1e9).toFixed(4)} SOL. Top up to keep covering reveal/settle tx fees.`,
+        fields: baseFields,
+      });
+    }
 
     if (vault.paused) {
       await sendAlert({
@@ -132,6 +162,8 @@ export async function GET(req: NextRequest) {
       healthBps,
       paused: vault.paused,
       obligations: obligationsLamports.toString(),
+      house: vault.houseAuthority.toBase58(),
+      houseSol: Number(houseLamports) / 1e9,
     });
   } catch (err) {
     return jsonError(err);
