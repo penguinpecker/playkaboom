@@ -66,3 +66,4 @@ supabase/.branches/
 # misc
 .contentlayer
 storybook-static
+.vercel.old-account/
