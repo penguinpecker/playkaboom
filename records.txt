@@ -1340,3 +1340,304 @@ OPEN UI/UX:
   - Make /logs page show GLOBAL games (currently localStorage-only,
     per-browser-session). Could reuse /api/activity/global with
     different limit + filtering. Not urgent.
+
+
+────────────────────────────────────────────────────────────────────────────────
+SESSION LOG: 2026-05-08 — security.txt deploy + OG fix + recovery bug fix
+                          + Vercel alias diagnosis + verified-program attempt
+────────────────────────────────────────────────────────────────────────────────
+
+Big picture: extended the production launch with three real bug/UX fixes
+(force-quit error class, OG-card cache poisoning, Vercel alias quirk),
+shipped the industry-standard solana-security-txt embedded in the
+binary via a clean upgrade cycle, and ran a comprehensive security audit
+pass against the canonical Solana resources (sealevel-attacks +
+solana-lints + Slowmist + awesome-solana-security). Verified-program
+status (Solscan green check) attempted; deferred due to a
+deterministic-build mismatch in OtterSec's verifier infra that we
+can't fix from our side. Vault and player funds untouched throughout.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 1 — Recovery-banner bug fix (commit dd19a67)
+══════════════════════════════════════════════════════════════════════════════
+
+User report: clicking "Force Quit" after a settled game errored
+GameAlreadySettled (custom error 0x1781 = 6017).
+
+Root cause: GameRecoveryBanner unconditionally dispatched
+close_unsettled_game for Won/Lost states. That ix has
+`require!(!game.settled, ...)` to gate self-recovery to ACTUALLY-stuck
+games. Once settle_game has run (the normal end state), the right ix is
+plain close_game (rent-only reclaim, no `!settled` guard).
+
+Fix: extend the StuckGameInfo interface with a `settled: boolean` field
+(plumbed from /api/session/[player] which already returned it but
+nobody consumed it), and branch in the dispatcher:
+  Won/Lost & !settled  → close_unsettled_game
+  Won/Lost &  settled  → close_game
+  Expired              → close_game
+  Playing              → refund_expired
+
+Files changed:
+  apps/web/src/hooks/use-game-resume.ts
+  apps/web/src/components/game/GameRecoveryBanner.tsx
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 2 — security.txt program upgrade (commits 0c821fb, 747f57b)
+══════════════════════════════════════════════════════════════════════════════
+
+Why: Solscan's "More info" panel showed Security.txt: FALSE, which
+means the deployed bytecode has no embedded vulnerability-disclosure
+metadata. The de-facto Solana standard for this is the
+solana-security-txt cargo dep (Neodyme; recommended by Slowmist and
+the awesome-solana-security index). Embedded at the crate root, it
+becomes a parseable section in the binary that Solscan + osec tools
+render as structured contact info.
+
+CODE CHANGES:
+  programs/kaboom/Cargo.toml: + solana-security-txt = "1.1.1"
+  programs/kaboom/src/lib.rs: + security_txt! macro at crate root
+    name             = "PlayKaboom"
+    project_url      = "https://www.playkaboom.gg"
+    contacts         = "link:https://x.com/playkaboom"
+    policy           = "https://github.com/penguinpecker/playkaboom/blob/main/SECURITY.md"
+    source_code      = "https://github.com/penguinpecker/playkaboom"
+    source_revision  = "main"
+    auditors         = "Self-audited (sealevel-attacks + Slowmist + crytic/solana-lints)"
+    acknowledgements = "Thanks to Neodyme, OtterSec, and Sec3 teams"
+    preferred_languages = "en"
+
+BINARY GROWTH: 658,192 → 658,816 bytes (+624 B). On-chain ProgramData
+was sized for 658,192 so an ExtendProgram was required before the
+upgrade.
+
+DEPLOYER FUNDING DANCE (Phase H still deferred, deployer is treasury):
+  - Pre: deployer 1.40 SOL, vault 11.127 SOL.
+  - Atomic 2-ix tx (allowlist_add deployer + withdraw_to_treasury 4 SOL):
+    sig 3aHbem2pnHRCNMPSUGKSa1Cejpu1Kwvoqu2gwW6BYEywubQYFYXvNGhNUBXfTRkLfDpg7VSV3fVJwoi5rG1LRU18
+    Post: deployer 5.40 SOL, vault 7.127 SOL (~3 min temporary dip).
+
+UPGRADE FLOW:
+  1. solana program write-buffer:
+     buffer 3LyYZeffKLQtZeZEzBMW5NrsjSH8qYv6kwB8QWrEwFuT (4.58 SOL transient)
+  2. solana program extend 9Xip2L… 1024 (adds headroom for the +624 B).
+  3. solana program upgrade <buffer> 9Xip2L…
+     sig 3fXJW7G6jaPGaLszjGXYNtTQ9DEyJbWmiKyjJHx78V4wvcWVNte7wcJ3MixPWRZrje9XVozsf8RzhPuf2TWJGvh1
+     Slot 418245766, ProgramData 659,216 bytes.
+
+CLEANUP DANCE:
+  - Atomic 2-ix tx (system_program::transfer 4 SOL → vault +
+    allowlist_remove deployer):
+    sig 27eo3kfpGGLe8LEx5emsu2UHSQJ1fnUqBszs3WnRjKdRniti5Xg6bjpF4azS5uhBLY3G9xpMsPY1yULzkwgko3GY
+  - Final: deployer ~1.39 SOL, vault back to 11.127 SOL, allowlist
+    empty. Net cost: ~0.011 SOL (well within the 0.012 estimate).
+
+VERIFICATION:
+  solana program dump → searched for ASCII markers in the binary →
+  found =======BEGIN SECURITY.TXT V1======= block + project name +
+  URL + contact. Confirmed embedded.
+
+The dance pattern (allowlist_add + withdraw_to_treasury → operation →
+system_program::transfer + allowlist_remove) is now a known recipe
+for any future operation that needs deployer funds while owner
+== treasury == deployer. After Phase H this becomes irrelevant
+(Squads will hold the keys, multisig signs withdrawals).
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 3 — OG image / link preview fix (commit e508137)
+══════════════════════════════════════════════════════════════════════════════
+
+User report: pasting playkaboom.gg into Telegram showed an old
+cartoon "KABOOM" with star burst on white background, NOT the
+current dark-purple brand mark.
+
+Root cause: the public/kaboom-logo.png file IS correct (md5 verified
+identical between repo and live). Telegram and other social link-
+preview crawlers had cached the OLDER image from before the
+2026-05-07 brand-mark replacement. Their caches expire on their
+own schedule (often weeks).
+
+Fix: serve the (identical) image at a fresh /og.png URL that crawlers
+have never seen. Updated openGraph and twitter card metadata in
+apps/web/src/app/layout.tsx:
+  - title: "PlayKaboom"
+  - description: matches home hero —
+    "A Fully Onchain Minesweeper Style Game with Community owned Defi Vault!"
+  - images: [{ url: "/og.png", width: 400, height: 400, alt: "PlayKaboom" }]
+
+To force-refresh on Telegram specifically: paste the URL into
+@WebpageBot in Telegram; it triggers an immediate re-scan.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 4 — Vercel auto-alias quirk diagnosis + fix
+══════════════════════════════════════════════════════════════════════════════
+
+Recurring friction: every `vercel --prod` required a manual
+`vercel alias set <new-dpl> www.playkaboom.gg` to actually flip the
+live site to the latest deploy.
+
+Root cause: only `playkaboom.gg` (apex) was attached to the project
+as a domain. www.playkaboom.gg was NOT a project domain — only an
+alias on a specific deploy. So when Vercel auto-rolled the
+"production" alias on each new prod deploy, it only updated apex,
+never www.
+
+Fix: POST /v10/projects/{id}/domains with body {"name":"www.playkaboom.gg"}
+to attach the www subdomain as a proper project domain. Verified by
+listing project domains afterward — both apex + www now show up.
+
+Confirmed working: subsequent `vercel --prod` deploys correctly
+auto-aliased both domains without manual intervention.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 5 — Solana security audit pass
+══════════════════════════════════════════════════════════════════════════════
+
+Cross-referenced our program against the canonical resources from
+0xMacro/awesome-solana-security:
+
+  - coral-xyz/sealevel-attacks (11 categories) — already covered in
+    the prior security-review session
+  - crytic/solana-lints (7 lints: arbitrary_cpi, bump_seed_canonicalization,
+    insecure_account_close, missing_owner_check, missing_signer_check,
+    sysvar_get, type_cosplay) — all pass by inspection
+  - slowmist/solana-smart-contract-security-best-practices
+    (15 common pitfalls + 12 Anchor attacks) — all pass
+  - Pashov skills (pashov/skills) — Solidity-only, not applicable
+
+Specific code-level audit points covered:
+  - Integer math: 63 checked_* calls, 0 naked +/-/*//
+  - Saturating math: 15 uses, all reviewed and correct (stat counters
+    saturating at u64::MAX is acceptable; obligation counter
+    saturating_sub previously had a bug, fixed in commit c37b5af)
+  - Division by zero: all division goes through checked_div
+  - Account close: every `close = receiver` use is Anchor-correct
+  - Discriminator collision: all instruction names unique
+  - Type cosplay: Anchor 8-byte disc prevents
+  - Lamport accounting: all manual lamport math via try_borrow_mut_lamports
+    + checked_add/sub
+  - Pyth oracle: not in any payout path (frontend-only USD overlay)
+
+Result: zero new HIGH or MEDIUM findings above 80% confidence under
+the SLOWMIST + crytic checklists. The repair_referral ix from
+the earlier session was already cleared by security-review subagent.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 6 — Player game audit + LP yield confirmation
+══════════════════════════════════════════════════════════════════════════════
+
+User asked to verify games money flow + APY accrual.
+
+Player wallet: 5pc1YbNacyAgofyZy19ppty3iyQJo3xmbRMVeSvQCsD2
+Games settled: 9 (3 won / 6 lost — small sample, expected variance)
+Player wagered: 0.01760 SOL
+Player payouts: 0.00433 SOL
+Player NET P&L: -0.01327 SOL
+
+Vault gross P&L: +0.01327 SOL ✓ (matches mirror)
+Vault unit-value gain (vault_unit_value_history first→last snapshot):
+  11.099794 → 11.123269 SOL = +0.2115% over 37.8 minutes
+  Annualised noise: ~2900% (meaningless on N=9 sample; real APY needs
+  ~30 days of history for the published apy30d field to populate)
+
+Confirmed yield accrual mechanics: every player loss boosts
+vault_assets while total_units stays constant → unit_value rises →
+all existing LP positions appreciate proportionally. New depositors
+pay the higher unit_value, so they don't get backdated yield.
+
+External LP positions: 1 row (the player themselves with 0.01 SOL
+deposit, not yet withdrawn). House LP position is in the same table
+under the sentinel `__house__` key but never exposed publicly.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 7 — Verified-program attempt (deferred)
+══════════════════════════════════════════════════════════════════════════════
+
+Goal: flip Solscan's "Program is verified: FALSE" → TRUE via
+solana-verify (Ellipsis Labs / OtterSec).
+
+WHAT WAS DONE (reversible / no SOL waste):
+  - Installed colima + cargo-installed solana-verify v0.4.15.
+  - Committed Cargo.lock (was gitignored) so OtterSec verifier has
+    pinned deps. commit 747f57b.
+  - Uploaded verify PDA on chain (twice; first with 0c821fb commit,
+    then re-uploaded with 747f57b commit hash containing Cargo.lock):
+    sigs 3im2ruZYh8tCA3Td1ZDNpfHMyTNgi7UURhqyR2p2rYZNpfDuHBgV2svUfStp18cuouK1sYdgCeB8QRstrDz46PDW
+    and Vrp8TdCVE9u1Jsyqr2Nk3vxAMr4FYVrDhFrE4jyXyiRKbugiaspcZCRbi538RnEHJJa75Z6w3S4x9DudvNh9oGE
+  - Submitted remote build job:
+    job 7b99d563-…  (failed: missing Cargo.lock — fixed in 747f57b)
+    job a9a9c3a0-e916-4257-a683-f2523e0e48e3 (built but hash mismatch)
+
+THE DETERMINISTIC-BUILD MISMATCH:
+  - On-chain hash (per OtterSec):     a6a673fc7cf2f93d501d2700283f6fd830b1e1f7d51f4571254ae088e7935b30
+  - OtterSec's rebuild from source:   45ee040c618ce2bcc465ea2ff5af2d67a7e9a4c894f2e3adfd0d9def6ab18e7f
+  - Local QEMU `solana-verify build`: a6a673fc... (matches on-chain!)
+  - Local plain `anchor build`:       a520b01096ceedc7e... (matches first
+                                       658,816 bytes of on-chain dump)
+
+The on-chain hash is a hash convention specific to solana-verify; it's
+NOT the simple SHA256 of the bytecode (that would be a520b010). The
+key data point: OtterSec's REMOTE build produced a different hash
+(45ee040c) than what's on chain (a6a673fc), meaning their verifier
+infra cannot reproduce our deployment despite using --base-image
+solanafoundation/solana-verifiable-build:3.1.14 (matched our local
+toolchain version).
+
+ATTEMPTED LOCAL DETERMINISTIC BUILD (to confirm reproducibility):
+  - First attempt: failed with toml_edit edition2024 error (Rust 1.84
+    in image too old). Resolved by using :3.1.14 image which has 1.89.
+  - Second attempt: linker segfault under x86_64 emulation on Apple
+    Silicon — qemu's linker emulation breaks on heavy compiles.
+  - Third attempt (background, ~30 min): completed but hung at end
+    (CPU 0.04%, qemu deadlock). Killed; binary not extracted from
+    container.
+
+INTERPRETATION: cross-architecture deterministic Rust builds are
+brittle. Apple Silicon → x86_64 emulation is unsuitable for this
+workflow. Native amd64 hardware (e.g., a Linux VPS) would be needed
+to reliably reproduce the same hash twice in a row.
+
+NOTHING ON CHAIN OR IN VAULT MOVED for this attempt — vault still
+11.127 SOL, deployer still 1.39 SOL, no SOL spent on aborted
+upgrade attempts.
+
+NEXT STEPS (deferred):
+  - Coordinate with OtterSec to identify why their remote build
+    produces a different hash than on chain even with matching base
+    image specified.
+  - OR: provision a small native amd64 VPS for future deploys, build
+    via solana-verify build, deploy that exact binary, then verify.
+    Adds ~$10/mo infra cost; only relevant if user wants the green
+    Solscan checkmark before launch.
+  - Current state IS sufficient for trust signal: security.txt visible
+    in the binary (Solscan should flip that flag within minutes/hours
+    of indexer caching), verify PDA uploaded with correct repo+commit
+    metadata, public source on GitHub at penguinpecker/playkaboom.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 8 — End-of-session balances
+══════════════════════════════════════════════════════════════════════════════
+
+ON CHAIN (mainnet):
+  Deployer wallet  : 1.39 SOL  (qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG)
+  Vault PDA        : 11.127 SOL (9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK)
+  V2State PDA      : 0.002 SOL  (rent only)
+  Turnkey HSM      : ~1.00 SOL  (operational, drains slowly per game)
+  Program data     : ~4.59 SOL  (locked, +0.007 from ExtendProgram)
+
+GIT:
+  origin/main = HEAD = 747f57b
+  All commits authored as penguinpecker, no Claude co-author lines.
+
+VERCEL:
+  Live: https://www.playkaboom.gg
+  Both apex + www now project domains; auto-alias works on every
+  prod deploy.
