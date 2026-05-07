@@ -7,7 +7,7 @@
 export const GRID_SIZE = 16;
 export const GRID_COLS = 4;
 export const MIN_MINES = 1;
-export const MAX_MINES = 12;
+export const MAX_MINES = 15;
 export const BPS = 10_000;
 
 export const GAME_EXPIRY_SLOTS = 300;
@@ -17,13 +17,14 @@ export const GAME_EXPIRY_MS = GAME_EXPIRY_SLOTS * APPROX_SLOT_MS;
 export const MIN_BET_LAMPORTS = 1_000_000n; // 0.001 SOL
 
 /** Mine count selector options surfaced in the UI.
- * 8 removed: C(16,8)=12870 is the central peak, would require ~25 SOL vault
- * to underwrite a 0.001 min-bet. With 1/3/5/10/12 the bottleneck shifts to
- * 10 mines (8008× max), which only needs ~16 SOL — friendlier seed for
- * mainnet bring-up. The on-chain program still allows 1..=12 (MIN_MINES /
- * MAX_MINES unchanged); this only affects the UI selector.
+ * Final set [1, 3, 5, 12, 15] picks values from both halves of the symmetric
+ * Pascal-triangle multiplier curve while skipping the central peaks. New
+ * bottleneck = 5 mines (4280× max) requiring ~8.6 SOL vault for a 0.001 min
+ * bet — much friendlier seed than including 8 (~25 SOL) or 10 (~16 SOL).
+ * 15 mines mirrors 1 mine's multiplier (15.68×) but as a high-variance
+ * single-reveal mode (1 safe tile out of 16).
  */
-export const MINE_OPTIONS = [1, 3, 5, 10, 12] as const;
+export const MINE_OPTIONS = [1, 3, 5, 12, 15] as const;
 
 /** Default vault config the house deploys with. Mirrors program caps. */
 export const DEFAULT_HOUSE_EDGE_BPS = 200; // 2.00%
