@@ -234,8 +234,8 @@ export default function LeaderboardPage() {
           <div className="px-6 py-4 text-center border-t border-outline-variant/10">
             <span className="font-headline text-[10px] text-on-surface-variant/40 tracking-widest uppercase">
               {hasChain
-                ? "On-chain · indexed via Helius"
-                : "Local cache fallback — chain index will populate after first settled game"}
+                ? "On-chain · indexed onchain"
+                : "Indexer will populate after first settled game"}
             </span>
           </div>
         </div>
@@ -329,17 +329,6 @@ export default function LeaderboardPage() {
             )}
           </div>
 
-          <div className="bg-gradient-to-br from-secondary-container/20 to-surface-container-high p-6 border border-secondary/10 rounded-lg">
-            <h3 className="font-headline text-xl font-black italic text-on-surface mb-2">
-              STEALTH REWARDS
-            </h3>
-            <p className="font-headline text-xs text-on-surface-variant uppercase tracking-widest mb-4 leading-relaxed">
-              Compete for weekly pools. Top 10 operators receive elite ranking on-chain.
-            </p>
-            <button className="w-full py-3 bg-surface-container-highest border border-outline-variant/30 font-headline text-xs font-bold uppercase tracking-widest hover:border-primary transition-all">
-              JOIN PROTOCOL
-            </button>
-          </div>
         </div>
       </div>
     </div>

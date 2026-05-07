@@ -101,8 +101,8 @@ export default function VerifyPage() {
           </p>
           <p className="text-xs text-on-surface-variant mb-1 font-mono break-all">{sig}</p>
           <p className="text-xs text-on-surface-variant">
-            The Helius webhook hasn't recorded this game yet. Try again in a few seconds, or check
-            the on-chain transaction directly.
+            The indexer hasn't recorded this game yet. Try again in a few seconds, or check the
+            on-chain transaction directly.
           </p>
           <a
             href={txExplorer(sig)}
