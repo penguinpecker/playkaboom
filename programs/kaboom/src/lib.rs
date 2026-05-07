@@ -27,7 +27,7 @@ declare_id!("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 
 pub const GRID_SIZE: u8 = 16;
 pub const MIN_MINES: u8 = 1;
-pub const MAX_MINES: u8 = 12;
+pub const MAX_MINES: u8 = 15;
 pub const BPS: u64 = 10_000;
 pub const GAME_EXPIRY_SLOTS: u64 = 300;
 /// Player can self-close a Won/Lost-but-unsettled game after this window.
