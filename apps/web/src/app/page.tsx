@@ -535,7 +535,7 @@ function SolanaFooter() {
         </a>
         <a
           className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
-          href="https://github.com/penguinpecker/kaboom-solana"
+          href="https://github.com/penguinpecker/playkaboom"
           target="_blank"
           rel="noreferrer"
         >

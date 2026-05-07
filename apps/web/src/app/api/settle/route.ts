@@ -11,6 +11,7 @@ import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 import { fetchPlayerReferrer } from "@/server/player";
+import { indexFreshSignature } from "@/server/inline-ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,6 +47,9 @@ export async function POST(req: NextRequest) {
         }),
       ]);
       logger.info({ player: body.player, sig }, "settle");
+      // Inline-index the fresh sig so /api/activity/global, leaderboard,
+      // player_stats etc. reflect the new state in seconds (cron is 5min).
+      await indexFreshSignature(sig);
       // Game is closed on chain; clear server-side session.
       await deleteSession(body.player);
       return NextResponse.json({ signature: sig, mineLayout: session.mineLayout, verified: true });

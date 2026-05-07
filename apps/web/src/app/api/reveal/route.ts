@@ -16,6 +16,7 @@ import { sendHouseTx } from "@/server/solana";
 import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
+import { indexFreshSignature } from "@/server/inline-ingest";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,6 +66,10 @@ export async function POST(req: NextRequest) {
       });
       signature = await sendHouseTx([revealIx, settleIx]);
       closeInstruction = serializeIx(buildCloseGame({ ctx, player: playerPk }));
+      // Auto-settle on mine — push to indexer immediately so the global
+      // activity feed reflects the loss within seconds rather than waiting
+      // up to 5min for the next cron run.
+      await indexFreshSignature(signature);
     } else {
       signature = await sendHouseTx([revealIx]);
     }
