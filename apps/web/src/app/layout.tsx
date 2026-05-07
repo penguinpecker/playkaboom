@@ -14,8 +14,7 @@ export const metadata: Metadata = {
     default: "PlayKaboom — On-Chain Mines on Solana",
     template: "%s · PlayKaboom",
   },
-  description:
-    "Provably fair 4×4 Mines on Solana. Server-assisted commit-reveal, fully on-chain settlement.",
+  description: "A Fully Onchain Minesweeper Style Game with Community owned Defi Vault!",
   applicationName: "PlayKaboom",
   manifest: "/manifest.json",
   // Favicon + apple-touch-icon resolve via Next.js file-convention from
@@ -30,14 +29,18 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     siteName: "PlayKaboom",
-    title: "PlayKaboom — On-chain Mines on Solana",
-    description: "Provably fair 4×4 Mines. SHA-256 commit-reveal. Built on Solana.",
-    images: [{ url: "/kaboom-logo.png", width: 400, height: 400 }],
+    title: "PlayKaboom",
+    description: "A Fully Onchain Minesweeper Style Game with Community owned Defi Vault!",
+    // Fresh URL (was /kaboom-logo.png) — busts Telegram/X/Discord OG caches
+    // that pinned the older brand mark. The file is identical, just at a
+    // dedicated OG path.
+    images: [{ url: "/og.png", width: 400, height: 400, alt: "PlayKaboom" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "PlayKaboom",
-    description: "On-chain Mines. Provably fair. Solana.",
+    description: "A Fully Onchain Minesweeper Style Game with Community owned Defi Vault!",
+    images: ["/og.png"],
   },
   robots: { index: true, follow: true },
 };
