@@ -39,7 +39,7 @@ export type LeaderboardRow = AllTimeRow | VolumeRow | StreakRow;
 export function useLeaderboardOnchain(view: LeaderboardView) {
   return useQuery({
     queryKey: ["leaderboard", view],
-    refetchInterval: 30_000,
+    refetchInterval: 8_000,
     queryFn: async (): Promise<LeaderboardRow[]> => {
       const res = await fetch(`/api/leaderboard?view=${view}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

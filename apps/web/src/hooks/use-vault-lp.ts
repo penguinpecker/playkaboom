@@ -32,7 +32,7 @@ export function useVaultState() {
   return useQuery<VaultStateResponse>({
     queryKey: ["vault-state"],
     queryFn: apiVaultState,
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   });
 }
 
@@ -44,7 +44,7 @@ export function useLpPosition(wallet?: string) {
       return apiVaultPosition(wallet);
     },
     enabled: !!wallet,
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   });
 }
 

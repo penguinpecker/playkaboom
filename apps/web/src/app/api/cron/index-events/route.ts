@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import { jsonError } from "@/server/api-helpers";
-import { programId, solanaRpc } from "@/server/env";
+import { programId } from "@/server/env";
+import { getConnection } from "@/server/connection";
 import { supabaseAdmin } from "@/server/db/supabase";
 import { ingestTransactions, type IndexableTx } from "@/server/indexer";
 import { logger } from "@/server/logger";
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
     }
 
-    const conn = new Connection(solanaRpc(), "confirmed");
+    const conn = getConnection();
     const program = programId();
     const db = supabaseAdmin();
 
