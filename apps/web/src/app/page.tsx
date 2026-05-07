@@ -524,7 +524,7 @@ function SolanaFooter() {
         © {new Date().getFullYear()} PlayKaboom Kinetic Engine. All Systems Operational.{" "}
         {CLUSTER_LABEL[CLUSTER]}.
       </span>
-      <div className="flex gap-8">
+      <div className="flex flex-wrap gap-6 md:gap-8">
         <a
           className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
           href={accountExplorer(PROGRAM_ID.toBase58())}
@@ -535,12 +535,32 @@ function SolanaFooter() {
         </a>
         <a
           className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
+          href="https://x.com/playkaboom"
+          target="_blank"
+          rel="noreferrer"
+        >
+          X
+        </a>
+        <a
+          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
           href="https://github.com/penguinpecker/playkaboom"
           target="_blank"
           rel="noreferrer"
         >
           GitHub
         </a>
+        <Link
+          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
+          href="/terms"
+        >
+          Terms
+        </Link>
+        <Link
+          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
+          href="/privacy"
+        >
+          Privacy
+        </Link>
       </div>
     </footer>
   );
