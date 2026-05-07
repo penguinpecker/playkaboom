@@ -106,9 +106,13 @@ export function GameRecoveryBanner({ info }: Props) {
           return buildRefundExpired({ ctx, player });
         case "Won":
         case "Lost":
-          // Rent-only reclaim. Cash-out (Won) or implicit forfeit (Lost) already
-          // moved the SOL on-chain. Requires start + 600 slots.
-          return buildCloseUnsettledGame({ ctx, player });
+          // If settle_game already ran, the only thing left to reclaim is rent
+          // — use the regular close_game ix (no `!settled` guard). The
+          // close_unsettled_game ix REQUIRES `!settled` and errors with
+          // GameAlreadySettled (0x1781) on a settled game.
+          return info.settled
+            ? buildCloseGame({ ctx, player })
+            : buildCloseUnsettledGame({ ctx, player });
         case "Expired":
           // refund_expired already ran; just clean up the PDA.
           return buildCloseGame({ ctx, player });
@@ -118,7 +122,7 @@ export function GameRecoveryBanner({ info }: Props) {
           return buildRefundExpired({ ctx, player });
       }
     },
-    [info.status],
+    [info.status, info.settled],
   );
 
   const forceClose = useCallback(async () => {
