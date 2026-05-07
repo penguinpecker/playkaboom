@@ -1,6 +1,5 @@
 import "server-only";
-import { Connection } from "@solana/web3.js";
-import { solanaRpc } from "@/server/env";
+import { getConnection } from "@/server/connection";
 import { ingestTransactions, type IndexableTx } from "@/server/indexer";
 import { logger } from "@/server/logger";
 
@@ -18,7 +17,7 @@ import { logger } from "@/server/logger";
  */
 export async function indexFreshSignature(signature: string): Promise<void> {
   try {
-    const conn = new Connection(solanaRpc(), "confirmed");
+    const conn = getConnection();
     const tx = await conn.getTransaction(signature, {
       maxSupportedTransactionVersion: 0,
       commitment: "confirmed",

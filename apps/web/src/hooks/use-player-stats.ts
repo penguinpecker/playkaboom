@@ -14,7 +14,7 @@ export function usePlayerStats(player: string | null | undefined) {
   return useQuery({
     queryKey: ["playerStats", player, connection.rpcEndpoint],
     enabled: !!player,
-    refetchInterval: 15_000,
+    refetchInterval: 8_000,
     queryFn: async (): Promise<PlayerStatsAccount | null> => {
       if (!player) return null;
       try {
