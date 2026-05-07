@@ -16,8 +16,14 @@ export const GAME_EXPIRY_MS = GAME_EXPIRY_SLOTS * APPROX_SLOT_MS;
 
 export const MIN_BET_LAMPORTS = 1_000_000n; // 0.001 SOL
 
-/** Mine count selector options surfaced in the UI. */
-export const MINE_OPTIONS = [1, 3, 5, 8, 10, 12] as const;
+/** Mine count selector options surfaced in the UI.
+ * 8 removed: C(16,8)=12870 is the central peak, would require ~25 SOL vault
+ * to underwrite a 0.001 min-bet. With 1/3/5/10/12 the bottleneck shifts to
+ * 10 mines (8008× max), which only needs ~16 SOL — friendlier seed for
+ * mainnet bring-up. The on-chain program still allows 1..=12 (MIN_MINES /
+ * MAX_MINES unchanged); this only affects the UI selector.
+ */
+export const MINE_OPTIONS = [1, 3, 5, 10, 12] as const;
 
 /** Default vault config the house deploys with. Mirrors program caps. */
 export const DEFAULT_HOUSE_EDGE_BPS = 200; // 2.00%
