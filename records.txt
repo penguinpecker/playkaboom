@@ -934,3 +934,409 @@ DEFERRED to next session:
   - Mark Sensitive in Vercel.
   - Wire ALERT_WEBHOOK_URL.
 
+
+
+────────────────────────────────────────────────────────────────────────────────
+SESSION LOG: 2026-05-07 — repair_referral implementation + MAINNET LAUNCH
+────────────────────────────────────────────────────────────────────────────────
+
+Big-picture: implemented the deferred repair_referral ix, then took the
+project from devnet-only to a full Solana mainnet bring-up. Program
+deployed to mainnet, vault initialized + funded, MAX_MINES bumped 12→15
+via a successful upgrade, frontend cut over to mainnet on a NEW Vercel
+account, Supabase indexer wiped + auto-repopulating, live game flow
+exercised end-to-end. Phase H (Squads multisig handover) and Helius
+webhooks deferred per user choice. All 11 commits pushed to GitHub
+under penguinpecker authorship.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 1 — repair_referral migration (commit 21d4d83)
+══════════════════════════════════════════════════════════════════════════════
+
+PROGRAM CHANGES (programs/kaboom/src/lib.rs):
+  - New `repair_referral(ctx)` ix — Squads-owner-signed, idempotent.
+    Heals legacy ReferralAccounts whose `referrer` field is
+    Pubkey::default() (created before the 2026-05-07 set_referrer fix).
+    Anchor seed constraint on `referral_account` forces `referrer.key()`
+    to be the canonical PDA-derivation pubkey, so the value written is
+    mathematically constrained — owner cannot inject arbitrary referrer.
+  - New `RepairReferral` accounts struct + `ReferralRepaired` event.
+
+SDK CHANGES (packages/sdk/src/instructions.ts):
+  - `buildRepairReferral({ ctx, owner, referrer })` builder added.
+
+MIGRATION SCRIPT (scripts/repair-referrals.ts):
+  - Auto-discovers broken ReferralAccounts via getProgramAccounts +
+    discriminator filter, then recovers each real referrer pubkey from
+    the original set_referrer tx in chain history. Wraps each repair
+    in a Squads two-step (vaultTransactionCreate → proposalCreate → 2x
+    approve → execute via raw tx for readable logs).
+
+SECURITY REVIEW:
+  - Ran security-review skill: 0 HIGH/MED findings above 80% confidence
+    across 11 Sealevel attack classes + 9 Solana-specific items.
+  - Multiple independent safety layers: Anchor seed math, Squads-only
+    auth gate, default()→canonical state-machine gate, derivedPda
+    sanity check post-recovery in script.
+  - Pashov skills (pashov/skills) inspected — Solidity-only, not
+    applicable to Anchor. Followed coral-xyz/sealevel-attacks instead.
+
+STATUS: ix deployed to mainnet as part of program deploy below; legacy
+devnet ReferralAccounts NOT migrated (devnet retired).
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 2 — Mainnet bring-up (commits 7ed813b, be3cc26, 9b09781, 2226334)
+══════════════════════════════════════════════════════════════════════════════
+
+NEW DEPLOYER WALLET:
+  Pubkey: qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG
+  Path:   keypairs/mainnet-deployer.json (mode 0600, gitignored)
+  Source: imported from Phantom base58 export
+  Funded: 6 SOL initially, topped up to 12+ SOL during MAX_MINES upgrade
+
+MAINNET PROGRAM (commit 7ed813b):
+  Program ID:    9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh
+  Program data:  8TTVAvxig6dQfLiHcDXrXUs8sjiGTAxk6viNPC1y1SJb
+  Keypair:       target/deploy/kaboom-keypair.json (also kept as
+                 keypairs/program-keypair-mainnet.json for safety)
+  Deploy slot:   418152526
+  Bytecode:      658,192 bytes
+  Net cost:      ~4.59 SOL (program-data rent locked)
+  Sig:           4paEXP6xXZzyEU4K2FizE7e9XD1zBWCsAVQ5G58KUXqsu3Facfyrhmbn62b9ykm5B1b6oJCii73uhrVbC75q8Y1U
+  Auth:          deployer (NOT yet transferred to Squads — Phase H deferred)
+
+  Devnet program 4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT remains live
+  on devnet. declare_id! in lib.rs now hardcoded to mainnet ID; building
+  for devnet would need a feature-flag swap (not done — devnet frozen).
+
+DEPLOY GOTCHA:
+  Initial attempt with default mainnet RPC stalled at ~8% (rate-limited).
+  Killed; recovered 4.58 SOL buffer (HJ4Cmsin… — wait wrong, that was
+  the upgrade buffer); successful retry used Alchemy mainnet WITHOUT
+  --use-rpc flag (TPU mode). Completed in ~3 min vs 22+ min on the
+  rate-limited path.
+
+VAULT INIT (Phase C, scripts/init-vault-mainnet.ts):
+  Vault PDA:     9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK
+  Sig:           5Hh47xesoZcyhC35T1ddqapm3hbE5KyffuX29XGsaSog4H1XGfyXhkyPkakSL6NLJAuBva3jMEPQNfLfwLjuKs9X
+  Owner:         qouUoXT… (deployer, temp until Phase H)
+  House auth:    7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp (Turnkey HSM)
+  Treasury:      qouUoXT… (deployer, temp until Phase H)
+  Config:        houseEdgeBps=200, maxBetBps=200, maxPayoutBps=5000
+  Cost:          ~0.004 SOL (vault PDA rent)
+
+  Script learned: web3.js's connection.confirmTransaction uses
+  signatureSubscribe via WS, which Alchemy doesn't expose. Replaced
+  with poll-based confirm via getSignatureStatuses (90s deadline,
+  1.5s cadence). Pattern captured in init-vault-mainnet.ts and reused
+  in init-v2-mainnet.ts and rotate-to-squads-mainnet.ts.
+
+VAULT V2 INIT (Phase E2, scripts/init-v2-mainnet.ts):
+  V2State PDA:   6cKDKGz4qEhJRWJUjEFcVyvKGtYXD7duy2fEkLkaM3zb
+  Sig:           5yaUnmHcN6hifgoPxRtKpULcGhHGE1Dhz5Gu61SkY9hDcKvNZ1yKJkQpsPs41BswV3KZusicagCQR3Ho73xcJERK
+  Vault assets:  1.10 SOL (1 SOL anti-inflation seed satisfied)
+  Cost:          ~0.002 SOL (V2State rent)
+
+VAULT FUNDING:
+  Initial seed:  1 SOL (sent to vault PDA before init_v2)
+  Top-up:        +10 SOL transferred from deployer (after upgrade refund)
+  Final vault:   11.10 SOL
+  Sig:           57X431EfeoiVdvPxyTYU5ZobAZVigsU5QWFReQ27hGrZDGCvCDu6ABEdP3KnaUP3vGGDjxitjyjuhZCQHKE93VfE
+  Rationale:     supports MIN_BET (0.001 SOL) across [1,3,5,12,15] mine
+                 options; bottleneck is m=5 needing 8.57 SOL for the
+                 worst-case payout of 4.28 SOL.
+
+TURNKEY HSM FUNDING:
+  Pubkey:        7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp
+  Funded:        1 SOL transferred from deployer
+  Sig:           DSfuDjyTYfNYxdLkjEjnpV7VK7YTSu59uHPsTmNFypmignXJeLuy8Ksv58C9TTbFDDKuDV4rQZiv6BGqXwqcLxk
+  Bug caught:    initial play hit "Attempt to debit an account but
+                 found no record of a prior credit" because Turnkey
+                 wallet had 0 SOL. Turnkey is the fee payer for every
+                 reveal_tile + settle_game; needs ongoing float.
+                 Per-game cost: ~0.00001 SOL at base fees, ~0.0001 SOL
+                 with priority. 1 SOL ≈ 10k–100k games depending on
+                 congestion.
+
+CSP FIX (commit be3cc26):
+  Added https://*.walletconnect.{com,org} + wss://*.walletconnect.{com,org}
+  to connect-src in apps/web/next.config.mjs. Privy's wallet picker
+  fetches the WC explorer-api at runtime even when WC is "unused" by
+  the app — the 2026-05-06 CSP audit removed these as unneeded but
+  Privy still hits them. /play wallet UI broke without these.
+
+UI MINE-OPTION CHANGES:
+  Original: [1, 3, 5, 8, 10, 12]
+  Step 1 (commit 9b09781): drop 8 → [1, 3, 5, 10, 12]
+    Rationale: C(16,8) = 12870 (central peak) requires ~25 SOL vault
+    to underwrite a 0.001 min-bet. With 8 dropped, bottleneck shifts
+    to m=10 needing only ~16 SOL.
+
+  Step 2 (commit 2226334): drop 10, add 15 → [1, 3, 5, 12, 15]
+    Required program upgrade: pub const MAX_MINES bumped 12→15.
+    Rationale: m=15 mirrors m=1 multiplier (15.68×) by Pascal-triangle
+    symmetry — C(16,15) = C(16,1) = 16. New bottleneck = m=5 (4280×)
+    needing only ~8.6 SOL vault. Final vault target 11 SOL leaves 30%
+    headroom. Frontend MINE_OPTIONS in packages/shared/src/constants.ts
+    + on-chain MAX_MINES in programs/kaboom/src/lib.rs both bumped.
+
+PROGRAM UPGRADE (MAX_MINES 12→15):
+  Buffer:        HJ4Cmsin9rtXQAtTXL5iFtFPDCWNzEXHZLH9aX46GkQa
+  Upgrade slot:  418212360
+  Sig:           qjhWWuxpi25NSSTUYBywDjjLJ71JcR3JZuQ8nfhtsQWeSqJGvk6LULnKrguwzNNmSCUESsgvaDnu9LwACGC7NHo
+  Bytecode:      658,192 bytes (unchanged size; constant change is u8
+                 inline so no growth → no ExtendProgram needed)
+  Net cost:      ~0.005 SOL (buffer rent fully refunded after deploy)
+  Authority:     unchanged (deployer)
+
+  Lessons applied from devnet upgrade flow:
+    - Used `solana program write-buffer` then `solana program upgrade`
+      separately (not combined `solana program deploy`) — gives more
+      control over the buffer pubkey for recovery.
+    - TPU mode (no --use-rpc) for the buffer write to avoid RPC limits.
+
+LIVE GAME EXERCISED:
+  Player wallet (Privy embedded): 5pc1YbNacyAgofyZy19ppty3iyQJo3xmbRMVeSvQCsD2
+  Multiple games settled via /api/commit → /api/reveal → /api/settle.
+  Verified end-to-end: bet → reveal → cash_out → settle with both
+  win and loss paths working.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 3 — Vercel account migration (across multiple commits)
+══════════════════════════════════════════════════════════════════════════════
+
+OLD ACCOUNT (penguinpeckers-projects):
+  Project:      playkaboom (prj_xdZ8QBpCltSZaZhIAUxJXaWdjS3i)
+  Team:         team_mZnsyFSPlnOPOnUETOisYQQx
+  Status:       dormant (project still exists, no domain, no aliases)
+
+NEW ACCOUNT (kaboomweb3-6280s-projects):
+  Project:      playkaboom (prj_WMXQYAhUc6aEWaAiDjvVwFBvP8cW)
+  Team:         team_eFZwIe4y01ydgOP8AZd5BSf5
+  Username:     kaboomweb3-6280
+  Created via:  vercel project add (CLI) under personal access token
+
+ENV VARS — 20 total, ALL marked Sensitive:
+  Verified via Vercel API (decrypt=false) that all 20 prod env vars
+  show type="sensitive". Mainnet-specific overrides applied during
+  cutover:
+    NEXT_PUBLIC_SOLANA_CLUSTER  = mainnet-beta
+    NEXT_PUBLIC_SOLANA_RPC      = Alchemy mainnet (same -j7ptOh-… key
+                                                    that worked on devnet)
+    SOLANA_RPC                  = same as above
+    SOLANA_WS                   = wss://solana-mainnet.g.alchemy.com/...
+    PROGRAM_ID                  = 9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh
+    NEXT_PUBLIC_PROGRAM_ID      = same
+    TURNKEY_HOUSE_PUBKEY        = 7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp
+  Other 13 (Privy, Supabase, Turnkey API, etc.) carried over identical
+  values from .env.local via batch upload using POST /v10/projects/
+  {id}/env?upsert=true with type=sensitive in the body.
+
+DOMAIN MIGRATION:
+  - Removed www.playkaboom.gg + playkaboom.gg aliases from old project
+  - Removed playkaboom.gg from old team via vercel domains rm
+  - Added playkaboom.gg to new team's playkaboom project — Vercel
+    accepted without TXT verification (existing DNS at the third-party
+    registrar still points to Vercel infra)
+  - vercel alias set for both apex + www → new latest deploy
+  - Total downtime: ~30 seconds between alias removal and re-aliasing
+
+DEPLOYMENT PROTECTION:
+  New account defaulted to ssoProtection={"deploymentType":
+  "all_except_custom_domains"} which 401'd the dpl URL. Custom domain
+  WAS allowed but I patched via API to ssoProtection=null to also
+  unblock the dpl URL for diagnostics. PATCH endpoint:
+  /v9/projects/{id}?teamId={team}.
+
+TOKEN ROTATION REMINDER:
+  Vercel CLI prints the personal access token in suggested
+  follow-up commands at the end of every deploy. The original token
+  <redacted-vercel-token> therefore appears in chat scrollback multiple times.
+  User was advised to rotate it post-launch. Tracked separately.
+
+ALIAS QUIRK NOTED:
+  vercel --prod --yes does NOT consistently roll the
+  www.playkaboom.gg alias to the newest "Production" deploy on this
+  project. Manual re-alias via `vercel alias set <dpl-url>
+  www.playkaboom.gg` needed after every prod deploy. Recurring
+  workaround until root cause found.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 4 — Supabase indexer wipe + repopulation (no commit; one-shot ops)
+══════════════════════════════════════════════════════════════════════════════
+
+WIPE (per user "erase all the testnet data"):
+  All 12 indexer tables truncated via service_role REST API DELETE
+  with the pk-not-null filter trick. Total wiped: 165 rows.
+    games                    25 → 0
+    referral_events           2 → 0
+    processed_events         69 → 0
+    lp_actions               21 → 0
+    vault_unit_value_history 22 → 0
+    player_stats              7 → 0
+    referrals                 2 → 0
+    lp_positions              5 → 0
+    game_sessions             1 → 0  (one in-flight session lost; player
+                                       reported game already settled)
+    referral_visits           1 → 0
+    referral_codes            2 → 0
+    cron_indexer_state        2 → 0  (deleted both old program-id rows;
+                                       indexer recreates on next tick)
+
+REPOPULATION:
+  - First mainnet game (slot 418213231) ingested by inline-ingest path.
+  - Cron auto-resumed from a fresh cron_indexer_state row on next tick
+    (every 5 min via .github/workflows/index-events.yml).
+  - As of session end, 4 mainnet games visible in /api/activity/global.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 5 — UX + perf changes (commits 52dc407, dec2cc7, e39ae61, 4586a6d)
+══════════════════════════════════════════════════════════════════════════════
+
+UI COPY (commits dec2cc7, 52dc407):
+  - Home hero tagline replaced with "A Fully Onchain Minesweeper Style
+    Game with Community owned Defi Vault!"
+  - "STEALTH REWARDS" placeholder card removed from /leaderboard (the
+    "JOIN PROTOCOL" button was a no-op anyway).
+  - User-facing "Helius" copy replaced with neutral "indexer" wording
+    on /leaderboard subtitle + /verify error state.
+
+DEAD-LINK FIXES (commit e39ae61):
+  - Footer GitHub link in apps/web/src/app/page.tsx + Footer.tsx was
+    pointing to a stale repo name (kaboom-solana). Both fixed to
+    penguinpecker/playkaboom.
+
+INLINE INGEST (commit 52dc407):
+  - New apps/web/src/server/inline-ingest.ts: fetches a freshly-
+    confirmed signature from RPC and runs it through ingestTransactions
+    inline so /api/activity/global reflects new state in seconds rather
+    than waiting up to 5 min for the next cron tick.
+  - Wired into /api/settle (cash_out path) and /api/reveal (auto-settle
+    on mine). Best-effort + idempotent — cron still catches up if this
+    errors. ingestTransactions's processed_events dedup guarantees
+    no double-counting.
+  - Effect: live feed lag dropped from ≤ 5 min to ~5–10 s end-to-end
+    (~1–2 s ingest + 5 s frontend poll cadence).
+
+POLLING CADENCE (commit 4586a6d):
+  - use-leaderboard.ts:        30s → 8s
+  - use-player-stats.ts:       15s → 8s
+  - use-vault-lp.ts (state+pos): 30s → 10s
+  No CU impact on Alchemy — these are Supabase queries, not RPC calls.
+
+CONNECTION REUSE (commit 4586a6d):
+  - inline-ingest.ts and the cron index-events route both switched
+    from `new Connection(solanaRpc(), "confirmed")` to the cached
+    `getConnection()` singleton from apps/web/src/server/connection.ts.
+    Saves the TLS handshake on every cron tick / settle call when the
+    serverless instance is warm.
+
+LEGAL PAGES (commit e39ae61):
+  - /terms — Terms of Service appropriate for a non-custodial on-chain
+    game (no KYC, on-chain data permanence, third-party processor list,
+    user rights).
+  - /privacy — Privacy policy covering wallet address handling, Privy
+    optional email, IP for rate limiting, indexer mirroring.
+  - X (@playkaboom) link added to both footers.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 6 — Deferred / explicit non-goals
+══════════════════════════════════════════════════════════════════════════════
+
+PHASE H — Squads handover (ALL of these still pending):
+  - vault.owner is currently the deployer key (qouUoXT…); should rotate
+    to the Squads V4 vault PDA at 464Fe… via:
+      1. Deployer-signed atomic 3-ix tx:
+           update_vault(new_treasury=Squads vault)
+         + allowlist_add(Squads vault)
+         + propose_owner(Squads vault)
+         (script ready at scripts/rotate-to-squads-mainnet.ts)
+      2. Squads UI accept_ownership (deployer NOT a member of Squads
+         multisig; needs members to manually create + approve the tx).
+         accept_ownership ix data: discriminator ac172b0deed55596,
+         accounts [vault PDA writable, Squads vault PDA signer].
+      3. solana program set-upgrade-authority CLI command to hand the
+         BPF upgrade authority to Squads.
+  - Reason for deferral: user wanted to avoid 2-of-2 ceremony for every
+    config tweak during bring-up. Squads handover happens at the end
+    once the system is stable and tuned.
+
+SQUADS MAINNET INFO (verified on chain):
+  Multisig PDA:     H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm
+  Multisig owner:   SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf (V4 program)
+  Vault[0] PDA:     464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5 (System-owned)
+  Threshold:        2 of 2
+  Members:
+    1. 6wvvcCZ44f9AeJPC7k1VKMNdexCUsuwpaw1sZjyktGr1 (Initiate+Vote+Execute)
+    2. EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG (Initiate+Vote+Execute)
+  IMPORTANT: deployer (qouUoXT…) is NOT a member. To execute the
+  rotation Phase H, members 1 and 2 must perform the Squads UI flow.
+
+ALCHEMY WEBHOOKS — explicitly skipped:
+  Alchemy free tier does not expose Solana webhooks (Notify is EVM-
+  only). Confirmed by user inspection of dashboard. Recommended
+  alternative: Helius webhooks (helius.dev free tier supports Solana,
+  receiver code already named /api/webhook/helius — slots in zero-
+  code-change). User chose to defer. Current setup (5-min cron + inline
+  ingest on settle/reveal) is genuinely fine for early mainnet load
+  where the operator is the main player.
+
+WS account-subscribe for vault state — deferred. Would replace the
+10s LP-state polling with sub-second updates. Adds browser WS
+lifecycle complexity. Worth doing once LP activity grows.
+
+REPAIR-REFERRALS migration on mainnet — N/A. The only legacy broken
+ReferralAccounts are on devnet, which is now retired. Mainnet players
+all use the post-fix set_referrer code path so no broken state ever
+exists.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 7 — Final balances + state at session end
+══════════════════════════════════════════════════════════════════════════════
+
+ON-CHAIN (mainnet):
+  Deployer wallet:  ~2.40 SOL  (qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG)
+  Vault PDA:        ~11.10 SOL
+  V2State PDA:      ~0.002 SOL  (rent only)
+  Turnkey HSM:      ~1.00 SOL   (operational float)
+  Program data:     ~4.58 SOL   (locked, non-recoverable until program closed)
+  Total SOL committed: ~19 SOL  (~5 SOL refundable from deployer reserves
+                                 if/when mainnet ops wind down)
+
+GIT STATE:
+  Branch:    main
+  Origin:    https://github.com/penguinpecker/playkaboom
+  Pushed:    dd66d1b (HEAD)
+  All 11 commits authored as penguinpecker
+  (115368663+penguinpecker@users.noreply.github.com), no Claude
+  co-author line on any commit.
+
+VERCEL:
+  Account:   kaboomweb3-6280
+  Project:   playkaboom (prj_WMXQYAhUc6aEWaAiDjvVwFBvP8cW)
+  Live:      https://www.playkaboom.gg
+  Latest:    dd66d1b at deploy gw2bvjz2m (or whatever the most recent
+                   `vercel ls` row shows — alias may need force-set)
+
+SUPABASE:
+  Project:   vrxeqgynejlnmwsifvml (Tokyo, unchanged from devnet era)
+  Tables:    all 12 indexer tables now mainnet-only; backfilling from
+             cron + inline-ingest as players settle games.
+
+OPEN UI/UX:
+  - One-time Squads rotation (Phase H) when ready.
+  - Optional Helius webhook integration to eliminate the 5-min cron
+    fallback lag for any third-party program activity.
+  - Add ALERT_WEBHOOK_URL coverage for Turnkey HSM low-balance (the
+    cron infrastructure already exists; just needs the threshold check
+    + URL wired in Vercel env).
+  - Make /logs page show GLOBAL games (currently localStorage-only,
+    per-browser-session). Could reuse /api/activity/global with
+    different limit + filtering. Not urgent.
