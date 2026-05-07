@@ -127,8 +127,7 @@ function HeroSection() {
           DOMINATE <span className="text-primary">THE GRID</span>
         </h1>
         <p className="font-body text-sm sm:text-base lg:text-lg text-on-surface-variant max-w-2xl mb-8 sm:mb-12 px-2">
-          On-chain Mines on a 4×4 grid. Provably fair via SHA-256 commit-reveal. Embedded wallet
-          auto-sign. 2% house edge — every other lamport flows back to LP depositors.
+          A Fully Onchain Minesweeper Style Game with Community owned Defi Vault!
         </p>
         {/* Mini stat strip — no auth needed, builds trust above the fold */}
         <div className="grid grid-cols-3 gap-2 sm:gap-4 mb-8 sm:mb-12 w-full max-w-md">
