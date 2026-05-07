@@ -12,7 +12,7 @@ kaboom = "4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT"
 kaboom = "4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT"
 
 [programs.mainnet]
-kaboom = "Kab1MainnetProgram1111111111111111111111111"
+kaboom = "9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh"
 
 [registry]
 url = "https://api.apr.dev"
