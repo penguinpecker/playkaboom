@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { formatEther } from "@/lib/compat";
 import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
-import { CLUSTER, CLUSTER_LABEL, accountExplorer, PROGRAM_ID } from "@/lib/cluster";
+import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
 import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 
@@ -15,7 +15,6 @@ export default function HomePage() {
       <FeatureMatrix />
       <ReactiveModules />
       <RealTimeIntel />
-      <SolanaFooter />
     </>
   );
 }
@@ -514,54 +513,5 @@ function RealTimeIntel() {
         </div>
       </div>
     </section>
-  );
-}
-
-function SolanaFooter() {
-  return (
-    <footer className="w-full flex flex-col md:flex-row justify-between items-center px-4 sm:px-6 lg:px-12 py-8 gap-4 bg-surface-container-lowest border-t border-outline-variant/15">
-      <span className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
-        © {new Date().getFullYear()} PlayKaboom Kinetic Engine. All Systems Operational.{" "}
-        {CLUSTER_LABEL[CLUSTER]}.
-      </span>
-      <div className="flex flex-wrap gap-6 md:gap-8">
-        <a
-          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
-          href={accountExplorer(PROGRAM_ID.toBase58())}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Explorer
-        </a>
-        <a
-          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
-          href="https://x.com/playkaboom"
-          target="_blank"
-          rel="noreferrer"
-        >
-          X
-        </a>
-        <a
-          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
-          href="https://github.com/penguinpecker/playkaboom"
-          target="_blank"
-          rel="noreferrer"
-        >
-          GitHub
-        </a>
-        <Link
-          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
-          href="/terms"
-        >
-          Terms
-        </Link>
-        <Link
-          className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant hover:text-tertiary transition-colors"
-          href="/privacy"
-        >
-          Privacy
-        </Link>
-      </div>
-    </footer>
   );
 }
