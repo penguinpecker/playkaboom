@@ -1641,3 +1641,247 @@ VERCEL:
   Live: https://www.playkaboom.gg
   Both apex + www now project domains; auto-alias works on every
   prod deploy.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 9 — 2026-05-08 SESSION 2: Phase H Squads handover + post-handover UX fixes
+══════════════════════════════════════════════════════════════════════════════
+
+PHASE H — full multisig control over kaboom
+
+  Squads V4 2-of-2 multisig set up via app.squads.so (mainnet).
+    Config account     : H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm
+    Vault PDA (signer) : 464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5
+    Member 1           : 6wvvcCZ44f9AeJPC7k1VKMNdexCUsuwpaw1sZjyktGr1
+    Member 2           : EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG
+    Threshold 2/2, time_lock 0, config self-controlled.
+
+  D1 (atomic 3-ix tx): scripts/rotate-to-squads-mainnet.ts
+    - update_vault(treasury = 464Fe…)
+    - allowlist_add(464Fe…)
+    - propose_owner(464Fe…)  → vault.pending_owner = 464Fe…
+    Vault.owner still deployer at end of D1.
+
+  D2 (Squads-signed accept_ownership):
+    Built via Squads UI → Tx Builder → Custom instruction.
+    Program ID 9Xip2L…, 2 accounts:
+      Account 1: 9qDnHB… vault state, Writable=ON, Signer=OFF
+      Account 2: 464Fe… new owner, Signer=ON, Writable=OFF
+    Discriminator: hex ac172b0deed55596 → BASE58 VnVctNXAKG1.
+    Tx 4SxxC3XTm63YLejnU7VZdST8FBfT7Q93Q8p6HzTXPTQk7dntph8AL3uYNpnwNxmGs5tDwMKv4jzCzBVdEitFSp1B.
+    Verified post-state:
+      vault.owner          = 464Fe…  ✓
+      vault.pending_owner  = 1111…   ✓ (cleared)
+      vault.treasury       = 464Fe…  ✓
+      vault.allowlist      = [464Fe…] ✓
+      vault.house_authority= 7exwTW… (Turnkey HSM, unchanged — game-only)
+      Vault balance        = 11.127 SOL untouched ✓
+
+  D3 (deployer-signed CLI):
+    solana --keypair ~/Projects/playkaboom/keypairs/mainnet-deployer.json \
+      --url https://api.mainnet-beta.solana.com \
+      program set-upgrade-authority 9Xip2L… \
+      --new-upgrade-authority 464Fe… \
+      --upgrade-authority ~/Projects/playkaboom/keypairs/mainnet-deployer.json \
+      --skip-new-upgrade-authority-signer-check
+    First attempt failed: "Attempt to debit ... no record of a prior credit"
+    because CLI defaulted fee payer to ~/.config/solana/id.json (empty).
+    Fixed by passing --keypair globally before the subcommand, NOT
+    --fee-payer (set-upgrade-authority doesn't accept --fee-payer).
+    Verified: solana program show shows Authority = 464Fe….
+    Cost: ~5000 lamports.
+
+THE LANDMINE: Squads "Raw data" tab expects BASE58, not hex
+  First D2 attempt used hex `ac172b0deed55596` in the Raw field — Squads
+  silently sent garbage instruction data, execute failed with no readable
+  error. Browser console showed `Error: Non-base58 character` from the
+  Squads UI's own decoder. Re-encoding to base58 (`VnVctNXAKG1`) made the
+  next execute land cleanly.
+  Burned 30 min before checking devtools. Lesson saved as memory:
+  feedback_squads_raw_data_base58.md. The Buffer tab takes base64
+  (`rBcrDe7VVZY=`) for the same bytes.
+
+THE SECOND LANDMINE: 10 SOL "seed" lockup wasn't called out before D2
+  Pre-D2, deployer alone could call withdraw_to_treasury and pull all
+  vault SOL. Post-D2, that ix needs Squads 2/2. The 10 SOL anti-inflation
+  seed (deposited at initialize_v2, tracked as v2.seed_units) is NOT
+  withdrawable via house_complete_withdraw — no ix decrements seed_units.
+  Multisig can still pull it via withdraw_to_treasury since that ix
+  doesn't check seed/obligations/LP units, only rent floor — but that
+  also drains other LPs' funds. User flagged this as a process gap; in
+  future, audit each "what becomes hard / impossible after handover"
+  before recommending a multisig rotation.
+
+LIVE LP BREAKDOWN (mainnet, post-D3):
+  Vault PDA balance        : 11.127 SOL
+  total_units              : 1,100,990,199
+    seed_units (locked)    : 1,000,000,000  →  10.10 SOL  (90.83%)
+    house_units (yours)    :   100,000,000  →   1.01 SOL  ( 9.08%)
+    user LP units (others) :       990,199  →   0.01 SOL  ( 0.09%)
+  Obligations (in-flight)  : 0 SOL
+  Withdrawable as house LP : ~1.01 SOL via Squads 2/2 →
+    house_request_withdraw → 3-day cooldown → house_complete_withdraw
+
+ECONOMICS / EV ANALYSIS
+
+  House edge mathematically locked at 2.00% per dollar wagered, every
+  (mine_count, cashout_K) combo. EV(player) = bet × 0.98, edge always
+  2.00%, regardless of strategy. Verified via direct computation of
+  calc_multiplier output across all 5 mine options × all reasonable K.
+
+  Lifetime stats (~11h since deploy, 14 games):
+    total_wagered  : 0.0402 SOL ($6.80)
+    total_payouts  : 0.0246 SOL
+    GGR (realized) : 0.0156 SOL ($2.65)
+    Realized hold% : 38.7%   ← variance, not signal
+  Monte Carlo confirms convergence: at 100K games, hold lands in
+  +1.66% to +2.36% range. 14 games is statistical noise.
+
+  Industry context (Stake, BC, Roobet, Rollbit):
+    - Stake/BC Mines edge: 1.00%. PlayKaboom at 2.00% = 2× market.
+    - LP APY in this category: 8–25% steady-state at healthy volume.
+    - Floor for "real business": ~$100K/day handle → ~200 DAU each
+      wagering ~$500.
+    - Most public crypto-casino blowups are exploits, not variance —
+      because operators cap max payout at 0.5–1% of vault per round.
+
+  CRITICAL CONFIG CONCERN (NOT YET FIXED, queued for next 2/2 vote):
+    max_payout_bps = 5000 → single round can pay 50% of vault.
+    Worst case: 12 mines × 4 reveals = 1,784× multiplier; max bet
+    by payout cap is 0.0031 SOL → 5.56 SOL payout = 50% vault drain
+    on one win. P(trigger per attempt) = 0.055%.
+    Recommendation: drop max_payout_bps from 5000 → 100 (1% of
+    vault per round), and consider raising min_health_bps from
+    1000 → 2000 to auto-pause earlier on stress. Both via Squads
+    2/2 update_v2_config / update_vault.
+
+WEB / UX FIXES (commits b8fc4db, ae5bbc4, c0b6a57, 65d9441, 59fa469)
+
+  Mobile responsive overhaul:
+    - Grid container: p-8 → p-3 sm:p-6 lg:p-8 (tiles ~25% larger)
+    - Tile gap: 4 → 1.5 mobile → 4 desktop
+    - Bottom info panel: stacks vertically on mobile, EXIT button
+      full-width
+    - Top chip header: flex-wrap, smaller chips on mobile
+    - Navbar: h-14 sm:h-16, px-3 sm:px-6, logo 36/48px, hide
+      notifications icon on mobile
+    - Removed redundant mobile stat chips (PnL/Games/Health) from
+      /play hero — same data already in Grid panel + nav bell
+
+  Double footer fixed:
+    - HomePage rendered both layout's <Footer /> AND a local
+      <SolanaFooter /> → two footers stacked. Removed the inline
+      one; global Footer covers all pages.
+
+  WITHDRAW button + modal:
+    - New button next to DEPOSIT in profile/wallet modal.
+    - Validates dest as base58 32-byte pubkey, blocks self-send,
+      reserves 10_000 lamports for tx fee on MAX.
+    - Initial bug: used useStandardSignTransaction (external wallet
+      hook) → `n.serializeMessage is not a function`. Fixed by
+      switching to useSignTransaction (Privy embedded wallet hook).
+      use-vault-lp.ts:56 already documents this exact failure mode.
+    - Two-stage UX: form → success screen with full sig, "VIEW ON
+      EXPLORER" button (Solscan), Done button.
+    - Success persists to localStorage via lib/wallet-history.ts;
+      /logs page polls and shows entries under new "MY WALLET
+      ACTIVITY" section above the global combat log. Wallet
+      transfers aren't kaboom-program ixs, so the on-chain Helius
+      indexer doesn't see them — local-only ledger is the right
+      tradeoff.
+
+  Game-flow fixes:
+    - Resume banner: was lingering after RESUME because info.active
+      stays true for the full GameSession lifetime; the 15s server
+      poll wouldn't run again immediately. Banner now hides the
+      instant store status flips to playing/starting/cashing.
+    - ENGAGE button: was disabled when !authenticated, blocking the
+      handleStart() click that already routes to login(). Removed
+      !authenticated from disabled list; vault-capacity guards now
+      only kick in when authenticated.
+    - MAX bet button: added next to 1/2 / 2X. Sets bet to 99% of
+      min(maxBet, walletBalance) so fee + rounding don't push past
+      BetExceedsMax.
+    - Mine density grid was grid-cols-6 with only 5 options; fixed
+      to grid-cols-5.
+
+VERCEL ACCOUNT MIGRATION
+
+  Old account: penguinpecker1-4937 (single user account)
+  New account: kaboomweb3-6280 (intended production owner)
+  Both accounts had a project named `playkaboom` linked to the same
+  GitHub repo. Old account was auto-deploying every push but no longer
+  serving the live domain. New account had the domain (playkaboom.gg)
+  but no git connection — last manual deploy 10h before this session.
+  All my recent git pushes were silently going to the old account.
+
+  Steps taken this session:
+    1. User generated full-account token on new account at
+       vercel.com/account/tokens. Token stored in:
+       /Users/pp/Projects/playkaboom/.env.local  as VERCEL_TOKEN=
+       (root .env.local; gitignored). NEVER commit; refer by var
+       name only.
+    2. `vercel link --project playkaboom --token=$VERCEL_TOKEN`
+       re-pointed local .vercel/project.json at the new account's
+       project (same projectId, different team auth).
+    3. Verified all 20 production env vars present on new account
+       (TURNKEY_*, SUPABASE_*, PRIVY_APP_SECRET, SESSION_ENC_KEY,
+       HELIUS_WEBHOOK_AUTH, CRON_SECRET, etc.).
+    4. Manual deploys via `vercel --prod --token=$VERCEL_TOKEN`
+       used after each git push to land changes on the new account.
+       Latest as of writing: deploy `playkaboom-rbji0whkh-…` ready,
+       aliased to playkaboom.gg.
+    5. User then deleted the old account's playkaboom project
+       (per their commitment).
+
+  PENDING: git auto-deploy
+    `vercel git connect https://github.com/penguinpecker/playkaboom.git`
+    failed with HTTP 400: "You need to add a Login Connection to your
+    GitHub account first." User added the connection at
+    vercel.com/account/login-connections but the API still rejected.
+    Next attempt: complete the GitHub App install flow at
+    github.com/settings/installations — Vercel app must explicitly
+    have access to penguinpecker/playkaboom repo. After that, retry
+    `vercel git connect`.
+    Until then: every push needs `vercel --prod --token=$VERCEL_TOKEN`
+    chaser to land on the new account.
+
+GIT (end of this session):
+  origin/main HEAD = c0b6a57 "feat(web): withdraw confirmation screen +
+    wallet-activity log"
+  Recent commits ordered (oldest → newest):
+    59fa469  fix(web): mobile overflow + tighter header on /play
+    65d9441  feat(web): WITHDRAW button + modal in wallet panel
+    b8fc4db  fix(web): resume banner timing + connect-wallet click +
+             remove duplicate footer
+    ae5bbc4  fix(web): MAX bet button + withdraw signs via embedded-
+             wallet hook
+    c0b6a57  feat(web): withdraw confirmation screen + wallet-activity
+             log
+
+ON-CHAIN DELTAS THIS SESSION (mainnet):
+  Vault PDA              : 11.12713896 → 11.127427 SOL (~+0.0003 from
+                           game settles during testing)
+  Squads vault PDA       : 0.04001 SOL (was) → 1.14 SOL (post-topup) →
+                           0.752 SOL after D2 fees
+  Deployer wallet        : 1.39077897 → 1.39077397 SOL (D3 fee + a few
+                           localhost call sigs)
+
+OUTSTANDING WORK / FOLLOW-UPS
+
+  IMMEDIATE (next 2/2 multisig vote, when convenient):
+    - update_vault to drop max_payout_bps 5000 → 100 (single biggest
+      vault-survival risk fix).
+    - update_v2_config to raise min_health_bps 1000 → 2000.
+    - Optional: drop house_edge_bps 200 → 100 to match Stake/BC if
+      competing on price.
+
+  LATER:
+    - Set Squads time_lock from 0 → 24h so a compromised member key
+      gives you a reaction window.
+    - Wire git auto-deploy to new Vercel account (see PENDING above).
+    - Verified-program flag on Solscan: build hash mismatch deferred
+      from PART 7; needs amd64 VPS or OtterSec coordination.
+    - Cross-device sync for /logs MY WALLET ACTIVITY: would need a
+      `wallet_actions` Supabase table + /api/wallet-activity endpoint
+      if the user wants withdrawals visible from any device.
