@@ -5,6 +5,7 @@ export type ModalKey =
   | "wallet"
   | "profile"
   | "deposit"
+  | "withdraw"
   | "fair"
   | "referral"
   | "settings"
