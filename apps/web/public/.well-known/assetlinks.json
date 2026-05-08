@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "gg.playkaboom.twa",
+      "sha256_cert_fingerprints": [
+        "A0:EC:E0:2E:7B:3C:C6:1A:18:79:ED:0F:2C:17:31:7F:C6:82:42:3B:7B:53:A8:17:90:87:C0:67:28:C7:A3:87"
+      ]
+    }
+  }
+]
