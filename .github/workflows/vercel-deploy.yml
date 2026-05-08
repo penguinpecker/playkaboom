@@ -49,14 +49,13 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      - name: Pull Vercel environment (production)
-        run: vercel pull --yes --environment=production
-
-      - name: Build (prebuilt for upload)
-        run: vercel build --prod
-
-      - name: Deploy prebuilt artifact to production
+      # Upload source + let Vercel build server-side. Mirrors the
+      # working manual `vercel --prod` flow exactly. Tried prebuilt
+      # (vercel build → vercel deploy --prebuilt) but it fails on the
+      # /api/activity/global page-data collection because the local
+      # next-build step doesn't have Vercel's runtime context.
+      - name: Deploy to production
         run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt --prod)
+          DEPLOY_URL=$(vercel deploy --prod --yes)
           echo "Deployed to: $DEPLOY_URL"
           echo "::notice title=Deploy::$DEPLOY_URL"
