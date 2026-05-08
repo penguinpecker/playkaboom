@@ -2,8 +2,16 @@
 import { useEffect, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
-import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import {
+  useSolanaWallets as useWallets,
+  useStandardSignTransaction,
+} from "@privy-io/react-auth/solana";
+import {
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 import { ModalShell } from "./ModalShell";
 import { useModal } from "@/hooks/useModal";
 import { useToast } from "@/hooks/useToast";
@@ -21,6 +29,8 @@ export function ModalRoot() {
       return <ProfileModal />;
     case "deposit":
       return <DepositModal />;
+    case "withdraw":
+      return <WithdrawModal />;
     case "fair":
       return <FairModal />;
     case "referral":
@@ -131,7 +141,7 @@ function ProfileModal() {
           REFERRALS
         </a>
       </div>
-      <div className="flex gap-2">
+      <div className="flex gap-2 mb-2">
         <button
           onClick={() => {
             close();
@@ -143,15 +153,24 @@ function ProfileModal() {
         </button>
         <button
           onClick={() => {
-            void logout();
-            toast("Disconnected", "amber");
             close();
+            setTimeout(() => open("withdraw"), 100);
           }}
-          className="py-2.5 px-4 border border-error/15 text-error/60 font-headline font-bold text-[10px] tracking-widest hover:bg-error/5"
+          className="flex-1 py-2.5 bg-surface-bright border border-primary/40 text-primary font-headline font-bold text-[10px] tracking-widest hover:bg-primary/10"
         >
-          DISCONNECT
+          WITHDRAW
         </button>
       </div>
+      <button
+        onClick={() => {
+          void logout();
+          toast("Disconnected", "amber");
+          close();
+        }}
+        className="w-full py-2.5 border border-error/15 text-error/60 font-headline font-bold text-[10px] tracking-widest hover:bg-error/5"
+      >
+        DISCONNECT
+      </button>
     </ModalShell>
   );
 }
@@ -186,6 +205,183 @@ function DepositModal() {
       >
         COPY ADDRESS
       </button>
+    </ModalShell>
+  );
+}
+
+// Reserve enough lamports for tx fee so a "max" send doesn't underfund the
+// signer and fail at simulation. 5_000 is the standard signature fee; we
+// leave a 2x cushion since priority fees can spike.
+const TX_FEE_RESERVE_LAMPORTS = 10_000;
+
+function WithdrawModal() {
+  const { close } = useModal();
+  const { connection } = useConnection();
+  const { wallets } = useWallets();
+  const { signTransaction } = useStandardSignTransaction();
+  const { toast } = useToast();
+  const wallet = wallets[0];
+  const fromAddr = wallet?.address;
+  const [dest, setDest] = useState("");
+  const [amount, setAmount] = useState("");
+  const [bal, setBal] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!fromAddr || !connection) return;
+    void connection
+      .getBalance(new PublicKey(fromAddr))
+      .then((b) => setBal(b / LAMPORTS_PER_SOL))
+      .catch(() => undefined);
+  }, [fromAddr, connection]);
+
+  const maxSendable =
+    bal !== null
+      ? Math.max(0, bal - TX_FEE_RESERVE_LAMPORTS / LAMPORTS_PER_SOL)
+      : 0;
+
+  const setMax = () => {
+    if (bal === null) return;
+    setAmount(maxSendable.toFixed(6));
+  };
+
+  const submit = async () => {
+    setErr(null);
+    if (!wallet || !fromAddr) {
+      setErr("Wallet not connected.");
+      return;
+    }
+    let toPubkey: PublicKey;
+    try {
+      toPubkey = new PublicKey(dest.trim());
+    } catch {
+      setErr("Invalid destination address.");
+      return;
+    }
+    if (toPubkey.toBase58() === fromAddr) {
+      setErr("Destination is your own wallet.");
+      return;
+    }
+    const sol = parseFloat(amount);
+    if (!Number.isFinite(sol) || sol <= 0) {
+      setErr("Enter a positive SOL amount.");
+      return;
+    }
+    if (bal !== null && sol > maxSendable) {
+      setErr(`Amount exceeds spendable balance (${maxSendable.toFixed(4)} SOL).`);
+      return;
+    }
+    const lamports = Math.round(sol * LAMPORTS_PER_SOL);
+    try {
+      setBusy(true);
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: new PublicKey(fromAddr),
+          toPubkey,
+          lamports,
+        }),
+      );
+      const { blockhash, lastValidBlockHeight } =
+        await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.lastValidBlockHeight = lastValidBlockHeight;
+      tx.feePayer = new PublicKey(fromAddr);
+      const { signedTransaction } = await signTransaction({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        transaction: tx.serialize({ requireAllSignatures: false }) as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        wallet: wallet as any,
+      });
+      const raw =
+        signedTransaction instanceof Uint8Array
+          ? signedTransaction
+          : Buffer.from(signedTransaction);
+      const sig = await connection.sendRawTransaction(raw);
+      await connection.confirmTransaction(
+        { signature: sig, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      toast(`Sent ${sol} SOL`, "emerald");
+      close();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr(msg.length > 200 ? msg.slice(0, 200) + "…" : msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalShell title="Withdraw SOL">
+      <p className="text-xs text-on-surface-variant mb-4">
+        Send SOL from your connected wallet to another address.
+      </p>
+      <div className="bg-surface-container-lowest p-3 mb-3 flex justify-between items-center">
+        <span className="font-headline text-[10px] text-on-surface-variant tracking-widest uppercase">
+          Available
+        </span>
+        <span className="font-headline text-base font-bold text-primary">
+          {bal === null ? "—" : `${bal.toFixed(4)} SOL`}
+        </span>
+      </div>
+      <label className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 block">
+        Destination Address
+      </label>
+      <input
+        type="text"
+        value={dest}
+        onChange={(e) => setDest(e.target.value)}
+        placeholder="Solana wallet address"
+        disabled={busy}
+        className="w-full bg-surface-container-lowest font-mono text-xs text-primary px-3 py-3 mb-3 focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-50 break-all"
+      />
+      <label className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 block">
+        Amount (SOL)
+      </label>
+      <div className="relative mb-3">
+        <input
+          type="number"
+          step="0.001"
+          min={0}
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0.000"
+          disabled={busy}
+          className="w-full bg-surface-container-lowest font-headline font-bold text-base text-primary px-3 py-3 pr-16 focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-50"
+        />
+        <button
+          onClick={setMax}
+          disabled={busy || bal === null}
+          className="absolute right-2 top-1/2 -translate-y-1/2 px-3 py-1 bg-surface-container-highest text-[10px] font-headline font-bold text-on-surface hover:bg-primary/20 disabled:opacity-30"
+        >
+          MAX
+        </button>
+      </div>
+      {err && (
+        <div className="bg-error/10 border-l-2 border-error p-2.5 mb-3">
+          <p className="font-mono text-[11px] text-error leading-relaxed break-words">{err}</p>
+        </div>
+      )}
+      <button
+        onClick={submit}
+        disabled={busy || !dest || !amount}
+        className="w-full py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-black text-xs tracking-widest hover:brightness-110 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+      >
+        {busy ? (
+          <>
+            <span className="material-symbols-outlined animate-spin" style={{ fontSize: 18 }}>
+              progress_activity
+            </span>
+            SENDING...
+          </>
+        ) : (
+          "SEND"
+        )}
+      </button>
+      <p className="font-headline text-[9px] text-on-surface-variant/40 tracking-widest uppercase text-center mt-3">
+        ~0.00001 SOL network fee
+      </p>
     </ModalShell>
   );
 }
