@@ -104,15 +104,14 @@ export default function LogsPage() {
     : "—";
 
   return (
-    <div className="px-6 lg:px-8 pb-16 min-h-screen">
-      <div className="flex flex-wrap justify-between items-end mb-8 gap-4">
+    <div className="px-3 sm:px-6 lg:px-8 pb-16 min-h-screen">
+      <div className="flex flex-wrap justify-between items-end mb-6 sm:mb-8 gap-4 pt-2 sm:pt-0">
         <div>
-          <h1 className="font-headline text-5xl font-black italic tracking-tighter text-on-surface mb-2">
+          <h1 className="font-headline text-3xl sm:text-5xl font-black italic tracking-tighter text-on-surface mb-2">
             COMBAT LOG
           </h1>
-          <p className="font-body text-sm text-on-surface-variant max-w-lg">
-            Live archive of every settled game across all operators. Auto-refreshes every 8s
-            from the on-chain indexer.
+          <p className="font-body text-xs sm:text-sm text-on-surface-variant max-w-lg">
+            Live archive of every settled game. Auto-refreshes every 8s from the on-chain indexer.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -147,12 +146,12 @@ export default function LogsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-8 mb-8">
-        <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg p-6">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-2">
-              <span className="status-dot bg-emerald" />
-              <span className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase">
+      <div className="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-4 sm:gap-8 mb-6 sm:mb-8">
+        <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg p-4 sm:p-6">
+          <div className="flex items-center justify-between mb-4 sm:mb-6">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="status-dot bg-emerald flex-shrink-0" />
+              <span className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase truncate">
                 {filter === "all"
                   ? "Global Analytics"
                   : filter === "mine"
@@ -160,20 +159,20 @@ export default function LogsPage() {
                     : "Wins Analytics"}
               </span>
             </div>
-            <span className="font-headline text-[10px] text-on-surface-variant/50 tracking-widest uppercase">
-              Live · synced {lastSyncStr}
+            <span className="font-headline text-[9px] sm:text-[10px] text-on-surface-variant/50 tracking-widest uppercase whitespace-nowrap">
+              {lastSyncStr}
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-8">
+          <div className="grid grid-cols-3 gap-3 sm:gap-8">
             <div>
-              <span className="font-headline text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
-                {filter === "all" ? "Vault P&L" : "Net P&L"}
+              <span className="font-headline text-[9px] sm:text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
+                {filter === "all" ? "P&L" : "Net P&L"}
               </span>
               <span
-                className={`font-headline text-3xl font-bold ${stats.pnl >= 0 ? "text-primary" : "text-error"}`}
+                className={`font-headline text-base sm:text-3xl font-bold ${stats.pnl >= 0 ? "text-primary" : "text-error"} whitespace-nowrap`}
               >
                 {stats.pnl >= 0 ? "+" : ""}
-                {stats.pnl.toFixed(4)} SOL
+                {stats.pnl.toFixed(3)}
               </span>
               <div className="h-0.5 w-full bg-primary/20 mt-2">
                 <div
@@ -183,10 +182,10 @@ export default function LogsPage() {
               </div>
             </div>
             <div>
-              <span className="font-headline text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
+              <span className="font-headline text-[9px] sm:text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
                 Win Rate
               </span>
-              <span className="font-headline text-3xl font-bold text-secondary">
+              <span className="font-headline text-base sm:text-3xl font-bold text-secondary whitespace-nowrap">
                 {stats.winRate.toFixed(1)}%
               </span>
               <div className="h-0.5 w-full bg-secondary/20 mt-2">
@@ -197,10 +196,10 @@ export default function LogsPage() {
               </div>
             </div>
             <div>
-              <span className="font-headline text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
-                Avg. Multiplier
+              <span className="font-headline text-[9px] sm:text-[10px] text-on-surface-variant uppercase tracking-widest block mb-1">
+                Avg. Mult
               </span>
-              <span className="font-headline text-3xl font-bold text-tertiary">
+              <span className="font-headline text-base sm:text-3xl font-bold text-tertiary whitespace-nowrap">
                 {stats.avgMult.toFixed(2)}×
               </span>
               <div className="h-0.5 w-full bg-tertiary/20 mt-2">
@@ -303,7 +302,8 @@ export default function LogsPage() {
       )}
 
       <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg overflow-hidden">
-        <div className="grid grid-cols-7 px-6 py-4 border-b border-outline-variant/10 bg-surface-container-high">
+        {/* Desktop table headers — hidden on mobile (replaced by cards). */}
+        <div className="hidden lg:grid grid-cols-7 px-6 py-4 border-b border-outline-variant/10 bg-surface-container-high">
           {["Operator", "Game", "Bet", "Multiplier", "Outcome", "Time", "Action"].map((h, i) => (
             <span
               key={h}
@@ -331,57 +331,112 @@ export default function LogsPage() {
             return (
               <div
                 key={g.signature}
-                className="grid grid-cols-7 px-6 py-4 items-center border-b border-outline-variant/[0.04] hover:bg-surface-container-highest transition-colors"
+                className="border-b border-outline-variant/[0.04] hover:bg-surface-container-highest transition-colors"
               >
-                <span
-                  className={`font-mono text-sm ${g.player === address ? "text-tertiary font-bold" : "text-on-surface"}`}
-                >
-                  {fmtPlayer(g.player)}
-                </span>
-                <span className="px-2 py-0.5 bg-primary/10 text-primary font-headline text-[10px] font-bold tracking-widest w-fit rounded">
-                  MINES · {g.mineCount}
-                </span>
-                <span className="font-headline text-sm text-on-surface">
-                  {fmtSol(g.bet)} SOL
-                </span>
-                <span
-                  className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-on-surface-variant"}`}
-                >
-                  {won ? mult.toFixed(2) : "0.00"}×
-                </span>
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`w-2 h-2 rounded-full ${won ? "bg-emerald" : "bg-error"}`}
-                  />
-                  <span
-                    className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-error"}`}
-                  >
-                    {won ? "+" : "−"}
-                    {fmtSol(won ? g.payout : g.bet)} SOL
-                  </span>
+                {/* ── Mobile card (default) ─────────────────────────── */}
+                <div className="lg:hidden px-4 py-3 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`w-2 h-2 rounded-full flex-shrink-0 ${won ? "bg-emerald" : "bg-error"}`}
+                      />
+                      <span
+                        className={`font-mono text-xs truncate ${g.player === address ? "text-tertiary font-bold" : "text-on-surface"}`}
+                      >
+                        {fmtPlayer(g.player)}
+                      </span>
+                      <span className="px-1.5 py-0.5 bg-primary/10 text-primary font-headline text-[9px] font-bold tracking-widest rounded flex-shrink-0">
+                        {g.mineCount}M
+                      </span>
+                    </div>
+                    <span className="font-headline text-[9px] text-on-surface-variant/50 uppercase tracking-widest flex-shrink-0">
+                      {fmtTime(g.time).split(" ")[1]?.slice(0, 5) ?? ""}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <span className="font-headline text-xs text-on-surface-variant/70">
+                        {fmtSol(g.bet)} SOL
+                      </span>
+                      {won && (
+                        <span className="font-headline text-xs font-bold text-primary">
+                          {mult.toFixed(2)}×
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-error"}`}
+                      >
+                        {won ? "+" : "−"}
+                        {fmtSol(won ? g.payout : g.bet)}
+                      </span>
+                      <a
+                        href={txExplorer(g.signature)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Solscan"
+                        className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
+                        style={{ fontSize: 16 }}
+                      >
+                        open_in_new
+                      </a>
+                    </div>
+                  </div>
                 </div>
-                <span className="font-headline text-xs text-on-surface-variant">
-                  {fmtTime(g.time)}
-                </span>
-                <div className="text-right flex justify-end gap-2">
-                  <a
-                    href={`/verify/${g.signature}`}
-                    title="Verify provable fairness"
-                    className="material-symbols-outlined text-on-surface-variant/40 hover:text-emerald transition-colors cursor-pointer"
-                    style={{ fontSize: 18 }}
+
+                {/* ── Desktop row (lg+) ─────────────────────────────── */}
+                <div className="hidden lg:grid grid-cols-7 px-6 py-4 items-center">
+                  <span
+                    className={`font-mono text-sm ${g.player === address ? "text-tertiary font-bold" : "text-on-surface"}`}
                   >
-                    verified
-                  </a>
-                  <a
-                    href={txExplorer(g.signature)}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="View on Solscan"
-                    className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
-                    style={{ fontSize: 18 }}
+                    {fmtPlayer(g.player)}
+                  </span>
+                  <span className="px-2 py-0.5 bg-primary/10 text-primary font-headline text-[10px] font-bold tracking-widest w-fit rounded">
+                    MINES · {g.mineCount}
+                  </span>
+                  <span className="font-headline text-sm text-on-surface">
+                    {fmtSol(g.bet)} SOL
+                  </span>
+                  <span
+                    className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-on-surface-variant"}`}
                   >
-                    open_in_new
-                  </a>
+                    {won ? mult.toFixed(2) : "0.00"}×
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`w-2 h-2 rounded-full ${won ? "bg-emerald" : "bg-error"}`}
+                    />
+                    <span
+                      className={`font-headline text-sm font-bold ${won ? "text-primary" : "text-error"}`}
+                    >
+                      {won ? "+" : "−"}
+                      {fmtSol(won ? g.payout : g.bet)} SOL
+                    </span>
+                  </div>
+                  <span className="font-headline text-xs text-on-surface-variant">
+                    {fmtTime(g.time)}
+                  </span>
+                  <div className="text-right flex justify-end gap-2">
+                    <a
+                      href={`/verify/${g.signature}`}
+                      title="Verify provable fairness"
+                      className="material-symbols-outlined text-on-surface-variant/40 hover:text-emerald transition-colors cursor-pointer"
+                      style={{ fontSize: 18 }}
+                    >
+                      verified
+                    </a>
+                    <a
+                      href={txExplorer(g.signature)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="View on Solscan"
+                      className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer"
+                      style={{ fontSize: 18 }}
+                    >
+                      open_in_new
+                    </a>
+                  </div>
                 </div>
               </div>
             );

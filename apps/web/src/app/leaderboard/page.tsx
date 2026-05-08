@@ -76,14 +76,14 @@ export default function LeaderboardPage() {
   );
 
   return (
-    <div className="px-6 lg:px-8 pb-16 min-h-screen">
-      <div className="flex justify-between items-end mb-8">
-        <div>
-          <p className="font-headline text-[10px] tracking-[.12em] text-on-surface-variant flex items-center gap-1 mb-1">
-            <span className="status-dot" />SYSTEM_NODE:{" "}
+    <div className="px-3 sm:px-6 lg:px-8 pb-16 min-h-screen">
+      <div className="flex justify-between items-end mb-6 sm:mb-8 pt-2 sm:pt-0">
+        <div className="min-w-0">
+          <p className="font-headline text-[9px] sm:text-[10px] tracking-[.12em] text-on-surface-variant flex items-center gap-1 mb-1 truncate">
+            <span className="status-dot flex-shrink-0" />SYSTEM_NODE:{" "}
             {address ? address.slice(0, 10).toUpperCase() : "NOT_CONNECTED"}
           </p>
-          <h1 className="font-headline text-4xl font-black italic tracking-tighter text-on-surface">
+          <h1 className="font-headline text-2xl sm:text-4xl font-black italic tracking-tighter text-on-surface leading-tight">
             GLOBAL <span className="text-primary italic">LEADERBOARD</span>
           </h1>
         </div>
@@ -112,11 +112,11 @@ export default function LeaderboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-[2.5fr_1fr] gap-4 sm:gap-8">
         <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg overflow-hidden">
-          <div className="flex justify-between items-center px-6 py-4 border-b border-outline-variant/10">
-            <h2 className="font-headline text-sm font-bold tracking-widest text-on-surface uppercase flex items-center gap-2">
-              <span className="material-symbols-outlined text-amber" style={{ fontSize: 20 }}>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-outline-variant/10">
+            <h2 className="font-headline text-xs sm:text-sm font-bold tracking-widest text-on-surface uppercase flex items-center gap-2">
+              <span className="material-symbols-outlined text-amber" style={{ fontSize: 18 }}>
                 emoji_events
               </span>
               Top Operations
@@ -126,7 +126,7 @@ export default function LeaderboardPage() {
                 <button
                   key={t.view}
                   onClick={() => setTab(t.view)}
-                  className={`px-3 py-1 font-headline text-[10px] font-bold tracking-widest transition-colors ${
+                  className={`flex-1 sm:flex-none px-2 sm:px-3 py-1 font-headline text-[9px] sm:text-[10px] font-bold tracking-widest transition-colors ${
                     t.view === tab
                       ? "bg-primary/10 text-primary border border-primary/15"
                       : "text-on-surface-variant/40 hover:text-on-surface"
@@ -137,7 +137,8 @@ export default function LeaderboardPage() {
               ))}
             </div>
           </div>
-          <div className="grid grid-cols-5 px-6 py-3 border-b border-outline-variant/10">
+          {/* Desktop column headers — hidden on mobile (rows are self-labeled). */}
+          <div className="hidden sm:grid grid-cols-5 px-6 py-3 border-b border-outline-variant/10">
             {(tab === "alltime"
               ? ["Rank", "Operator", "Biggest Win", "Multiplier", "Status"]
               : tab === "volume"
@@ -172,21 +173,23 @@ export default function LeaderboardPage() {
                 <Link
                   key={`${row.player}-${i}`}
                   href={`/profile/${row.player}`}
-                  className={`grid grid-cols-5 px-6 py-4 items-center border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
+                  className={`flex sm:grid sm:grid-cols-5 px-4 sm:px-6 py-3 sm:py-4 items-center gap-3 border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
                 >
-                  <RankBadge rank={i + 1} />
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded bg-secondary/20 flex items-center justify-center font-headline text-[10px] font-bold text-secondary">
+                  <div className="flex-shrink-0">
+                    <RankBadge rank={i + 1} />
+                  </div>
+                  <div className="flex items-center gap-2 sm:gap-3 flex-1 sm:flex-none min-w-0">
+                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded bg-secondary/20 flex items-center justify-center font-headline text-[9px] sm:text-[10px] font-bold text-secondary flex-shrink-0">
                       {row.player.slice(0, 2).toUpperCase()}
                     </div>
-                    <div className="font-headline text-xs font-bold text-on-surface">
-                      {isMe ? "YOU" : shortAddr(row.player, 6, 4)}
+                    <div className="font-headline text-xs font-bold text-on-surface truncate">
+                      {isMe ? "YOU" : shortAddr(row.player, 4, 3)}
                     </div>
                   </div>
-                  <span className="font-headline text-sm font-bold text-primary">{cellA}</span>
-                  <span className="font-headline text-sm font-bold text-secondary">{cellB}</span>
+                  <span className="font-headline text-xs sm:text-sm font-bold text-primary whitespace-nowrap">{cellA}</span>
+                  <span className="hidden sm:inline font-headline text-sm font-bold text-secondary">{cellB}</span>
                   <span
-                    className={`font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
+                    className={`hidden sm:inline-block font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
                   >
                     {i === 0 ? "ELITE" : "ACTIVE"}
                   </span>
@@ -199,27 +202,27 @@ export default function LeaderboardPage() {
               return (
                 <div
                   key={i}
-                  className={`grid grid-cols-5 px-6 py-4 items-center border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
+                  className={`flex sm:grid sm:grid-cols-5 px-4 sm:px-6 py-3 sm:py-4 items-center gap-3 border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
                 >
-                  <RankBadge rank={i + 1} />
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded bg-secondary/20 flex items-center justify-center font-headline text-[10px] font-bold text-secondary">
+                  <div className="flex-shrink-0">
+                    <RankBadge rank={i + 1} />
+                  </div>
+                  <div className="flex items-center gap-2 sm:gap-3 flex-1 sm:flex-none min-w-0">
+                    <div className="w-7 h-7 sm:w-8 sm:h-8 rounded bg-secondary/20 flex items-center justify-center font-headline text-[9px] sm:text-[10px] font-bold text-secondary flex-shrink-0">
                       {player.slice(0, 2).toUpperCase()}
                     </div>
-                    <div>
-                      <div className="font-headline text-xs font-bold text-on-surface">
-                        {isMe ? "YOU" : player.slice(0, 8) + "…"}
-                      </div>
+                    <div className="font-headline text-xs font-bold text-on-surface truncate">
+                      {isMe ? "YOU" : player.slice(0, 6) + "…"}
                     </div>
                   </div>
-                  <span className="font-headline text-sm font-bold text-primary">
+                  <span className="font-headline text-xs sm:text-sm font-bold text-primary whitespace-nowrap">
                     {stats.biggestWin.toFixed(3)} SOL
                   </span>
-                  <span className="font-headline text-sm font-bold text-secondary">
+                  <span className="hidden sm:inline font-headline text-sm font-bold text-secondary">
                     {stats.biggestMult.toFixed(1)}×
                   </span>
                   <span
-                    className={`font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
+                    className={`hidden sm:inline-block font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
                   >
                     {i === 0 ? "ELITE" : "ACTIVE"}
                   </span>
