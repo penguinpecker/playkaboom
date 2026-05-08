@@ -4,19 +4,21 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
 import {
   useSolanaWallets as useWallets,
-  useStandardSignTransaction,
+  useSignTransaction,
 } from "@privy-io/react-auth/solana";
 import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
   Transaction,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import { ModalShell } from "./ModalShell";
 import { useModal } from "@/hooks/useModal";
 import { useToast } from "@/hooks/useToast";
 import { useGame } from "@/hooks/useGame";
 import { CLUSTER, CLUSTER_LABEL, RPC_URL, PROGRAM_ID } from "@/lib/cluster";
+import { confirmByPolling } from "@/lib/confirm";
 import { deriveVaultPda } from "@playkaboom/sdk";
 
 export function ModalRoot() {
@@ -218,7 +220,12 @@ function WithdrawModal() {
   const { close } = useModal();
   const { connection } = useConnection();
   const { wallets } = useWallets();
-  const { signTransaction } = useStandardSignTransaction();
+  // Privy *embedded* wallets use useSignTransaction (takes a Transaction
+  // object, returns a signed Transaction). useStandardSignTransaction is
+  // only for external Wallet-Standard wallets and throws
+  // "n.serializeMessage is not a function" against the legacy txs Privy
+  // embeds use. Same pattern as use-vault-lp.ts.
+  const { signTransaction } = useSignTransaction();
   const { toast } = useToast();
   const wallet = wallets[0];
   const fromAddr = wallet?.address;
@@ -287,21 +294,20 @@ function WithdrawModal() {
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(fromAddr);
-      const { signedTransaction } = await signTransaction({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        transaction: tx.serialize({ requireAllSignatures: false }) as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        wallet: wallet as any,
+      const signed = await signTransaction({
+        transaction: tx,
+        connection,
+        address: fromAddr,
       });
       const raw =
-        signedTransaction instanceof Uint8Array
-          ? signedTransaction
-          : Buffer.from(signedTransaction);
-      const sig = await connection.sendRawTransaction(raw);
-      await connection.confirmTransaction(
-        { signature: sig, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
+        signed instanceof VersionedTransaction
+          ? signed.serialize()
+          : (signed as Transaction).serialize();
+      const sig = await connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       toast(`Sent ${sol} SOL`, "emerald");
       close();
     } catch (e) {

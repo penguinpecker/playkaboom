@@ -166,6 +166,22 @@ export function BetControls() {
                 >
                   2X
                 </button>
+                <button
+                  onClick={() => {
+                    // Cap to whichever is smaller of (vault max bet) or
+                    // (wallet balance), then shave 1% so the engage tx + Solana
+                    // network fee + any program-side rounding doesn't push the
+                    // number over either limit and trigger BetExceedsMax /
+                    // insufficient-funds at simulation.
+                    const ceiling = Math.min(maxBet, walletBalance);
+                    const safe = Math.max(0.001, ceiling * 0.99);
+                    setBet(Number(safe.toFixed(6)));
+                  }}
+                  disabled={isPlaying || isStarting || walletBalance <= 0 || maxBet <= 0}
+                  className="bg-surface-container-highest px-3 py-1 text-[10px] font-headline font-bold text-primary hover:bg-primary/20 transition-colors disabled:opacity-30"
+                >
+                  MAX
+                </button>
               </div>
             </div>
             <div className="flex justify-between mt-1 text-[9px] font-headline text-on-surface-variant/40">
