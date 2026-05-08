@@ -8,7 +8,13 @@ name: Index program events
 on:
   schedule:
     - cron: "*/5 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: "Force a full re-scan ignoring the cursor (one-shot backfill)"
+        required: false
+        default: "false"
+        type: boolean
 
 jobs:
   poll:
@@ -26,8 +32,14 @@ jobs:
           fi
           # Hit www directly — playkaboom.gg 307-redirects to www, and following
           # the redirect would strip the Authorization header for cross-host.
+          if [ "${{ inputs.reset }}" = "true" ]; then
+            URL="https://www.playkaboom.gg/api/cron/index-events?reset=1"
+            echo "RESET MODE — full rescan"
+          else
+            URL="https://www.playkaboom.gg/api/cron/index-events"
+          fi
           response=$(curl -sS -w "\nHTTP %{http_code}" \
             -H "Authorization: Bearer $CRON_SECRET" \
-            https://www.playkaboom.gg/api/cron/index-events)
+            "$URL")
           echo "$response"
           echo "$response" | tail -n1 | grep -q "HTTP 200"
