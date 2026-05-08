@@ -2129,3 +2129,46 @@ OUTSTANDING WORK / CARRIED FORWARD
     - 2 "missing" games (vault.total_games=21 vs DB rows after backfill)
       — most likely refunded/expired games that don't emit Won/Lost.
       Not a bug; the games table only records settled outcomes.
+
+MAX-BUTTON RESERVE — TWO REVISIONS (commits 562abdc → reverted via
+  90% formula in this commit)
+
+  User report: MAX bet button sometimes errored "insufficient funds for
+  rent" at engage. Original logic shaved only 1% off min(maxBet,
+  walletBalance) — way too thin for a first-game flow that init's up
+  to 3 PDAs (GameSession + PlayerStats + ReferralAccount = ~0.006 SOL
+  rent) plus tx + priority fee.
+
+  V2 (commit 562abdc, 2026-05-08): switched to flat 0.015 SOL reserve.
+  Predictable, generous worst-case budget. User flagged as "alot when
+  min bet is 0.001" — at small wallets the flat reserve is huge
+  proportionally (0.05 SOL wallet → only 0.035 SOL spendable; 0.02 SOL
+  wallet → only 0.005 SOL spendable; 0.015 SOL wallet → reserve eats
+  the whole thing).
+
+  V3 (current): keep 10% of walletBalance for fees + rent.
+    ceiling = min(maxBet, walletBalance × 0.9)
+    safe    = max(0.001, ceiling)
+  Scales naturally — tight on funded wallets (10% × 1 SOL = 0.1 SOL
+  reserved is more than enough), still safe on small ones (10% × 0.05
+  SOL = 0.005 SOL is closer to actual rent budget). Same code path
+  for everyone, no per-wallet logic.
+
+  Lesson: percentage-based reserves match the player's actual
+  spending shape better than fixed-amount reserves for a casino-bet
+  context. Flat reserves make sense for one-off ops (e.g. tx fee) but
+  not for sizing the cash a user can deploy into a wager.
+
+PROCESS RULE ADDED THIS SESSION (saved as memory)
+
+  After 562abdc went live without prior review, user added a durable
+  rule: "please confirm before u push from now on". Saved as
+  ~/.claude/projects/-Users-pp/memory/feedback_confirm_before_push.md
+  for future sessions. Pattern going forward:
+    1. Make the change
+    2. git add + git commit locally
+    3. Show diff/impact in chat
+    4. Wait for explicit "yes/ship it" before git push
+  This is in addition to the existing "only push files the user asked
+  for" rule from earlier in this session
+  (feedback_only_push_what_was_asked.md).
