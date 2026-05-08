@@ -168,19 +168,13 @@ export function BetControls() {
                 </button>
                 <button
                   onClick={() => {
-                    // Reserve enough SOL for the engage round-trip:
-                    //   GameSession PDA init (~0.002)
-                    //   PlayerStats PDA init_if_needed (~0.002, first game only)
-                    //   ReferralAccount PDA init_if_needed (~0.002, first time only)
-                    //   Network fee + priority fee buffer (~0.0005)
-                    //   Headroom against worst-case rent fluctuation (~0.0085)
-                    // Conservative flat 0.015 SOL — same for every player so
-                    // the button is predictable. The 1% percentage we used
-                    // before was way too thin on small wallets (1% of 0.05
-                    // SOL = 0.0005, nowhere near rent).
-                    const RESERVE_SOL = 0.015;
-                    const spendable = Math.max(0, walletBalance - RESERVE_SOL);
-                    const ceiling = Math.min(maxBet, spendable);
+                    // Cap to whichever is smaller of (vault max bet) or
+                    // (wallet balance), then keep 10% of wallet for rent +
+                    // network fees. 1% was nowhere near enough to cover the
+                    // 3-PDA rent inits a first-game flow can require; 10%
+                    // scales with the player's balance so it's tight on
+                    // funded wallets and still safe on small ones.
+                    const ceiling = Math.min(maxBet, walletBalance * 0.9);
                     const safe = Math.max(0.001, ceiling);
                     setBet(Number(safe.toFixed(6)));
                   }}
