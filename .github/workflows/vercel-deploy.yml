@@ -1,0 +1,58 @@
+name: Vercel Deploy
+
+# Auto-deploys every push to main to the kaboomweb3-6280 Vercel account.
+# We use this instead of Vercel's native git integration because the new
+# Vercel account doesn't have a GitHub Login Connection (architectural
+# requirement for the integration that no API token can substitute).
+#
+# Required GitHub repo secrets (set via `gh secret set <NAME>`):
+#   - VERCEL_TOKEN        full-account token from kaboomweb3-6280
+#   - VERCEL_ORG_ID       team_eFZwIe4y01ydgOP8AZd5BSf5
+#   - VERCEL_PROJECT_ID   prj_WMXQYAhUc6aEWaAiDjvVwFBvP8cW
+#
+# Why prebuilt: `vercel build --prod` runs locally in this runner so the
+# subsequent deploy is just an upload — much faster, plus it produces
+# the exact build artifact that lands in production (no separate Vercel-
+# side build to debug if something goes wrong).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # One deploy at a time per branch — if a second push comes in mid-build,
+  # cancel the older one. Avoids racing two `vercel --prod` calls that
+  # could leave the alias on the older deploy.
+  group: vercel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel environment (production)
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build (prebuilt for upload)
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy prebuilt artifact to production
+        run: |
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "Deployed to: $DEPLOY_URL"
+          echo "::notice title=Deploy::$DEPLOY_URL"
