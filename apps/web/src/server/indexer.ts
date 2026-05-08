@@ -3,6 +3,15 @@ import { extractEventsFromLogs, type KaboomEvent } from "@playkaboom/sdk";
 import type { PostgrestError } from "@supabase/supabase-js";
 import { supabaseAdmin } from "./db/supabase";
 import { logger } from "./logger";
+import { awardPoints } from "./points";
+
+// House edge that was live when this rev of the indexer shipped. Captured
+// per-row in `points_ledger.edge_bps`, so historical points stay correct
+// even if we change the on-chain edge later via update_vault. If we ever
+// change the live edge, bump this constant in the same PR — or better,
+// thread the actual edge through the event pipeline. For now both the
+// program and this constant are 200.
+const POINTS_EDGE_BPS = 200;
 
 /** Throw on Postgrest errors so they surface in `ingestTransactions`'s catch
  * block (logged + counted) instead of being silently swallowed. */
@@ -138,6 +147,16 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         { onConflict: "signature" },
       );
       check("games", "GameWon.upsert", res);
+      // Award XP. Idempotent on (sourceKey, source) — replaying this event
+      // never double-credits. tier/streak/event multipliers default to 1.0×
+      // until those feeders ship; we still capture the bet+edge in the row.
+      await awardPoints({
+        player: ev.player.toBase58(),
+        sourceKey: tx.signature,
+        source: "game_won",
+        betLamports: BigInt(ev.bet),
+        edgeBps: POINTS_EDGE_BPS,
+      });
       break;
     }
     case "GameLost": {
@@ -160,6 +179,13 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         { onConflict: "signature" },
       );
       check("games", "GameLost.upsert", res);
+      await awardPoints({
+        player: ev.player.toBase58(),
+        sourceKey: tx.signature,
+        source: "game_lost",
+        betLamports: BigInt(ev.bet),
+        edgeBps: POINTS_EDGE_BPS,
+      });
       break;
     }
     case "ReferrerSet": {
