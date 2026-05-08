@@ -59,6 +59,55 @@ export function useReferralCapture(): string | null {
  * We track which wallet we've already pinged in a per-session ref to
  * avoid even sending the request when we already know the answer.
  */
+/**
+ * Fire-and-forget prefetch of the wallet's referral short code on first
+ * authentication. Mounted globally in PrivyAuthBridge so by the time the
+ * user clicks "Referrals" in the nav, the code is already minted in the
+ * DB and cached in TanStack Query — no spinner.
+ *
+ * Uses the canonical "ref-code" query key so the /referrals page reads
+ * the same cache entry instead of issuing a duplicate request.
+ */
+export function useReferralCodePrefetch() {
+  const { authenticated, getAccessToken } = usePrivy();
+  const { wallets } = useSolanaWallets();
+  const wallet = wallets[0];
+  const qc = useQueryClient();
+  const fetchedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!authenticated || !wallet?.address) return;
+    if (fetchedFor.current === wallet.address) return;
+    fetchedFor.current = wallet.address;
+    void qc.fetchQuery({
+      queryKey: ["ref-code", wallet.address],
+      // 5 min stale — way longer than typical "land on /referrals after
+      // login" interval, so the page always reads from cache.
+      staleTime: 5 * 60_000,
+      queryFn: async () => {
+        const token = await getAccessToken();
+        if (!token) throw new Error("no auth token");
+        const res = await fetch(`/api/ref/code/${wallet.address}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`ref-code prefetch ${res.status}`);
+        return (await res.json()) as {
+          code: string;
+          url: string;
+          clickCount: number;
+          signupCount: number;
+          confirmedCount: number;
+          lastVisitedAt: string | null;
+        };
+      },
+    }).catch(() => {
+      /* don't block login on a referral mint hiccup; /referrals page
+         will retry on its own if the cache is empty. */
+    });
+  }, [authenticated, wallet?.address, getAccessToken, qc]);
+}
+
 export function useReferralSignupAttribution() {
   const { authenticated, getAccessToken } = usePrivy();
   const { wallets } = useSolanaWallets();

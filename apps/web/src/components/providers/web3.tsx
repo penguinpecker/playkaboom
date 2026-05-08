@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { CLUSTER, RPC_URL } from "@/lib/cluster";
 import { setAuthTokenResolver } from "@/lib/api";
-import { useReferralSignupAttribution } from "@/hooks/use-referral";
+import { useReferralCodePrefetch, useReferralSignupAttribution } from "@/hooks/use-referral";
 
 const solanaConnectors = toSolanaWalletConnectors();
 
@@ -22,6 +22,9 @@ function PrivyAuthBridge({ children }: { children: ReactNode }) {
   // carrying the kb.ref.sid cookie. Mounted here so it covers every page,
   // including ones the visitor lands on after the /r/<code> redirect.
   useReferralSignupAttribution();
+  // Pre-mints the user's referral short code on first auth and warms
+  // the TanStack Query cache so /referrals renders the link instantly.
+  useReferralCodePrefetch();
   return <>{children}</>;
 }
 

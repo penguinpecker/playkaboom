@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   GOLD_VOLUME_LAMPORTS,
   REFERRAL_BRONZE_BPS,
@@ -42,10 +43,13 @@ export default function ReferralsPage() {
     setPendingRef(getPendingReferrer());
   }, [captured]);
 
-  // Fetch (or mint) the wallet's short code. The API requires a signed
-  // Privy bearer for the wallet, so this is the only place a code can be
-  // claimed for `address`. Anybody else hitting GET /api/ref/code/<address>
-  // gets 401 — that's the tamper-resistance.
+  const qc = useQueryClient();
+
+  // Fetch (or mint) the wallet's short code. PrivyAuthBridge prefetches
+  // this query on first authentication via useReferralCodePrefetch — so
+  // by the time the user navigates here, the cache is usually warm and
+  // we render the link immediately. Falls through to a fresh fetch if
+  // the cache is empty (direct page load before the prefetch resolves).
   useEffect(() => {
     if (!address) {
       setRefCode(null);
@@ -55,34 +59,42 @@ export default function ReferralsPage() {
       return;
     }
     let cancelled = false;
+    type RefCodeData = {
+      code: string;
+      clickCount: number;
+      signupCount: number;
+      confirmedCount: number;
+    };
+    // Synchronous cache read — populated by useReferralCodePrefetch.
+    const cached = qc.getQueryData<RefCodeData>(["ref-code", address]);
+    if (cached) {
+      setRefCode(cached.code);
+      setRefClicks(cached.clickCount);
+      setRefSignups(cached.signupCount);
+      setRefConfirmed(cached.confirmedCount);
+      return;
+    }
     void (async () => {
       try {
-        const token = await getAccessToken();
-        if (!token) return;
-        const res = await fetch(`/api/ref/code/${address}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: "no-store",
+        const data = await qc.fetchQuery<RefCodeData>({
+          queryKey: ["ref-code", address],
+          staleTime: 5 * 60_000,
+          queryFn: async () => {
+            const token = await getAccessToken();
+            if (!token) throw new Error("no auth");
+            const res = await fetch(`/api/ref/code/${address}`, {
+              headers: { Authorization: `Bearer ${token}` },
+              cache: "no-store",
+            });
+            if (!res.ok) throw new Error(`ref-code ${res.status}`);
+            return (await res.json()) as RefCodeData;
+          },
         });
         if (cancelled) return;
-        if (!res.ok) {
-          // Mark as "loaded but failed" by setting clicks to 0 — this lets
-          // the loading-state check fall through to the legacy URL fallback
-          // instead of spinning forever.
-          setRefClicks(0);
-          return;
-        }
-        const data = (await res.json()) as {
-          code: string;
-          clickCount: number;
-          signupCount: number;
-          confirmedCount: number;
-        };
-        if (!cancelled) {
-          setRefCode(data.code);
-          setRefClicks(data.clickCount);
-          setRefSignups(data.signupCount);
-          setRefConfirmed(data.confirmedCount);
-        }
+        setRefCode(data.code);
+        setRefClicks(data.clickCount);
+        setRefSignups(data.signupCount);
+        setRefConfirmed(data.confirmedCount);
       } catch {
         if (!cancelled) setRefClicks(0);
       }
@@ -90,7 +102,7 @@ export default function ReferralsPage() {
     return () => {
       cancelled = true;
     };
-  }, [address, getAccessToken]);
+  }, [address, getAccessToken, qc]);
 
   // refCodeLoading: while the /api/ref/code/<wallet> call is in flight we
   // render a placeholder rather than the legacy ?ref=<addr> form, which
