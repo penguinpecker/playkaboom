@@ -1,10 +1,14 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useAccount } from "@/lib/compat";
 import { useGlobalGames, type GlobalGame } from "@/hooks/use-global-games";
 import { useVaultMaxBet } from "@/hooks/useContracts";
 import { txExplorer } from "@/lib/cluster";
+import {
+  loadWalletActivity,
+  type WalletActivityEntry,
+} from "@/lib/wallet-history";
 
 type FilterMode = "all" | "mine" | "wins";
 
@@ -77,6 +81,22 @@ export default function LogsPage() {
       String(d.getSeconds()).padStart(2, "0")
     );
   };
+
+  // Wallet-level transfers (deposits/withdrawals) are NOT on-chain kaboom-program
+  // events, so the indexer doesn't record them. We persist them to localStorage
+  // when the user signs them via the WithdrawModal. Re-read on every render
+  // because there's no React signal — the modal mutates localStorage directly.
+  const [walletActivity, setWalletActivity] = useState<WalletActivityEntry[]>([]);
+  useEffect(() => {
+    if (!address) {
+      setWalletActivity([]);
+      return;
+    }
+    setWalletActivity(loadWalletActivity(address));
+    // Re-poll every 2s so a withdrawal modal closing this tab refreshes here.
+    const i = setInterval(() => setWalletActivity(loadWalletActivity(address)), 2_000);
+    return () => clearInterval(i);
+  }, [address]);
 
   const lastSync = dataUpdatedAt ? new Date(dataUpdatedAt) : null;
   const lastSyncStr = lastSync
@@ -223,6 +243,64 @@ export default function LogsPage() {
           </button>
         </div>
       </div>
+
+      {address && walletActivity.length > 0 && (
+        <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg overflow-hidden mb-8">
+          <div className="px-6 py-4 border-b border-outline-variant/10 bg-surface-container-high flex items-center justify-between">
+            <span className="font-headline text-xs font-bold tracking-widest text-tertiary uppercase">
+              My Wallet Activity
+            </span>
+            <span className="font-headline text-[10px] text-on-surface-variant/40 uppercase tracking-widest">
+              {walletActivity.length} entries · stored locally
+            </span>
+          </div>
+          <div className="grid grid-cols-5 px-6 py-3 border-b border-outline-variant/10 bg-surface-container-high/40">
+            {["Type", "Amount", "Counterparty", "Time", "Tx"].map((h, i) => (
+              <span
+                key={h}
+                className={`font-headline text-[10px] tracking-widest text-on-surface-variant/40 uppercase ${i === 4 ? "text-right" : ""}`}
+              >
+                {h}
+              </span>
+            ))}
+          </div>
+          {walletActivity.map((e) => (
+            <div
+              key={e.signature}
+              className="grid grid-cols-5 px-6 py-4 items-center border-b border-outline-variant/[0.04] hover:bg-surface-container-highest transition-colors"
+            >
+              <span
+                className={`px-2 py-0.5 font-headline text-[10px] font-bold tracking-widest w-fit rounded ${
+                  e.kind === "withdraw"
+                    ? "bg-tertiary/10 text-tertiary"
+                    : "bg-emerald/10 text-emerald"
+                }`}
+              >
+                {e.kind === "withdraw" ? "WITHDRAW" : "DEPOSIT"}
+              </span>
+              <span className="font-headline text-sm text-on-surface">
+                {(Number(BigInt(e.amountLamports)) / LAMPORTS_PER_SOL).toFixed(4)} SOL
+              </span>
+              <span className="font-mono text-xs text-on-surface-variant">
+                {fmtPlayer(e.otherAddress)}
+              </span>
+              <span className="font-headline text-xs text-on-surface-variant">
+                {fmtTime(e.time)}
+              </span>
+              <a
+                href={txExplorer(e.signature)}
+                target="_blank"
+                rel="noreferrer"
+                title="View on explorer"
+                className="material-symbols-outlined text-on-surface-variant/40 hover:text-primary transition-colors cursor-pointer text-right justify-self-end"
+                style={{ fontSize: 18 }}
+              >
+                open_in_new
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="bg-surface-container-low border border-outline-variant/10 rounded-lg overflow-hidden">
         <div className="grid grid-cols-7 px-6 py-4 border-b border-outline-variant/10 bg-surface-container-high">

@@ -17,8 +17,9 @@ import { ModalShell } from "./ModalShell";
 import { useModal } from "@/hooks/useModal";
 import { useToast } from "@/hooks/useToast";
 import { useGame } from "@/hooks/useGame";
-import { CLUSTER, CLUSTER_LABEL, RPC_URL, PROGRAM_ID } from "@/lib/cluster";
+import { CLUSTER, CLUSTER_LABEL, RPC_URL, PROGRAM_ID, txExplorer } from "@/lib/cluster";
 import { confirmByPolling } from "@/lib/confirm";
+import { appendWalletActivity } from "@/lib/wallet-history";
 import { deriveVaultPda } from "@playkaboom/sdk";
 
 export function ModalRoot() {
@@ -234,6 +235,12 @@ function WithdrawModal() {
   const [bal, setBal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Two-stage modal: form view (default) → success view once a tx confirms.
+  // Success view stays open until the user dismisses, so they can copy the
+  // signature or click through to the explorer.
+  const [successSig, setSuccessSig] = useState<string | null>(null);
+  const [successAmount, setSuccessAmount] = useState<number | null>(null);
+  const [successDest, setSuccessDest] = useState<string | null>(null);
 
   useEffect(() => {
     if (!fromAddr || !connection) return;
@@ -308,8 +315,19 @@ function WithdrawModal() {
         maxRetries: 3,
       });
       await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
+      // Persist to local wallet-activity ledger so /logs can show it under
+      // "MY WALLET ACTIVITY". Indexed by source wallet.
+      appendWalletActivity(fromAddr, {
+        kind: "withdraw",
+        signature: sig,
+        amountLamports: String(lamports),
+        otherAddress: toPubkey.toBase58(),
+        time: new Date().toISOString(),
+      });
+      setSuccessSig(sig);
+      setSuccessAmount(sol);
+      setSuccessDest(toPubkey.toBase58());
       toast(`Sent ${sol} SOL`, "emerald");
-      close();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setErr(msg.length > 200 ? msg.slice(0, 200) + "…" : msg);
@@ -317,6 +335,49 @@ function WithdrawModal() {
       setBusy(false);
     }
   };
+
+  if (successSig && successAmount != null && successDest) {
+    return (
+      <ModalShell title="Sent ✓">
+        <div className="bg-emerald/10 border-l-2 border-emerald p-3 mb-4">
+          <div className="font-headline text-[10px] tracking-widest uppercase text-emerald mb-1">
+            Confirmed on-chain
+          </div>
+          <div className="font-headline text-2xl font-bold text-emerald">
+            {successAmount} SOL
+          </div>
+          <div className="font-mono text-[10px] text-on-surface-variant mt-2 break-all">
+            → {successDest}
+          </div>
+        </div>
+        <div className="bg-surface-container-lowest p-3 mb-3">
+          <div className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mb-1">
+            Transaction
+          </div>
+          <div className="font-mono text-[10px] text-primary break-all select-all">
+            {successSig}
+          </div>
+        </div>
+        <a
+          href={txExplorer(successSig)}
+          target="_blank"
+          rel="noreferrer"
+          className="w-full block text-center py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-black text-xs tracking-widest hover:brightness-110 active:scale-95 mb-2"
+        >
+          VIEW ON EXPLORER
+        </a>
+        <button
+          onClick={close}
+          className="w-full py-2.5 border border-outline-variant/15 text-on-surface-variant font-headline font-bold text-[10px] tracking-widest hover:bg-surface-container-highest"
+        >
+          DONE
+        </button>
+        <p className="font-headline text-[9px] text-on-surface-variant/40 tracking-widest uppercase text-center mt-3">
+          Recorded in /logs → MY WALLET ACTIVITY
+        </p>
+      </ModalShell>
+    );
+  }
 
   return (
     <ModalShell title="Withdraw SOL">
