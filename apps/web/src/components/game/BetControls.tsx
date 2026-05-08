@@ -168,13 +168,20 @@ export function BetControls() {
                 </button>
                 <button
                   onClick={() => {
-                    // Cap to whichever is smaller of (vault max bet) or
-                    // (wallet balance), then shave 1% so the engage tx + Solana
-                    // network fee + any program-side rounding doesn't push the
-                    // number over either limit and trigger BetExceedsMax /
-                    // insufficient-funds at simulation.
-                    const ceiling = Math.min(maxBet, walletBalance);
-                    const safe = Math.max(0.001, ceiling * 0.99);
+                    // Reserve enough SOL for the engage round-trip:
+                    //   GameSession PDA init (~0.002)
+                    //   PlayerStats PDA init_if_needed (~0.002, first game only)
+                    //   ReferralAccount PDA init_if_needed (~0.002, first time only)
+                    //   Network fee + priority fee buffer (~0.0005)
+                    //   Headroom against worst-case rent fluctuation (~0.0085)
+                    // Conservative flat 0.015 SOL — same for every player so
+                    // the button is predictable. The 1% percentage we used
+                    // before was way too thin on small wallets (1% of 0.05
+                    // SOL = 0.0005, nowhere near rent).
+                    const RESERVE_SOL = 0.015;
+                    const spendable = Math.max(0, walletBalance - RESERVE_SOL);
+                    const ceiling = Math.min(maxBet, spendable);
+                    const safe = Math.max(0.001, ceiling);
                     setBet(Number(safe.toFixed(6)));
                   }}
                   disabled={isPlaying || isStarting || walletBalance <= 0 || maxBet <= 0}
