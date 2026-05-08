@@ -78,9 +78,9 @@ export function Navbar() {
 
   return (
     <>
-      <header className="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-surface-container-low/90 backdrop-blur-xl shadow-[0_0_20px_rgba(208,188,255,0.1)]">
-        <div className="flex items-center gap-8">
-          <button className="lg:hidden" onClick={() => setShowMobile(true)}>
+      <header className="fixed top-0 w-full z-50 flex justify-between items-center px-3 sm:px-6 h-14 sm:h-16 bg-surface-container-low/90 backdrop-blur-xl shadow-[0_0_20px_rgba(208,188,255,0.1)]">
+        <div className="flex items-center gap-3 sm:gap-8 min-w-0">
+          <button className="lg:hidden flex-shrink-0" onClick={() => setShowMobile(true)} aria-label="Menu">
             <span
               className="material-symbols-outlined text-on-surface-variant"
               style={{ fontSize: 24 }}
@@ -88,8 +88,9 @@ export function Navbar() {
               menu
             </span>
           </button>
-          <Link href="/" className="flex items-center" aria-label="Kaboom — home">
-            <KaboomLogo size={48} glow />
+          <Link href="/" className="flex items-center flex-shrink-0" aria-label="Kaboom — home">
+            <span className="lg:hidden"><KaboomLogo size={36} glow /></span>
+            <span className="hidden lg:inline"><KaboomLogo size={48} glow /></span>
           </Link>
           <nav className="hidden lg:flex gap-6 items-center">
             {NAV_LINKS.map((link) => (
@@ -107,25 +108,25 @@ export function Navbar() {
             ))}
           </nav>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4 min-w-0">
           {isConnected && (
-            <div className="flex items-center gap-2 px-4 py-1.5 bg-surface-container-highest rounded-lg border border-outline-variant/20">
-              <span className="w-2 h-2 rounded-full bg-emerald" />
-              <span className="font-headline text-sm font-bold text-primary tracking-wide">
+            <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-1 sm:py-1.5 bg-surface-container-highest rounded-lg border border-outline-variant/20 min-w-0">
+              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-emerald flex-shrink-0" />
+              <span className="font-headline text-xs sm:text-sm font-bold text-primary tracking-wide whitespace-nowrap">
                 {walletBal} SOL
               </span>
             </div>
           )}
           <button
             onClick={() => (isConnected ? open("profile") : login())}
-            className="bg-gradient-to-br from-primary to-primary-container text-on-primary px-5 py-2 font-headline text-xs font-bold uppercase tracking-widest hover:shadow-[0_0_15px_rgba(164,201,255,0.4)] transition-all active:scale-95 flex items-center gap-2"
+            className="bg-gradient-to-br from-primary to-primary-container text-on-primary px-3 sm:px-5 py-1.5 sm:py-2 font-headline text-xs font-bold uppercase tracking-widest hover:shadow-[0_0_15px_rgba(164,201,255,0.4)] transition-all active:scale-95 flex items-center gap-2 flex-shrink-0"
           >
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
               {isConnected ? "person" : "account_balance_wallet"}
             </span>
             <span className="hidden sm:inline">{isConnected ? shortAddr : "Connect"}</span>
           </button>
-          <div className="relative" ref={notifRef}>
+          <div className="relative hidden sm:block" ref={notifRef}>
             <button
               onClick={() => setShowNotif(!showNotif)}
               className="relative p-2 hover:bg-surface-container-highest rounded-lg transition-all"
