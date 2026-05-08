@@ -61,6 +61,12 @@ export function GameRecoveryBanner({ info }: Props) {
   const wallet = wallets[0];
   const setGameToken = useGameStore((s) => s.setGameToken);
   const setStatus = useGameStore((s) => s.setStatus);
+  // Hide the banner the instant the player has actively re-entered a game
+  // (status flips to "playing" via resume(), or to "starting"/"cashing" via
+  // a normal flow). Without this gate the banner would linger because
+  // `info.active` stays true for the entire on-chain GameSession lifetime,
+  // and the 15s server poll won't run again immediately.
+  const storeStatus = useGameStore((s) => s.status);
 
   // Smooth 1-second countdown between API polls. The session probe runs
   // every 15s, which left the visible countdown stuttering ("28s" → wait
@@ -167,6 +173,10 @@ export function GameRecoveryBanner({ info }: Props) {
   }, [busy, wallet, connection, signTransaction, buildRecoveryIx, info, toast]);
 
   if (!info.active) return null;
+  // Player has resumed (or is mid-game on this device) — banner has done its job.
+  if (storeStatus === "playing" || storeStatus === "starting" || storeStatus === "cashing") {
+    return null;
+  }
 
   const isPlaying = info.status === "Playing" || info.status === null;
   // Active = no on-chain settlement yet, bet still locked. Refund returns it.
