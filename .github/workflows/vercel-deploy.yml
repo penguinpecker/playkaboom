@@ -32,9 +32,13 @@ jobs:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # All three exported here so every CLI step picks them up automatically —
+    # avoids passing --token= inline (GitHub Actions masks the substituted
+    # value with ***, which Vercel CLI then rejects as a literal arg).
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
     steps:
       - uses: actions/checkout@v4
@@ -46,13 +50,13 @@ jobs:
         run: npm install -g vercel@latest
 
       - name: Pull Vercel environment (production)
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel pull --yes --environment=production
 
       - name: Build (prebuilt for upload)
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel build --prod
 
       - name: Deploy prebuilt artifact to production
         run: |
-          DEPLOY_URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          DEPLOY_URL=$(vercel deploy --prebuilt --prod)
           echo "Deployed to: $DEPLOY_URL"
           echo "::notice title=Deploy::$DEPLOY_URL"
