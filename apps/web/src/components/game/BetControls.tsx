@@ -124,8 +124,8 @@ export function BetControls() {
 
   return (
     <div className="space-y-6">
-      <section className="bg-surface-container-low p-6 stealth-card border border-outline-variant/10">
-        <div className="flex justify-between items-center mb-6">
+      <section className="bg-surface-container-low p-4 sm:p-6 stealth-card border border-outline-variant/10">
+        <div className="flex justify-between items-center mb-4 sm:mb-6">
           <h2 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase">
             Engagement Parameters
           </h2>
@@ -215,7 +215,7 @@ export function BetControls() {
             <label className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant mb-2 block">
               Mine Density
             </label>
-            <div className="grid grid-cols-6 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               {GAME_CONFIG.MINE_OPTIONS.map((n) => (
                 <button
                   key={n}
