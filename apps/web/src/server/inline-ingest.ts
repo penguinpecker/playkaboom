@@ -15,15 +15,30 @@ import { logger } from "@/server/logger";
  * Errors are swallowed: indexing is best-effort and must NEVER block the
  * gameplay path. Cron will catch up if this call fails.
  */
+/** Retry getTransaction up to N times with backoff, because the RPC node we
+ *  query can lag the cluster by 1–3s after a settle tx confirms. Without
+ *  this retry, the first call frequently returns null, inline-ingest
+ *  silently no-ops, and the game disappears until the next cron sweep. */
+const RPC_RETRIES = 4;
+const RPC_BACKOFF_MS = [400, 800, 1500, 2500];
+
 export async function indexFreshSignature(signature: string): Promise<void> {
   try {
     const conn = getConnection();
-    const tx = await conn.getTransaction(signature, {
-      maxSupportedTransactionVersion: 0,
-      commitment: "confirmed",
-    });
+    let tx = null;
+    for (let i = 0; i < RPC_RETRIES; i++) {
+      tx = await conn.getTransaction(signature, {
+        maxSupportedTransactionVersion: 0,
+        commitment: "confirmed",
+      });
+      if (tx) break;
+      // RPC hasn't seen the sig yet; wait and retry. Total worst-case
+      // 5.2s — well within the per-request budget; the user's UI is
+      // already in "settling..." state at this point.
+      await new Promise((r) => setTimeout(r, RPC_BACKOFF_MS[i] ?? 2500));
+    }
     if (!tx) {
-      logger.warn({ signature }, "inline-ingest: tx not found");
+      logger.warn({ signature, retries: RPC_RETRIES }, "inline-ingest: tx not found after retries");
       return;
     }
     const indexable: IndexableTx = {

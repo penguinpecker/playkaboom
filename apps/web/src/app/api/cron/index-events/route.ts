@@ -16,6 +16,14 @@ export const maxDuration = 60;
  * falling behind. Plenty for devnet and early mainnet. */
 const MAX_SIGNATURES_PER_RUN = 600;
 const PAGE_SIZE = 100;
+/** Safety window: every cron run also re-fetches the last N sigs even if
+ * they're "before" the cursor, then relies on `processed_events` dedupe to
+ * skip ones already indexed. Without this, an inline-ingest race (RPC
+ * confirmation lag → getTransaction returns null → silent skip) becomes
+ * permanent because the next cron run uses `until: <cursor>` which excludes
+ * the missed sig forever. 100 sig overlap covers ~1h of bursty mainnet
+ * activity — well past any plausible RPC propagation delay. */
+const SAFETY_WINDOW_SIGNATURES = 100;
 
 /**
  * Vercel Cron entry point. Polls Solana for any new signatures touching the
@@ -42,15 +50,29 @@ export async function GET(req: NextRequest) {
       .eq("program", program.toBase58())
       .maybeSingle();
 
-    const until = cursor?.last_signature ?? undefined;
+    // ?reset=1 forces a full re-scan from the most recent sig back to
+    // MAX_SIGNATURES_PER_RUN. Use this once after the cursor has been
+    // advanced past a failed-ingest sig — `processed_events` dedupe
+    // guarantees no double-write. Behind CRON_SECRET, no public access.
+    const url = new URL(req.url);
+    const reset = url.searchParams.get("reset") === "1";
+    const until = reset ? undefined : (cursor?.last_signature ?? undefined);
 
     // Page through getSignaturesForAddress until we hit `until` or the cap.
+    // After hitting `until`, ALSO fetch SAFETY_WINDOW_SIGNATURES sigs
+    // immediately before it — handles the inline-ingest race-condition
+    // failure mode where a sig was already past the cursor but was never
+    // actually written to the DB. processed_events dedup means re-running
+    // is safe (already-indexed sigs become a no-op).
     const newSignatures: { signature: string; slot: number; blockTime?: number; err?: unknown }[] = [];
     let before: string | undefined;
+    let hitCursor = false;
     pages: for (let page = 0; page < Math.ceil(MAX_SIGNATURES_PER_RUN / PAGE_SIZE); page++) {
+      // Apply `until` only on pages BEFORE we hit it. After we've hit it,
+      // drop the constraint so we can dredge the safety window.
       const sigs = await conn.getSignaturesForAddress(
         program,
-        { limit: PAGE_SIZE, before, until },
+        { limit: PAGE_SIZE, before, ...(hitCursor ? {} : { until }) },
         "confirmed",
       );
       if (sigs.length === 0) break;
@@ -64,7 +86,33 @@ export async function GET(req: NextRequest) {
         if (newSignatures.length >= MAX_SIGNATURES_PER_RUN) break pages;
       }
       before = sigs[sigs.length - 1]?.signature;
-      if (sigs.length < PAGE_SIZE) break;
+      // If the page returned fewer than PAGE_SIZE, getSignaturesForAddress
+      // hit `until` (or end-of-history). Switch into safety-window mode
+      // and pull SAFETY_WINDOW_SIGNATURES more before terminating.
+      if (sigs.length < PAGE_SIZE && !reset) {
+        if (hitCursor) break;
+        hitCursor = true;
+        // Now refresh max budget to the safety window and keep paging.
+        for (let k = 0; k < Math.ceil(SAFETY_WINDOW_SIGNATURES / PAGE_SIZE); k++) {
+          const safetySigs = await conn.getSignaturesForAddress(
+            program,
+            { limit: PAGE_SIZE, before },
+            "confirmed",
+          );
+          if (safetySigs.length === 0) break pages;
+          for (const s of safetySigs) {
+            newSignatures.push({
+              signature: s.signature,
+              slot: s.slot,
+              blockTime: s.blockTime ?? undefined,
+              err: s.err,
+            });
+          }
+          before = safetySigs[safetySigs.length - 1]?.signature;
+          if (safetySigs.length < PAGE_SIZE) break pages;
+        }
+        break pages;
+      }
     }
 
     if (newSignatures.length === 0) {
