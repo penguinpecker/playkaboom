@@ -1,413 +1,184 @@
 # PlayKaboom — Session Handoff
 
-A self-contained status doc you can paste into a new Claude session.
-Refreshed 2026-05-07. Full session-by-session log in `records.txt`.
+A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-08** (post-Phase H + post-indexer-self-heal). Full session-by-session log lives in `records.txt`.
 
-## STATUS — 2026-05-07 (audit-fix patch deployed via Squads multisig)
+## STATUS — 2026-05-08 (mainnet, fully multisig-controlled)
 
-**Live on devnet at slot 460574105. Every privileged authority on Squads or Turnkey. Every test in the suite passing.**
+**Live on Solana mainnet at https://playkaboom.gg.** Every privileged authority is on Squads or Turnkey. No single key can move admin levers.
 
 | Authority | Address | Type |
 |---|---|---|
-| `vault.owner` | `At5oBj3K…fbJjVh` | Squads 2/2 multisig |
-| `vault.treasury` | `At5oBj3K…fbJjVh` | Squads 2/2 multisig |
-| `vault.house_authority` | `3TCMevgU…dQKWL` | Turnkey HSM |
-| BPF upgrade authority | `At5oBj3K…fbJjVh` | Squads 2/2 multisig |
-| Squads multisig PDA | `7RjsJ7uE…L2Nz` | threshold 2/2 |
-| Program ID (devnet) | `4rPEGzWoD2i8k3Pr5tnJsBV7AZEK2zQJCXZe4YgwcixT` | |
+| `vault.owner` | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
+| `vault.treasury` | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
+| `vault.house_authority` | `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` | Turnkey HSM (game ixs only) |
+| BPF upgrade authority | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
+| Squads multisig config | `H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm` | threshold 2-of-2, time_lock 0 |
+| Squads member 1 | `6wvvcCZ44f9AeJPC7k1VKMNdexCUsuwpaw1sZjyktGr1` | Initiate + Vote + Execute |
+| Squads member 2 | `EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG` | Initiate + Vote + Execute |
+| Program ID (mainnet) | `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` | |
+| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned, ~11.13 SOL |
+| Deployer wallet | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | zero admin powers — fee-payer only |
 
-**Zero single-key authorities in production.** A stolen deployer key (`DbR1a1Cu…`) gets you nothing of value: can't upgrade, can't drain treasury, can't sign as house, can't change config.
+**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey can sign game ixs only (start/reveal/settle); admin/treasury/upgrade all need Squads 2/2.
 
-### Tests passing on live devnet (post audit-fix deploy)
+## Live config + economics (mainnet vault)
 
-| Suite | Status | Tx evidence (final) |
+| Param | Value | Notes |
 |---|---|---|
-| Full game smoke (start→reveal→cash→settle, win+lose paths) | ✓ | `29zGyKkB…ZkSC8` |
-| Squads 2/2 multisig smoke (noop update_vault) | ✓ | `2b8yQGor…cNCK` |
-| Squads threshold negative (1/2 fails, 2/2 passes) | ✓ | `3YUfhod8…JbJ5Q` |
-| LP withdraw cooldown (Squads-controlled) | ✓ | `2zDt5mFY…a3NK` |
-| Stuck-game recovery (refund_expired + neg test) | ✓ | inline |
-| Vault kill-switch (pause/unpause via Squads) | ✓ | `4HVtRFc3…Cujqk` |
-| Treasury withdraw + allowlist enforcement | ✓ | `frVXrNyA…ZbT6i` |
-| **Referral end-to-end (set_referrer fix verified)** | ✓ | `3KVfzJKy…ACfg` |
-| **Squads-controlled program upgrade** | ✓ | `27N3qu88…wDiTV` |
+| `house_edge_bps` | 200 (2.00%) | 2× Stake/BC's 1%. Tradeable for volume. |
+| `max_bet_bps` | 200 (2% of vault) | At 11 SOL vault → 0.222 SOL max |
+| `max_payout_bps` | **5000 (50% of vault)** ⚠️ | Industry std is 0.5–1%. **Single biggest risk fix** queued |
+| `treasury_split_bps` | 5000 (50/50) | LP gets half, treasury gets half |
+| `total_games` lifetime | 21 | Test/early traffic |
+| Vault PDA balance | ~11.13 SOL | LP + obligations + accrued fees |
+| LP unit accounting | seed 90.83% / house 9.08% / users 0.09% | seed permanently locked by design |
 
-### Live program contains (as of slot 460574105)
+Math is locked: 2% edge × handle = GGR every dollar wagered, regardless of strategy or mine count. No formula escapes it (verified for all 5 mine options × all reasonable cashout points). Realized hold over 14 games was +38.7% but that's noise; converges to 2% by ~1000 games.
 
-- Obligation double-decrement fix (cash_out no longer releases; settle_game does)
-- Audit C1: explicit referral PDA derivation in `settle_game`
-- Audit C2: reject executable destinations in `withdraw_to_treasury`
-- Audit M3: `MIN_WITHDRAW_COOLDOWN_SLOTS=150` + `MIN_HEALTH_BPS_FLOOR=100` floors
-- Audit M5: aliasing assert in `withdraw_to_treasury`
-- Bug fix: `set_referrer` reads `referrer.key()` instead of just-init'd field
+## Stack & infra
 
-### Three things to know about the Squads upgrade flow (lessons from this session)
-
-1. **Vec<u8> in BPF Upgradeable Loader Write ix is u64 LE length-prefixed**, not u32. The `scripts/upgrade-program-via-squads.ts` script is now correct. Symptom of getting it wrong: `invalid instruction data` on first chunk write.
-2. **ExtendProgram before upgrade if bytecode grew.** The script doesn't auto-extend yet (TODO). Symptom: `AccountDataTooSmall` on the multisig execute. Manual one-shot:
-   ```bash
-   # Build a small ix-only tx with BPFLoaderUpgradeable.ExtendProgram(4096)
-   # Single key, deployer signs, ~0.029 SOL paid.
-   # Then wait one slot before re-executing the multisig.
-   ```
-   Adding this to the upgrade script is on the punch list.
-3. **Squads SDK's `vaultTransactionExecute` throws "Cannot set property logs of Error which has only a getter"** on any failure. The on-chain logs are hidden. Workaround: build the ix via `multisig.instructions.vaultTransactionExecute()` and send the raw Transaction yourself — `error.transactionLogs` is then visible.
-
-### Pending for next session
-
-1. **Migrate legacy ReferralAccounts** — any wallet that called `set_referrer` before slot 460574105 has `ReferralAccount.referrer = Pubkey::default()`. Their `claim_referral` will fail `Unauthorized` even though they have accrued lamports. Two options:
-   - (Recommended) Add `repair_referral(referrer)` ix — Squads-signed one-shot per referrer that overwrites the field with the seed-derived pubkey. Idempotent.
-   - Relax the `claim_referral` constraint to fall back to seed-derived comparison. Simpler but slightly weakens the security check.
-2. **Browser end-to-end** — Privy embedded wallets, real game flow, mobile responsive checks.
-3. **Mark Sensitive in Vercel** — list in `docs/security/secrets.md`.
-4. **Wire `ALERT_WEBHOOK_URL`** in Vercel env so vault-health alerts actually fire (cron + endpoint already shipped).
-5. **Auto-extend in upgrade script** — detect `data_length < bytecode.length` and prepend ExtendProgram automatically.
-6. **C3/C4 operational policy**: configure Squads to refuse durable-nonce proposals; freeze `config_authority = None` once member set is finalized.
-
-### Tx receipts from today (cross-reference)
-
-| What | Sig |
+| Layer | Choice |
 |---|---|
-| Obligation fix deploy (single-key, before authority transfer) | `jX9qi7dB…8L` |
-| BPF upgrade authority → Squads | `5feDkeNT…NT8` |
-| Multisig smoke | `2b8yQGor…cNCK` |
-| Threshold negative test (final exec) | `3YUfhod8…JbJ5Q` |
-| Vault-paused emergency unpause | `4HVtRFc3…Cujqk` |
-| LP cooldown round-trip (complete_withdraw) | `2zDt5mFY…a3NK` |
-| Allowlist add → withdraw → remove (allowed withdraw) | `frVXrNyA…ZbT6i` |
-| **Audit-fix program upgrade (via Squads)** | `27N3qu88…wDiTV` |
-| **Referral set_referrer fix verified** | `3KVfzJKy…ACfg` |
+| Frontend | Next.js 15 (App Router), React 19, Tailwind, Privy embedded wallets |
+| RPC | Alchemy mainnet (deploy & user reads); public mainnet for fallback |
+| Indexer | Helius webhook → Supabase Postgres (fed via inline-ingest in /api/reveal + /api/settle, plus GH Actions cron every 5min via /api/cron/index-events for redundancy) |
+| House signing | Turnkey HSM — signs reveal/settle ixs only |
+| Hosting | **Vercel kaboomweb3-6280 account, project `playkaboom`** (not the older `penguinpecker1-4937` account, which has been retired) |
+| Auto-deploy | **GitHub Actions** (`.github/workflows/vercel-deploy.yml`) — every push to main → `vercel deploy --prod` via repo secrets. Vercel native git integration was a dead-end (new account has no GitHub Login Connection, no token can substitute). |
+| DB | Supabase project `vrxeqgynejlnmwsifvml` |
+| Sensitive secrets | Vercel-only encrypted env (TURNKEY_*, SUPABASE_SERVICE_ROLE_KEY, PRIVY_APP_SECRET, SESSION_ENC_KEY, HELIUS_WEBHOOK_AUTH, CRON_SECRET). Local `.env.local` files are public values only — restore via `vercel env pull` if ever needed (stripped 2026-05-08). |
 
-## TL;DR
+## Indexer reliability
 
-Provably-fair on-chain Mines casino on Solana. Anchor program + Next.js 15 frontend + Supabase indexer. Built to deploy to mainnet. Code is feature-complete for P1 devnet alpha; deployment is gated on toolchain install + account setup.
+- **Inline-ingest** runs after every reveal+settle tx; retries `getTransaction` up to 4× with backoff (5.2s worst case) to handle RPC propagation lag (1-3s)
+- **Cron** at `/api/cron/index-events` triggered by GH Actions every 5 min (free-tier throttling means actual cadence is more like 1-3h — tolerable now). Pages `getSignaturesForAddress` with a **100-sig safety window** past the cursor so historically-failed sigs always get re-checked. `processed_events` dedup keeps it idempotent.
+- **One-shot rescue**: `?reset=1` query param (CRON_SECRET-gated) nullifies `until`, pulls 600 sigs from head. Or trigger via workflow_dispatch input `reset=true` on the index-events workflow.
 
-- **Repo**: https://github.com/penguinpecker/playkaboom
-- **Local path**: `~/Desktop/Projects/playkaboom`
-- **Domain**: `playkaboom.gg` (not yet pointed)
-- **Current state**: code complete for P1; needs Anchor build + devnet deploy + env vars to play end-to-end
+Bug found + fixed 2026-05-08 evening: pre-fix, games with 13+ mines silently dropped because `mine_count BETWEEN 0 AND 12` CHECK constraint was stale (program later bumped MAX_MINES to 15). Migration `20260508000002_mine_count_15.sql` fixes it. After the fix + a `?reset=1` cron run, games table is in sync with on-chain.
 
-## Architecture (one paragraph)
+## Recent shipped — 2026-05-08
 
-Server-assisted commit-reveal Mines. Server generates mine layout + 32-byte salt, commits `SHA256(layout || mine_count || salt)` on-chain when the player calls `start_game`. Server signs each tile reveal. On settle (win or loss) the server publishes `(layout, salt)` and the program verifies the hash matches and every recorded reveal is consistent. Per-player `PlayerStats` and per-referrer `ReferralAccount` PDAs accrue on-chain, indexed off-chain in Supabase via Helius webhooks.
+(Newest first, all live on production.)
 
-## Locked decisions
+| Commit | What |
+|---|---|
+| `701e008` | DB: bump games.mine_count CHECK 0..12 → 0..15 (the silent-drop bug) |
+| `949e5a3` | CI: index-events workflow accepts `reset=true` input |
+| `65b5dc7` | Indexer self-heal: cron safety window + ?reset=1 + inline-ingest retry |
+| `45d8d2d` | Revert "inline SVG logo" (unrelated local edit accidentally bundled) |
+| `55537af` | CI: server-side build (vercel deploy --prod, NOT --prebuilt) |
+| `037de32` | CI: pass Vercel token via env: block, not --token= inline |
+| `675eeba` | CI: new `.github/workflows/vercel-deploy.yml` for auto-deploy |
+| `74ce0cc` | Mobile: /logs cards, /leaderboard flex layout; ref-code prefetch on auth |
+| `5bed0a4` | XP ledger (silent — service-role-only DB grants, no UI yet) |
+| `c0b6a57` | Withdraw confirmation screen + /logs MY WALLET ACTIVITY (localStorage) |
+| `ae5bbc4` | MAX bet button + withdraw uses useSignTransaction (Privy embedded) |
+| `b8fc4db` | Resume banner timing fix + ENGAGE wallet-disconnect + dedupe footer |
+| `65d9441` | WITHDRAW button + modal in profile dropdown |
+| `59fa469` | /play mobile overhaul (Grid responsive, Navbar shrunk) |
 
-| # | Decision | Rationale |
-|---|---|---|
-| 1 | Domain `playkaboom.gg` | confirmed by user |
-| 2 | Game roster: Mines only | scope discipline; expand to dice/plinko at P3 |
-| 3 | No geographic block | self-selecting crypto-native players; ToS instead; no fiat ramps reduce regulated exposure |
-| 4 | 2-of-2 Squads multisig as `owner` and `treasury` | simplest M-of-N for two-person operation |
-| 5 | Audits skipped before mainnet | accepted risk; defended by on-chain bet/payout caps + bug bounty |
-| 6 | VRF: Switchboard On-Demand | TEE-attested oracle, on-chain submission, recent but adequate; user preference over ORAO |
-| 7 | Treasury split: 50% to treasury, 50% retained as vault liquidity | editable via `update_vault`, withdrawals only to allowlisted addresses (max 8) |
-| 8 | Stats + leaderboard: `PlayerStats` PDA on-chain (truth) + Helius webhook → Supabase (fast queries) | trustless source of truth, fast UI |
-| 9 | Referrals: 25/30/35% of house edge by tier, on-chain accrual, manual claim | matches Stake/Rollbit norms; tier auto-upgrades by referred volume |
-| 10 | Hosting: Vercel (frontend + API routes) + Supabase (Postgres) | no Railway needed; serverless functions handle every workload |
-| 11 | Auth: Privy embedded wallets (default) + native adapters | wallet-less UX for new users, power users keep their keys |
-| 12 | Token: SOL only at P1; USDC at P3+ | Solana-native, simplest |
+Phase H (full multisig handover) landed earlier in the day:
+- D1: atomic update_vault + allowlist_add + propose_owner
+- D2: Squads-signed `accept_ownership` (tx `4SxxC3X…`) → vault.owner = 464Fe…
+- D3: `solana program set-upgrade-authority` → BPF auth = 464Fe…
 
-## Tech stack
+## Pending / queued for next session
 
-| Layer | Pick | Why |
-|---|---|---|
-| Runtime | Node 20, Next.js 15, React 19 | App Router, server components |
-| Auth | Privy + `@privy-io/server-auth` | embedded wallets + social login + server-side JWT verification |
-| RPC primary | Helius Professional | webhooks + priority-fee oracle + 99.9% SLA |
-| RPC fallback | Triton One | independent infra |
-| VRF | Switchboard On-Demand | TEE-attested |
-| Indexer | Helius webhooks → Supabase Postgres | one writer, public reads |
-| DB | Supabase Postgres | RLS, free tier ample for P1 |
-| Cache / RL | Upstash Redis (sliding window) | already wired |
-| Queue | Upstash QStash | when needed for retries |
-| Email | Resend | growth notifications later |
-| Errors | Sentry (browser + server) | P2 |
-| Uptime | Better Stack | $24/mo, status page included |
-| Hosting | Vercel Pro | Next.js native |
-| Multisig | Squads | Solana standard |
-| Bug bounty | Immunefi | P3 |
+**Highest priority (single Squads 2/2 vote each):**
+1. **`update_vault`: max_payout_bps 5000 → 100.** A single 12-mine win at max bet currently drains 50% of vault in one round (P=0.055% per attempt). Industry std is 0.5–1%. Biggest survival risk we have.
+2. **`update_v2_config`: min_health_bps 1000 → 2000.** Auto-pause earlier when stressed.
+3. **Optional: `house_edge_bps` 200 → 100** to match Stake/BC if competing on price. Or keep 2% for non-comparing SOL-native users.
 
-## Repository layout
+**Loyalty / XP rollout (when ready):**
+- Add LP tier multiplier feeder: `tier_mult_bps = 10000 + min(5000, lp_share_of_vault × 500000)` reading live from `LpPosition.units / v2.total_units`
+- Add daily streak feeder: +5%/day, caps +25%, resets on missed 24h
+- Public the `points_balance` view: `grant select on public.points_balance to anon, authenticated;`
+- Create `/api/points/[wallet]` reader; surface in profile dossier
+- Defer airdrop / token decision; the daily Merkle commit infra can be added later
+
+**Operational:**
+- Squads time_lock 0 → 24h (one-shot 2/2 vote, gives reaction window if a member key gets compromised)
+- Migrate cron trigger from GH Actions (irregular) to cron-job.org or Cloudflare Worker for true 5-min cadence. Safety window mitigates current irregular cadence so it's not urgent
+- Old Vercel account `penguinpecker1-4937` — user already deleted the playkaboom project there per their commitment; verify no lingering references
+- Verified-program flag on Solscan (deterministic build mismatch deferred from PART 7; needs amd64 VPS or OtterSec coordination)
+
+**Cleanup considerations:**
+- Cross-device sync for /logs MY WALLET ACTIVITY — currently localStorage-only. Would need a `wallet_actions` Supabase table + `/api/wallet-activity` if multi-device matters
+- Helius webhooks were deferred per user; re-evaluate if push-based event ingestion becomes valuable (current poll-based + inline-ingest model works at current scale)
+
+## How to deploy
+
+**Auto:** push to main. The `Vercel Deploy` Actions workflow (`.github/workflows/vercel-deploy.yml`) builds + ships in 2-3 min. Concurrency group cancels in-flight runs on newer pushes.
+
+**Manual fallback** (if Actions is broken or you want to skip CI):
+```bash
+cd ~/Projects/playkaboom
+# Token persisted at root .env.local as VERCEL_TOKEN= (gitignored)
+source <(grep ^VERCEL_TOKEN= .env.local)
+npx vercel --prod --token="$VERCEL_TOKEN" --yes
+```
+
+**Apply a Supabase migration:**
+```bash
+cd ~/Projects/playkaboom
+supabase db push --linked --include-all
+```
+
+**One-shot indexer rescue** (if games-table out-of-sync with on-chain):
+```bash
+gh workflow run index-events.yml --repo penguinpecker/playkaboom --ref main -f reset=true
+```
+
+## Critical lessons (carried forward)
+
+1. **Squads V4 Tx Builder Raw data field expects base58, NOT hex.** Hex passes the form silently but produces broken tx data. Encode discriminators as base58. (Saved as feedback memory.)
+2. **Vercel Sensitive env vars are non-decryptable by API or `vercel env pull`.** To run admin ops needing them, trigger via existing GH Actions workflows that already have the secret as a repo secret.
+3. **GitHub Actions secret-masking breaks `--token=${{ secrets.X }}` inline.** Use the job's `env:` block; CLIs auto-read.
+4. **`gh secret set X --body -` sets the value to literal "-".** Omit `--body` entirely; `gh` reads stdin by default.
+5. **`vercel build --prebuilt` fails for Next routes that need runtime ctx.** Use `vercel deploy --prod` (server-side build).
+6. **Don't bundle untracked local files into commits even on "push the rest".** Surface unknown files and ask; never silently include. (Saved as feedback memory.)
+7. **No secret fragments in committed docs** — even truncated forms (`abc1234…xyz`) leak identity. Refer by env-var name only. (Saved as feedback memory.)
+8. **Operator-first deploy, multisig handoff at the literal end** — building under single-key control is fast; flipping authorities should be the last step. (Saved as feedback memory.)
+
+## Repo layout (for orientation)
 
 ```
 playkaboom/
-├── apps/web/                  Next.js 15 frontend + API routes
-│   ├── src/app/               Pages: /, /play, /vault, /leaderboard, /referrals, /logs
-│   ├── src/app/api/           commit, reveal, settle, cleanup, health, game/[player]
-│   ├── src/components/        layout (Navbar, Footer, MobileDrawer), game (Grid, Tile, BetControls), modals (8 types), providers (web3, modal, toast), ui (KaboomLogo, Icons)
-│   ├── src/hooks/             use-game-actions, use-vault, use-player-stats, use-referral, useGame (compat), useContracts (compat), useGameHistory, useToast, useModal
-│   ├── src/server/            env, auth (Privy verify), session (AES-256-GCM), game (mine layout), solana (sender + RPC), webhook-auth (HMAC), player (referrer cache), db/supabase, db/types
-│   ├── src/stores/            game-store, history-store (Zustand)
-│   ├── src/lib/               cluster, api, format, compat (wagmi-shim), chain
-│   └── tailwind.config.ts     Deep-purple theme #1b0639, primary #a4c9ff, etc.
-├── programs/kaboom/           Anchor program (Rust)
-│   └── src/lib.rs             Vault, GameSession, PlayerStats, ReferralAccount + 12 instructions
-├── packages/sdk/              TS SDK (instruction builders, account decoders, verify)
-├── packages/shared/           Constants + zod schemas + multiplier math
-├── supabase/
-│   ├── migrations/
-│   │   ├── 20260505000001_init.sql        Schema: player_stats, games, referrals, referral_events, processed_events + 3 leaderboard views
-│   │   └── 20260505000002_security.sql    CHECK constraints, FORCE RLS, role grants, updated_at trigger
-│   └── config.toml
-├── tests/
-│   ├── anchor/runner.ts       Integration runner stub (fill in once toolchain in)
-│   └── sdk/*.test.ts          Vitest: multiplier, verifier, instruction builders
-├── ROADMAP.md                 Phases + tech stack + run-rate
-├── SECURITY.md                Threat model + defense-in-depth controls
-├── HANDOFF.md                 (this file)
-├── README.md
-├── CONTRIBUTING.md
-├── Anchor.toml                Program IDs (devnet + mainnet placeholders)
-├── Cargo.toml                 Workspace
-├── package.json               npm workspaces + turbo
-└── .env.example               Template (real values in .env.local, gitignored)
+├── apps/web/                  Next.js 15 app + API routes
+│   ├── src/app/api/cron/      index-events (Solana → Supabase indexer)
+│   │                          vault-health (alerts on health crit)
+│   ├── src/app/api/admin/     backfill-points (XP retroactive, CRON_SECRET-gated)
+│   ├── src/server/            indexer.ts, inline-ingest.ts, points.ts,
+│   │                          turnkey-signer.ts, auth.ts, etc.
+│   └── src/components/        Navbar, Footer, modals, game/, ui/
+├── programs/kaboom/src/lib.rs Anchor program
+├── packages/sdk/              TS instruction builders + decoders
+├── packages/shared/           Zod schemas + multiplier math + constants
+├── supabase/migrations/       Postgres migrations
+├── scripts/                   ops scripts (rotate-to-squads, backfill, etc.)
+├── .github/workflows/         CI: ci.yml, codeql.yml, index-events.yml,
+│                              vault-health.yml, vercel-deploy.yml
+├── records.txt                full session log (≈2200 lines)
+└── HANDOFF.md                 this file
 ```
 
-## Status: DONE ✅
+## Quick verification commands
 
-### On-chain program (`programs/kaboom/src/lib.rs`)
-
-| Feature | Where | Notes |
-|---|---|---|
-| `initialize_vault` | line ~67 | Sets owner, house_authority, treasury, default 50/50 split, empty allowlist |
-| `fund_vault` | ~96 | Anyone can deposit |
-| `set_referrer` | ~108 | Player one-time stamps referrer; init_if_needed for both stats + referral PDAs |
-| `start_game` | ~154 | Bet caps enforced, init_if_needed PlayerStats |
-| `reveal_tile` | ~218 | House signs, expiry-aware |
-| `cash_out` | ~282 | Player signs, defense-in-depth solvency check |
-| `settle_game` | ~322 | Verifies SHA-256 commit, updates PlayerStats, credits referrer (optional remaining_account) |
-| `claim_referral` | ~440 | Referrer drains accrued lamports |
-| `refund_expired` | ~471 | Player recovery after 300 slots |
-| `close_game` | ~501 | Rent reclaim |
-| `withdraw_to_treasury` | ~514 | Treasury signer + allowlist enforced |
-| `update_vault` | ~558 | Owner-only config + treasury_split_bps + new_treasury |
-| `allowlist_add` / `allowlist_remove` | ~596 / ~625 | Owner manages withdrawal targets |
-
-### Accounts
-
-| Account | Seeds | Purpose |
-|---|---|---|
-| `Vault` | `[kaboom_vault]` | House bankroll, config, allowlist |
-| `GameSession` | `[kaboom_game, player]` | One active game per player |
-| `PlayerStats` | `[kaboom_stats, player]` | Lifetime stats, optional referrer |
-| `ReferralAccount` | `[kaboom_referral, referrer]` | Per-referrer accrual + tier |
-
-### Events emitted
-
-`VaultInitialized`, `VaultFunded`, `VaultUpdated`, `AllowlistChanged`, `TreasuryWithdrawal`, `GameStarted`, `TileRevealed`, `GameWon`, `GameLost`, `GameSettled`, `GameRefunded`, `StatsUpdated`, `ReferrerSet`, `ReferralAccrued`, `ReferralTierChanged`, `ReferralClaimed`. All carry `slot`.
-
-### TypeScript SDK (`packages/sdk`)
-
-- PDA derivers: `deriveVaultPda`, `deriveGamePda`, `derivePlayerStatsPda`, `deriveReferralPda`
-- Instruction builders for every program ix (above)
-- Account decoders: `decodeVault`, `decodeGameSession`, `decodePlayerStats`, `decodeReferralAccount`
-- `computeCommitment` / `verifyGame` (uses `@noble/hashes`, browser + node safe)
-- `KaboomClient` for RPC reads + v0 tx building
-- Error name extractor from logs
-
-### Server (`apps/web/src/server/`)
-
-- `env.ts` — lazy-validated env (HOUSE_AUTHORITY_KEY 64-byte JSON, SESSION_ENC_KEY 32-byte hex, PROGRAM_ID, SOLANA_RPC)
-- `auth.ts` — Privy JWT verification + `verifyPlayerAuth(req, player)` enforces wallet ownership
-- `session.ts` — AES-256-GCM with `pk1:` prefix, nonce field for replay protection
-- `game.ts` — unbiased Fisher-Yates mine layout, rejection-sampled `randomBytes`
-- `solana.ts` — house tx sender with priority fee + compute budget
-- `webhook-auth.ts` — `timingSafeEqual` shared-secret + HMAC fallback
-- `player.ts` — 60s cache for player's on-chain referrer
-- `db/supabase.ts` — `supabaseAdmin()` (service role, server-only) + `supabasePublic()` (anon)
-- `ratelimit.ts` — Upstash sliding window 30/10s
-- `logger.ts` — pino with secret redaction
-
-### API routes (`apps/web/src/app/api/`)
-
-| Route | Auth | Purpose |
-|---|---|---|
-| `POST /api/commit` | Privy + wallet match | Generate session, return start_game ix |
-| `POST /api/reveal` | Privy + wallet match | Server signs reveal_tile (atomic settle on mine), credits referrer |
-| `POST /api/settle` | Privy + wallet match | Returns cash_out ix or settles after cashout |
-| `POST /api/cleanup` | Privy + wallet match | Returns close + refund instructions |
-| `GET /api/health` | none | Vault PDA + balance + house authority pubkey |
-| `GET /api/game/[player]` | none | Active game status snapshot |
-
-### Frontend pages (`apps/web/src/app/`)
-
-| Page | Status |
-|---|---|
-| `/` (home) | Hero, stats banner, how-it-works, reactive modules, real-time intel, footer |
-| `/play` | Grid + BetControls + on-chain stats sidebar |
-| `/vault` | Vault health bar, contracts list, deposit form |
-| `/leaderboard` | Tabs (Top Wins / Volume / Streak) backed by `/api/leaderboard` (Supabase views) with localStorage fallback |
-| `/profile/[wallet]` | On-chain stats + recent games + referral status |
-| `/verify/[sig]` | Public verifier — recomputes SHA-256(layout‖count‖salt) in browser, ✅/❌ banner |
-| `/referrals` | Pending-referrer prompt, copy link, tier ladder, claim button, my referrer |
-| `/logs` | Combat log with filters + pagination |
-
-### Theme + components
-
-- Tailwind: deep-purple `#1b0639` base, `#a4c9ff` primary, `#fda9ff` tertiary, `#34d399` emerald, `#fbbf24` amber
-- Fonts: Space Grotesk (headline) + Inter (body) via `@fontsource`
-- Material Symbols Outlined icons
-- Custom utilities: `stealth-card` clip-path, `kinetic-grid`, `gem-glow`, `boom-glow`, `modal-backdrop`
-- 9 keyframe animations (fade-up, scale-in, shake, pop-in, slide-down, float, cash-pulse, tile-reveal, pulse)
-
-### Database (Supabase project `kaboom`, ref `vrxeqgynejlnmwsifvml`, Tokyo)
-
-| Table | Rows | RLS |
-|---|---|---|
-| `player_stats` | mirrors PlayerStats PDA | public SELECT, service_role write |
-| `games` | one per settled game | public SELECT, service_role write |
-| `referrals` | mirrors ReferralAccount PDA | public SELECT, service_role write |
-| `referral_events` | per-credit log | public SELECT, service_role write |
-| `processed_events` | webhook idempotency | service_role only |
-
-Views: `leaderboard_alltime`, `leaderboard_volume`, `leaderboard_streaks`. CHECK constraints on every numeric. `updated_at` trigger via SECURITY DEFINER fn with `search_path=''`.
-
-### Security
-
-- `Content-Security-Policy` strict allow-list (Privy + Solana RPCs + Supabase + Pyth + WalletConnect)
-- HSTS in prod, frame-ancestors `'none'`, COOP/CORP, Permissions-Policy locked down
-- `import "server-only"` on every server module — accidental client import fails build
-- All player-mutating routes require Privy auth + wallet ownership match
-- Rate limit 30/10s per (IP, player)
-- Schema CHECK constraints + FORCE RLS
-
-## Status: TO-DO
-
-### Code work — landed since prior handoff
-
-| # | Item | Status |
-|---|---|---|
-| 26 | `/api/webhook/helius` receiver — HMAC-verified, decodes program logs, upserts player_stats / games / referrals / referral_events idempotently via processed_events | ✅ done |
-| 38 | `/leaderboard` switched to `/api/leaderboard` (Top Wins / Volume / Streak views) with localStorage fallback | ✅ done |
-| 36 | `/profile/[wallet]` page reading on-chain `PlayerStats` + `ReferralAccount` | ✅ done |
-| — | SDK event decoders + `extractEventsFromLogs` for 8 events | ✅ done |
-| 39 | Pyth Hermes USD overlay on bet input + balance line | ✅ done |
-| 40 | PWA manifest + apple-touch + theme-color + OG/Twitter meta | ✅ done |
-| 41 | Program update: `GameSettled` event now emits `mine_count` + `salt` so verifier doesn't need an extra RPC | ✅ done |
-| 42 | Migration `20260506000001_verify_salt.sql` adds `salt` + `settled_layout` columns to `games` table | ✅ done |
-| 43 | `/verify/[sig]` page + `/api/verify` endpoint — browser-side `verifyGame()` from `@playkaboom/sdk`, ✅/❌ banner, full proof inputs displayed; linked from FairModal + each row in `/logs` | ✅ done |
-
-### Code work — still TODO
-
-| # | Item | Status |
-|---|---|---|
-| — | Anchor flow tests (`tests/anchor/runner.ts`) — happy path, refund, mine reveal, claim_referral | ⏸ needs Anchor toolchain (`avm install 0.31.1`) |
-| 22 | Switchboard On-Demand VRF — server requests randomness, folds into salt before commit | ⏸ needs Switchboard account |
-| — | i18n scaffold (next-intl, en-US first) | ⏸ P3 |
-| — | Service worker for true offline (manifest is in but no SW yet) | ⏸ P3 |
-| — | Sentry init wiring (env var present, code stub not added) | ⏸ P2 |
-| — | Treasury withdrawal timelock (24h delay) — currently instant within allowlist | ⏸ P2 |
-
-### Account setup (you do, blocks deploy)
-
-| Step | Where |
-|---|---|
-| Set `PRIVY_APP_SECRET` in `apps/web/.env.local` | https://dashboard.privy.io → app → "App secret" |
-| Get Helius API key + RPC URL | https://dashboard.helius.dev |
-| Generate `HELIUS_WEBHOOK_AUTH` | `openssl rand -hex 32` then mirror in Helius dashboard |
-| Generate `SESSION_ENC_KEY` | `openssl rand -hex 32` |
-| Generate house authority keypair | `solana-keygen new -o keypairs/house.json` then JSON-encode bytes into `HOUSE_AUTHORITY_KEY` |
-| Set up Squads multisig | https://app.squads.so |
-| Buy domain `playkaboom.gg` + point at Vercel | Namecheap / Cloudflare Registrar |
-
-### Toolchain (mostly installed)
-
-| Tool | Status |
-|---|---|
-| Node 20 | ✅ |
-| Rust | ✅ via brew |
-| Solana CLI | ✅ via brew (`solana 3.1.14`) |
-| Anchor | ❌ not yet (`cargo install --git https://github.com/coral-xyz/anchor avm --locked && avm install 0.31.1 && avm use 0.31.1`) |
-| Supabase CLI | ✅ via brew, logged in |
-| GitHub CLI | ✅ logged in as penguinpecker |
-
-### Deployment (after toolchain + accounts)
-
-1. `anchor build` → `target/deploy/kaboom.so` + `target/idl/kaboom.json`
-2. `anchor deploy --provider.cluster devnet` → grab program ID, update `Anchor.toml` + `PROGRAM_ID` env vars
-3. Run a one-shot script calling `initialize_vault(200, 200, 5000)` and `fund_vault(2_000_000_000)` (2 SOL)
-4. `vercel link` → push env vars → `vercel --prod`
-5. Configure Helius webhook → `https://playkaboom.gg/api/webhook/helius` with `Authorization: <HELIUS_WEBHOOK_AUTH>`
-6. Test end-to-end on devnet
-7. Repeat with mainnet program (~5 SOL deploy fee)
-8. Transfer `owner` + `treasury` to Squads multisig via `update_vault`
-9. List on Immunefi
-
-## How to resume in a new Claude session
-
-Paste this block at the top of the new session:
-
-> I'm working on **PlayKaboom** — a provably-fair on-chain Mines casino on Solana. Repo: `~/Desktop/Projects/playkaboom` (also https://github.com/penguinpecker/playkaboom). Read `HANDOFF.md` first for full context, then `ROADMAP.md` and `SECURITY.md`. Last commit: `a4ca7ab` (public verifier).
->
-> Locked decisions: Mines only, no geo-block, 2-of-2 Squads multisig, Switchboard On-Demand VRF (P2), Vercel + Supabase, 25/30/35% on-chain referral rakeback. Tech stack: Anchor 0.31 + Next.js 15 + React 19 + Privy + Supabase + Upstash. Theme: deep purple `#1b0639`, primary `#a4c9ff`, Space Grotesk + Inter.
->
-> Auto mode is on. Pages live at `/`, `/play`, `/vault`, `/leaderboard`, `/referrals`, `/logs`, `/profile/<wallet>`, `/verify/<sig>`. Server hardened: Privy JWT verification + RLS-forced Postgres + CSP + server-only guards.
->
-> **Critical path to playable devnet** (everything else is polish):
-> 1. Install Anchor: `cargo install --git https://github.com/coral-xyz/anchor avm --locked && avm install 0.31.1 && avm use 0.31.1`
-> 2. `anchor build` then `anchor deploy --provider.cluster devnet`
-> 3. Update `PROGRAM_ID` in `apps/web/.env.local` and `Anchor.toml`
-> 4. Fill `PRIVY_APP_SECRET`, `HOUSE_AUTHORITY_KEY`, `SESSION_ENC_KEY`, `HELIUS_WEBHOOK_AUTH` in `.env.local`
-> 5. Write a script calling `initialize_vault(200, 200, 5000)` + `fund_vault(2_000_000_000)`
-> 6. Visit `/play` and play end-to-end
->
-> See `HANDOFF.md` "Code work — still TODO" and "Account setup" for the rest.
-
-## Resume commands (verify state)
-
+Health check without leaving terminal:
 ```bash
-cd ~/Desktop/Projects/playkaboom
-git status -sb                       # should be clean, in sync with origin/main
-git log --oneline | head -10         # see commit history
-ls -la apps/web/.env.local           # verify env file exists
-cat HANDOFF.md | head -50            # quick refresh
-supabase migration list --linked     # confirm migrations in sync
-gh repo view --web                   # open repo in browser
+# Vault state
+solana account 9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK \
+  --url https://api.mainnet-beta.solana.com
+
+# DB row count
+curl -s 'https://playkaboom.gg/api/activity/global?limit=1' \
+  | python3 -c 'import json,sys; print("rows:", len(json.load(sys.stdin)["events"]))'
+
+# Last auto-deploy
+gh run list --repo penguinpecker/playkaboom \
+  --workflow=vercel-deploy.yml --limit 1
+
+# Indexer cron health
+gh run list --repo penguinpecker/playkaboom \
+  --workflow=index-events.yml --limit 3
 ```
-
-## Restart the dev server
-
-```bash
-cd ~/Desktop/Projects/playkaboom/apps/web
-npx next dev -p 4000
-```
-
-Browser: http://localhost:4000
-
-## Env vars currently set (in `apps/web/.env.local`)
-
-```
-NEXT_PUBLIC_SOLANA_CLUSTER=devnet
-NEXT_PUBLIC_SOLANA_RPC=https://api.devnet.solana.com
-SOLANA_RPC=https://api.devnet.solana.com
-PROGRAM_ID=Kab1TestProgam11111111111111111111111111111   # placeholder, real after anchor deploy
-NEXT_PUBLIC_PRIVY_APP_ID=cmorodpkj004l0ciclclct89u
-PRIVY_APP_SECRET=                                         # YOU MUST FILL FROM DASHBOARD
-NEXT_PUBLIC_SUPABASE_URL=https://vrxeqgynejlnmwsifvml.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJ…(set)
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJ…(set)
-HOUSE_AUTHORITY_KEY=                                      # YOU MUST GENERATE
-SESSION_ENC_KEY=                                          # YOU MUST GENERATE (openssl rand -hex 32)
-HELIUS_WEBHOOK_AUTH=                                      # YOU MUST GENERATE (openssl rand -hex 32)
-```
-
-## Things explicitly accepted as risk
-
-| Risk | Why accepted |
-|---|---|
-| No formal audit before mainnet | On-chain bet caps + bug bounty + open source |
-| No geo-block | Self-selecting players + ToS + no fiat ramps |
-| Token rotation manual | Each rotation is a quick env-var update |
-| Single house authority key (no MPC) | KMS upgrade is on the P3 roadmap |
-
-## Useful contacts / endpoints
-
-| Service | URL |
-|---|---|
-| GitHub repo | https://github.com/penguinpecker/playkaboom |
-| Supabase project | https://supabase.com/dashboard/project/vrxeqgynejlnmwsifvml |
-| Privy dashboard | https://dashboard.privy.io |
-| Helius dashboard (TBD) | https://dashboard.helius.dev |
-| Squads (TBD) | https://app.squads.so |
-| Status page (TBD) | https://status.playkaboom.gg |
