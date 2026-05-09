@@ -2,7 +2,7 @@
   "name": "@playkaboom/realtime",
   "version": "0.1.0",
   "private": true,
-  "description": "WebSocket relay that broadcasts Postgres NOTIFY payloads (game settles, LP actions) to connected playkaboom.gg clients. Primary live-feed push; Supabase Realtime + 60s polling are fallbacks in the web client.",
+  "description": "WebSocket relay that fans out Supabase Realtime events (game settles, LP actions) to connected playkaboom.gg clients. Primary live-feed push; the web client also subscribes to Supabase Realtime directly as a fallback and polls at 60s as a last-resort safety net.",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
@@ -11,12 +11,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "pg": "^8.13.1",
+    "@supabase/supabase-js": "^2.105.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@types/pg": "^8.11.10",
     "@types/ws": "^8.5.13",
     "tsx": "^4.21.0",
     "typescript": "^5.7.2"

@@ -1,25 +1,31 @@
 /**
  * Live-feed WebSocket relay for playkaboom.gg.
  *
- * Subscribes to Postgres NOTIFY channels emitted by triggers on
- * public.games + public.lp_actions, and broadcasts each payload to
- * every connected browser client. Primary push path for the /logs
- * and /vault live feeds; the web client also subscribes to Supabase
- * Realtime as a fallback and polls at 60s as a last-resort safety net.
+ * Subscribes to Supabase Realtime postgres_changes upstream (one
+ * connection for the whole relay), and fans out each event over
+ * WebSocket to every connected browser client. This decouples viewer
+ * count from Supabase's per-client connection quota: 1000 viewers on
+ * the relay = 1 upstream Supabase connection.
+ *
+ * The web client ALSO subscribes to Supabase Realtime directly as a
+ * fallback (and polls at 60s as a last-resort safety net), so a
+ * Railway redeploy / brief drop doesn't make the feed stale.
  *
  * Required env:
- *   DATABASE_URL       Postgres connection string (Supabase pooler 6543
- *                      or direct 5432 — direct preferred for LISTEN).
- *   PORT               Set automatically by Railway. Defaults to 8080.
- *   ALLOWED_ORIGINS    Comma-separated list. Defaults to the prod
- *                      playkaboom.gg origins.
+ *   SUPABASE_URL          https://<project>.supabase.co
+ *   SUPABASE_ANON_KEY     anon JWT (RLS-enforced; tables already grant
+ *                         SELECT to anon)
+ *   PORT                  Set automatically by Railway. Defaults 8080.
+ *   ALLOWED_ORIGINS       Comma-separated list. Defaults to prod
+ *                         playkaboom.gg origins.
  */
 import http from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
-import pg from "pg";
+import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
 
 const PORT = Number(process.env.PORT ?? 8080);
-const DATABASE_URL = process.env.DATABASE_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const ALLOWED_ORIGINS = (
   process.env.ALLOWED_ORIGINS ??
   "https://playkaboom.gg,https://www.playkaboom.gg,http://localhost:3000"
@@ -28,14 +34,17 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 
-if (!DATABASE_URL) {
-  console.error("[fatal] DATABASE_URL is not set");
+if (!SUPABASE_URL) {
+  console.error("[fatal] SUPABASE_URL is not set");
+  process.exit(1);
+}
+if (!SUPABASE_ANON_KEY) {
+  console.error("[fatal] SUPABASE_ANON_KEY is not set");
   process.exit(1);
 }
 
-const PG_LISTEN_CHANNELS = ["game_settled", "lp_action"] as const;
-
 const clients = new Set<WebSocket>();
+let upstreamConnected = false;
 
 const httpServer = http.createServer((req, res) => {
   if (req.url === "/health" || req.url === "/healthz") {
@@ -44,7 +53,7 @@ const httpServer = http.createServer((req, res) => {
       JSON.stringify({
         ok: true,
         clients: clients.size,
-        pg: pgConnected,
+        upstream: upstreamConnected,
         uptime_s: Math.round(process.uptime()),
       }),
     );
@@ -56,9 +65,8 @@ const httpServer = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({
   server: httpServer,
-  // Origin gate so other sites can't piggyback the public broadcast.
-  // The feed itself is public; this only blocks unrelated origins from
-  // freeloading our connection quota.
+  // Origin gate so unrelated sites can't piggyback on our broadcast
+  // and burn through our connection quota. The feed itself is public.
   verifyClient: ({ origin }, cb) => {
     if (!origin || ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin)) {
       cb(true);
@@ -70,21 +78,26 @@ const wss = new WebSocketServer({
 
 wss.on("connection", (ws) => {
   clients.add(ws);
+  const live = ws as WebSocket & { isAlive?: boolean };
+  live.isAlive = true;
+  ws.on("pong", () => {
+    live.isAlive = true;
+  });
   ws.on("close", () => clients.delete(ws));
   ws.on("error", () => clients.delete(ws));
   ws.send(
     JSON.stringify({
       type: "hello",
       clients: clients.size,
+      upstream: upstreamConnected,
       ts: Date.now(),
     }),
   );
 });
 
-// WebSocket heartbeat — terminate clients that disappear without a
-// proper close (mobile-tab kill, network drop). Browsers reply to
-// pings automatically; clients that don't reply within 60s get
-// reaped so we don't slowly accumulate dead sockets.
+// Reap dead sockets that disappeared without a clean close (mobile-tab
+// kill / network drop). Browsers auto-respond to pings; clients that
+// don't reply within 60s are terminated to avoid slow accumulation.
 const HEARTBEAT_MS = 30_000;
 const heartbeat = setInterval(() => {
   for (const ws of clients) {
@@ -104,14 +117,6 @@ const heartbeat = setInterval(() => {
   }
 }, HEARTBEAT_MS);
 
-wss.on("connection", (ws) => {
-  const live = ws as WebSocket & { isAlive?: boolean };
-  live.isAlive = true;
-  ws.on("pong", () => {
-    live.isAlive = true;
-  });
-});
-
 const broadcast = (payload: string) => {
   for (const ws of clients) {
     if (ws.readyState === ws.OPEN) {
@@ -124,66 +129,71 @@ const broadcast = (payload: string) => {
   }
 };
 
-let pgClient: pg.Client | null = null;
-let pgConnected = false;
-let pgRetryDelay = 1_000;
-const PG_RETRY_MAX = 30_000;
+// ── Upstream: Supabase Realtime postgres_changes ─────────────────────
+//
+// supabase-js maintains its own WS connection to Supabase, with built-
+// in reconnect + heartbeats. We don't need to roll our own retry loop.
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+  realtime: { params: { eventsPerSecond: 10 } },
+});
 
-async function startPg() {
-  pgClient = new pg.Client({
-    connectionString: DATABASE_URL,
-    // Supabase requires SSL; pooler uses self-signed so don't strictly verify.
-    ssl: { rejectUnauthorized: false },
-    keepAlive: true,
-  });
-  pgClient.on("notification", (msg) => {
-    if (!msg.payload) return;
-    let parsed: unknown = null;
-    try {
-      parsed = JSON.parse(msg.payload);
-    } catch {
-      console.warn("[pg] non-JSON payload on", msg.channel);
-      return;
-    }
-    broadcast(
-      JSON.stringify({
-        type: msg.channel,
-        data: parsed,
-        ts: Date.now(),
-      }),
-    );
-  });
-  pgClient.on("error", (e) => {
-    console.error("[pg] error", e.message);
-  });
-  pgClient.on("end", () => {
-    console.warn("[pg] connection ended — reconnecting");
-    pgConnected = false;
-    pgClient = null;
-    setTimeout(() => {
-      void startPg().catch((e) => console.error("[pg] reconnect failed", e));
-    }, pgRetryDelay);
-    pgRetryDelay = Math.min(pgRetryDelay * 2, PG_RETRY_MAX);
-  });
-  try {
-    await pgClient.connect();
-    for (const ch of PG_LISTEN_CHANNELS) {
-      await pgClient.query(`LISTEN ${ch}`);
-    }
-    pgConnected = true;
-    pgRetryDelay = 1_000;
-    console.log(`[pg] LISTEN ${PG_LISTEN_CHANNELS.join(", ")}`);
-  } catch (e) {
-    pgConnected = false;
-    console.error("[pg] connect failed", (e as Error).message);
-    setTimeout(() => {
-      void startPg().catch((err) => console.error("[pg] retry failed", err));
-    }, pgRetryDelay);
-    pgRetryDelay = Math.min(pgRetryDelay * 2, PG_RETRY_MAX);
-  }
+let channel: RealtimeChannel | null = null;
+
+function startUpstream() {
+  channel = supabase
+    .channel("playkaboom-relay")
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "games" },
+      (payload) => {
+        broadcast(
+          JSON.stringify({
+            type: "game_settled",
+            data: payload.new,
+            ts: Date.now(),
+          }),
+        );
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "games" },
+      (payload) => {
+        broadcast(
+          JSON.stringify({
+            type: "game_updated",
+            data: payload.new,
+            ts: Date.now(),
+          }),
+        );
+      },
+    )
+    .on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "lp_actions" },
+      (payload) => {
+        broadcast(
+          JSON.stringify({
+            type: "lp_action",
+            data: payload.new,
+            ts: Date.now(),
+          }),
+        );
+      },
+    )
+    .subscribe((status, err) => {
+      if (status === "SUBSCRIBED") {
+        upstreamConnected = true;
+        console.log("[upstream] subscribed to postgres_changes");
+      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+        upstreamConnected = false;
+        console.warn("[upstream] status:", status, err?.message ?? "");
+      }
+    });
 }
 
-void startPg();
+startUpstream();
 
 httpServer.listen(PORT, () => {
   console.log(`[realtime] listening on :${PORT}`);
@@ -199,7 +209,9 @@ const shutdown = (sig: string) => {
       /* noop */
     }
   }
-  pgClient?.end().catch(() => undefined);
+  if (channel) {
+    void supabase.removeChannel(channel);
+  }
   httpServer.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5_000).unref();
 };
