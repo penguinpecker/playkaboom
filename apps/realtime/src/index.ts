@@ -18,6 +18,18 @@
  *   PORT                  Set automatically by Railway. Defaults 8080.
  *   ALLOWED_ORIGINS       Comma-separated list. Defaults to prod
  *                         playkaboom.gg origins.
+ *
+ * Optional env:
+ *   CRON_TICK_URL         If set, the relay polls this URL on a 60s
+ *                         interval and forwards CRON_TICK_AUTH as the
+ *                         Authorization header. This is the playkaboom.gg
+ *                         /api/cron/index-events tickler — replaces the
+ *                         GitHub-Actions cron schedule which fires every
+ *                         1-3h on free tier. Railway containers run 24/7
+ *                         so cadence is reliable.
+ *   CRON_TICK_AUTH        Bearer token for the CRON_TICK_URL request.
+ *                         For playkaboom.gg, this is the CRON_SECRET that
+ *                         the /api/cron/index-events route validates.
  */
 import http from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -176,6 +188,58 @@ function startUpstream() {
 
 startUpstream();
 
+// ── Cron tickler (optional) ──────────────────────────────────────────
+//
+// Calls a URL on a 60s schedule with a bearer auth header. Used as a
+// reliable replacement for the playkaboom.gg GH-Actions cron, which on
+// free tier fires every 1-3h instead of 5min. Railway containers run
+// 24/7 so the cadence is dependable without burning a Cron-as-a-Service
+// subscription. Skips itself if the previous tick is still in flight
+// (avoids stacking calls on slow indexer runs).
+const CRON_TICK_URL = process.env.CRON_TICK_URL;
+const CRON_TICK_AUTH = process.env.CRON_TICK_AUTH;
+const CRON_TICK_INTERVAL_MS = 60_000;
+let cronInflight = false;
+let cronInterval: ReturnType<typeof setInterval> | null = null;
+
+async function tickCron() {
+  if (cronInflight) {
+    console.warn("[cron] previous tick still running, skipping");
+    return;
+  }
+  if (!CRON_TICK_URL) return;
+  cronInflight = true;
+  try {
+    const headers: Record<string, string> = {};
+    if (CRON_TICK_AUTH) headers["Authorization"] = `Bearer ${CRON_TICK_AUTH}`;
+    const res = await fetch(CRON_TICK_URL, { method: "GET", headers });
+    if (!res.ok) {
+      console.warn(`[cron] tick failed: HTTP ${res.status}`);
+    } else {
+      const body = (await res.json().catch(() => null)) as
+        | { processed?: number; skipped?: number; errors?: number }
+        | null;
+      if (body && (body.processed || body.errors)) {
+        console.log(
+          `[cron] processed=${body.processed ?? 0} skipped=${body.skipped ?? 0} errors=${body.errors ?? 0}`,
+        );
+      }
+    }
+  } catch (e) {
+    console.warn(`[cron] tick error: ${(e as Error).message}`);
+  } finally {
+    cronInflight = false;
+  }
+}
+
+if (CRON_TICK_URL) {
+  console.log(`[cron] tickling ${CRON_TICK_URL} every ${CRON_TICK_INTERVAL_MS / 1000}s`);
+  // Stagger first tick by 5s so the relay isn't pinging anything before
+  // upstream subscription has a chance to settle.
+  setTimeout(() => void tickCron(), 5_000);
+  cronInterval = setInterval(() => void tickCron(), CRON_TICK_INTERVAL_MS);
+}
+
 httpServer.listen(PORT, () => {
   console.log(`[realtime] listening on :${PORT}`);
 });
@@ -183,6 +247,7 @@ httpServer.listen(PORT, () => {
 const shutdown = (sig: string) => {
   console.log(`[realtime] ${sig} — shutting down`);
   clearInterval(heartbeat);
+  if (cronInterval) clearInterval(cronInterval);
   for (const ws of clients) {
     try {
       ws.close(1001, "server shutdown");
