@@ -53,7 +53,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
       appId={privyAppId}
       config={{
         appearance: { theme: "dark", accentColor: "#a4c9ff" },
-        loginMethods: ["email", "google"],
+        loginMethods: ["email", "google", "twitter"],
         embeddedWallets: { solana: { createOnLogin: "all-users" }, showWalletUIs: false },
         solanaClusters:
           CLUSTER === "mainnet-beta"
