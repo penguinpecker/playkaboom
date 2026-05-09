@@ -1,15 +1,12 @@
 "use client";
 import type { ReactNode } from "react";
 import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
-import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 import { ConnectionProvider } from "@solana/wallet-adapter-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { CLUSTER, RPC_URL } from "@/lib/cluster";
 import { setAuthTokenResolver } from "@/lib/api";
 import { useReferralCodePrefetch, useReferralSignupAttribution } from "@/hooks/use-referral";
-
-const solanaConnectors = toSolanaWalletConnectors();
 
 /** Wires Privy's `getAccessToken()` into the auth-fetch helper so every
  * authed API call attaches `Authorization: Bearer <privy token>`. */
@@ -56,9 +53,8 @@ export function Web3Provider({ children }: { children: ReactNode }) {
       appId={privyAppId}
       config={{
         appearance: { theme: "dark", accentColor: "#a4c9ff" },
-        loginMethods: ["email", "google", "wallet"],
+        loginMethods: ["email", "google"],
         embeddedWallets: { solana: { createOnLogin: "all-users" }, showWalletUIs: false },
-        externalWallets: { solana: { connectors: solanaConnectors } },
         solanaClusters:
           CLUSTER === "mainnet-beta"
             ? [{ name: "mainnet-beta", rpcUrl: RPC_URL }]
