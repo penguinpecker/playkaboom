@@ -64,9 +64,21 @@ function useVaultAccount() {
     };
     void f();
     const id = setInterval(f, 15_000);
+    // Wake-up triggers so the vault state recovers from background-tab
+    // suspension. Without these, after a few hours of inactivity the
+    // displayed vault balance / health / max bet stays frozen.
+    const onWake = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") void f();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
+    window.addEventListener("pageshow", onWake);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
+      window.removeEventListener("pageshow", onWake);
     };
   }, [connection]);
   return data;

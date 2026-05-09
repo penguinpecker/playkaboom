@@ -40,18 +40,26 @@ export function BetControls() {
   const isPlaying = state.status === "playing";
   const isStarting = state.status === "starting";
   const isCashing = state.status === "cashing";
+  // Mid-round: bet panel is read-only and re-betting is impossible until
+  // the round ends, so any vault-capacity warning is irrelevant noise that
+  // makes the player think their in-flight game is at risk. Suppress all
+  // capacity-derived UI signals for the duration of the round.
+  const inLiveRound = isPlaying || isStarting || isCashing;
   const safeTilesTotal = GAME_CONFIG.GRID_SIZE - state.mineCount;
   const progress = isPlaying ? Math.round((state.safeTiles.size / safeTilesTotal) * 100) : 0;
   const maxBet = capacity.maxBetSol;
-  const wouldExceedLiquidity = capacity.reason === "exceeds_cap";
+  const wouldExceedLiquidity = !inLiveRound && capacity.reason === "exceeds_cap";
   const vaultUnavailable =
-    capacity.reason === "paused" ||
-    capacity.reason === "vault_empty" ||
-    capacity.reason === "obligations_full";
+    !inLiveRound &&
+    (capacity.reason === "paused" ||
+      capacity.reason === "vault_empty" ||
+      capacity.reason === "obligations_full");
   // Human-readable explanation surfaced under the bet input. Only set when
-  // the bet *can't* go through — otherwise the input stays clean.
-  const blockReason: string | null =
-    capacity.reason === "paused"
+  // the bet *can't* go through — otherwise the input stays clean. Hidden
+  // entirely while the player is in a live round (see inLiveRound above).
+  const blockReason: string | null = inLiveRound
+    ? null
+    : capacity.reason === "paused"
       ? "Vault paused. Gameplay is temporarily disabled."
       : capacity.reason === "obligations_full"
         ? "Vault is fully obligated to in-flight games + pending withdrawals — wait a few minutes for settlements."
@@ -76,9 +84,21 @@ export function BetControls() {
     };
     void f();
     const i = setInterval(f, 8_000);
+    // Re-fire immediately when the tab returns or the network comes back so
+    // the balance recovers from mobile-suspension drift instead of waiting
+    // up to 8s (or longer if the timer was throttled into oblivion).
+    const onWake = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") void f();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
+    window.addEventListener("pageshow", onWake);
     return () => {
       cancelled = true;
       clearInterval(i);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
+      window.removeEventListener("pageshow", onWake);
     };
   }, [publicKey, connection]);
 

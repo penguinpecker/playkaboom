@@ -61,6 +61,7 @@ export function GameRecoveryBanner({ info }: Props) {
   const wallet = wallets[0];
   const setGameToken = useGameStore((s) => s.setGameToken);
   const setStatus = useGameStore((s) => s.setStatus);
+  const hydrateResume = useGameStore((s) => s.hydrateResume);
   // Hide the banner the instant the player has actively re-entered a game
   // (status flips to "playing" via resume(), or to "starting"/"cashing" via
   // a normal flow). Without this gate the banner would linger because
@@ -96,10 +97,29 @@ export function GameRecoveryBanner({ info }: Props) {
       toast("No saved session to resume", "error");
       return;
     }
-    setGameToken(info.pendingGameToken);
-    setStatus("playing");
+    if (info.commitment && info.mineCount != null && info.betLamports) {
+      // Hydrate the local UI from the on-chain GameSession masks so any
+      // tiles the player already flipped before they paused show up as
+      // SAFE/BOOM. Without this the grid renders blank and clicking a
+      // previously-revealed tile errors with TileAlreadyRevealed.
+      hydrateResume({
+        bet: Number(BigInt(info.betLamports)) / LAMPORTS_PER_SOL,
+        mineCount: info.mineCount,
+        revealedMask: info.revealedMask,
+        revealedSafeMask: info.revealedSafeMask,
+        multiplier: info.multiplier,
+        commitment: info.commitment,
+        gameToken: info.pendingGameToken,
+      });
+    } else {
+      // Fallback for the rare race where on-chain fields didn't make it
+      // through the response payload — at least flip status so the player
+      // can see the panel even if the masks are missing.
+      setGameToken(info.pendingGameToken);
+      setStatus("playing");
+    }
     toast("Game resumed — pick up where you left off", "success");
-  }, [info.pendingGameToken, setGameToken, setStatus, toast]);
+  }, [info, hydrateResume, setGameToken, setStatus, toast]);
 
   // Pick the right ix based on the on-chain GameStatus. Calling the wrong one
   // throws GameNotFinished/GameNotExpired (custom error 0x1782 / 0x1781).

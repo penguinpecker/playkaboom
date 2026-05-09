@@ -25,6 +25,25 @@ export interface GameResult {
   timestamp: number;
 }
 
+/** Snapshot of an on-chain GameSession used to rehydrate the local UI when
+ *  the player resumes a round on a different device or after a reload. */
+export interface ResumeSnapshot {
+  /** Bet in SOL (already converted from lamports). */
+  bet: number;
+  mineCount: number;
+  /** Bitmask of all revealed tile indexes (bit i = tile i). */
+  revealedMask: number;
+  /** Bitmask of safe reveals only. For a Playing game this equals revealedMask
+   *  (a mine reveal would have flipped status to Lost). */
+  revealedSafeMask: number;
+  /** Multiplier as a ratio (multiplier_bps / 10_000). */
+  multiplier: number;
+  /** SHA-256 commitment hex from the on-chain GameSession. */
+  commitment: string;
+  /** Encrypted server-side session payload — same value as setGameToken. */
+  gameToken: string;
+}
+
 interface GameState {
   status: GameStatus;
   bet: number;
@@ -47,6 +66,7 @@ interface GameState {
   setStatus: (s: GameStatus) => void;
   setPendingTile: (idx: number | null) => void;
   setGameToken: (t: string | null) => void;
+  hydrateResume: (snapshot: ResumeSnapshot) => void;
   beginGame: (commitment: string, txHash: string) => void;
   applySafeReveal: (idx: number, multiplier: number, txHash: string) => void;
   applyMineReveal: (idx: number, txHash: string) => void;
@@ -104,6 +124,44 @@ export const useGameStore = create<GameState>((set) => ({
       else localStorage.removeItem(TOKEN_KEY);
     }
     set({ gameToken });
+  },
+  hydrateResume: (snapshot) => {
+    // Translate the on-chain bitmasks into the Set<number> shapes the Tile
+    // component reads. Without this hydration the player sees an apparently
+    // unflipped grid post-resume and gets "Tile already revealed" when they
+    // click a tile that the program already considers revealed.
+    const safeTiles = new Set<number>();
+    const mineTiles = new Set<number>();
+    const revealedTiles = new Set<number>();
+    for (let i = 0; i < 16; i++) {
+      const bit = 1 << i;
+      if ((snapshot.revealedMask & bit) !== 0) revealedTiles.add(i);
+      if ((snapshot.revealedSafeMask & bit) !== 0) safeTiles.add(i);
+      // The lone mine tile (if any) is the bit set in revealedMask but not
+      // in revealedSafeMask. Only ever set on a Lost game, but handled here
+      // for completeness so a resume on a Lost-but-unsettled game still
+      // shows the correct boom tile.
+      if ((snapshot.revealedMask & bit) !== 0 && (snapshot.revealedSafeMask & bit) === 0) {
+        mineTiles.add(i);
+      }
+    }
+    if (typeof window !== "undefined") {
+      localStorage.setItem(TOKEN_KEY, snapshot.gameToken);
+    }
+    set({
+      status: "playing",
+      bet: snapshot.bet,
+      mineCount: snapshot.mineCount,
+      revealedTiles,
+      safeTiles,
+      mineTiles,
+      multiplier: snapshot.multiplier,
+      commitment: snapshot.commitment,
+      gameToken: snapshot.gameToken,
+      pendingTile: null,
+      payout: 0,
+      error: null,
+    });
   },
   beginGame: (commitment, txHash) =>
     set({

@@ -23,6 +23,11 @@ export function useGlobalGames(limit = 200) {
   return useQuery<GlobalGame[]>({
     queryKey: ["global-games", limit],
     refetchInterval: 8_000,
+    // Mobile-tab background-suspension can drift the 8s interval to a
+    // standstill after a few hours; refetching on focus + reconnect kicks
+    // the loop back on the moment the player returns to the tab.
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
     queryFn: async () => {
       const res = await fetch(`/api/activity/global?limit=${limit}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

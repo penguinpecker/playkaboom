@@ -33,6 +33,17 @@ export interface StuckGameInfo {
   /** Pre-fetched ciphertext — caller hands this to setGameToken when the
    *  player clicks the Resume button. NOT auto-applied (avoids surprise). */
   pendingGameToken: string | null;
+  /** u16 bitmask of all revealed tiles from the on-chain GameSession. Used
+   *  on resume to repaint already-flipped tiles so the player doesn't see
+   *  an unflipped grid + click a "TileAlreadyRevealed" failure. */
+  revealedMask: number;
+  /** u16 bitmask of revealed-safe tiles (revealedMask minus the lone mine
+   *  bit on a Lost game). For a Playing game equals revealedMask. */
+  revealedSafeMask: number;
+  /** Current multiplier as a ratio (multiplier_bps / 10_000). */
+  multiplier: number;
+  /** SHA-256 commitment hex from the on-chain GameSession. */
+  commitment: string | null;
   /** Force-refresh the probe (e.g. after a Force Close lands). */
   refresh: () => void;
 }
@@ -58,6 +69,10 @@ const EMPTY_INFO: Omit<StuckGameInfo, "refresh"> = {
   secondsUntilRefund: 0,
   refundable: false,
   pendingGameToken: null,
+  revealedMask: 0,
+  revealedSafeMask: 0,
+  multiplier: 1,
+  commitment: null,
 };
 
 export function useGameResume(): StuckGameInfo {
@@ -93,6 +108,10 @@ export function useGameResume(): StuckGameInfo {
           mineCount?: number;
           status?: OnChainGameStatus;
           settled?: boolean;
+          revealedMask?: number;
+          revealedSafeMask?: number;
+          multiplierBps?: string;
+          commitment?: string;
         };
         refund?: {
           refundable: boolean;
@@ -107,6 +126,9 @@ export function useGameResume(): StuckGameInfo {
         setError(null);
         return;
       }
+      const multiplierBps = data.onChain?.multiplierBps
+        ? Number(BigInt(data.onChain.multiplierBps))
+        : 10_000;
       // Don't auto-flip status to "playing" — present the choice through the
       // GameRecoveryBanner Resume button instead. Auto-flipping was confusing
       // (player got taken straight into a game they may not have wanted to
@@ -123,6 +145,10 @@ export function useGameResume(): StuckGameInfo {
         secondsUntilRefund: data.refund?.secondsUntilRefund ?? 0,
         refundable: data.refund?.refundable ?? false,
         pendingGameToken: data.gameToken ?? null,
+        revealedMask: data.onChain?.revealedMask ?? 0,
+        revealedSafeMask: data.onChain?.revealedSafeMask ?? 0,
+        multiplier: multiplierBps / 10_000,
+        commitment: data.onChain?.commitment ?? null,
       });
     } catch {
       /* silent */
@@ -137,6 +163,28 @@ export function useGameResume(): StuckGameInfo {
     const i = setInterval(() => void probe(), 15_000);
     return () => clearInterval(i);
   }, [probe, info.active, tick]);
+
+  // Mobile browsers aggressively suspend background tabs and the 15s
+  // setInterval can drift or stall for hours, leaving the live-game state
+  // frozen. Trigger an immediate probe whenever the tab becomes visible
+  // again, the network reconnects, or the page is restored from bfcache.
+  // Cheap (one fetch per event) and recovers the live feed instantly.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void probe();
+    };
+    const onOnline = () => void probe();
+    const onPageShow = () => void probe();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("pageshow", onPageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [probe]);
 
   const refresh = useCallback(() => setTick((t) => t + 1), []);
   return { ...info, refresh };
