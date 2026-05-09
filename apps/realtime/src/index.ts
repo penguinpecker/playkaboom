@@ -141,6 +141,13 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 let channel: RealtimeChannel | null = null;
 
 function startUpstream() {
+  // SCOPE: Railway is the live-trade-fees push path ONLY — every settled
+  // game (an INSERT into public.games) gets relayed to /logs viewers in
+  // ~100ms. Everything else (LP deposits/withdrawals, leaderboard,
+  // vault state, player stats) stays on Supabase polling / direct
+  // Realtime per the rest of the architecture. Adding more tables here
+  // would over-cost the relay's upstream subscription without helping
+  // any current consumer in the web client.
   channel = supabase
     .channel("playkaboom-relay")
     .on(
@@ -150,32 +157,6 @@ function startUpstream() {
         broadcast(
           JSON.stringify({
             type: "game_settled",
-            data: payload.new,
-            ts: Date.now(),
-          }),
-        );
-      },
-    )
-    .on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "games" },
-      (payload) => {
-        broadcast(
-          JSON.stringify({
-            type: "game_updated",
-            data: payload.new,
-            ts: Date.now(),
-          }),
-        );
-      },
-    )
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "lp_actions" },
-      (payload) => {
-        broadcast(
-          JSON.stringify({
-            type: "lp_action",
             data: payload.new,
             ts: Date.now(),
           }),
