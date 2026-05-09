@@ -2469,3 +2469,143 @@ so future sessions enforce it without being told):
       the dApp Store submission flow, and the release signing.
     - Reject any commit that adds *.gradle, AndroidManifest.xml,
       twa-manifest.json, or gradlew* to this repo — wrong-repo signal.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 5 — 2026-05-09 SESSION 2: live-feed push architecture (Railway + Supabase
+                                Realtime + polling, three-tier resilience)
+══════════════════════════════════════════════════════════════════════════════
+
+CONTEXT
+  After the morning's polling-fix commit (visibilitychange/online/pageshow
+  listeners on every poll site), user reported live game updates STILL stale
+  after a few hours on mobile. Three causes likely overlap:
+    • mobile-tab background-suspension drifting setInterval / refetchInterval
+    • Privy session expiry silently 401'ing the auth probe
+    • cron irregularity (records PART 10 already noted GH Actions firing
+      every 1-3h instead of 5min)
+  Right architectural answer: stop polling for the live feed, push it.
+
+ARCHITECTURE SHIPPED
+  Three layers, fastest first; all feed the same TanStack cache via a
+  signature-idempotent setQueryData so the layers can fight without
+  creating duplicates.
+
+  Layer 1 — Railway-hosted WebSocket relay (PRIMARY)
+    apps/realtime/ — new monorepo workspace; node + ws + @supabase/supabase-js.
+    The relay holds ONE supabase-js Realtime postgres_changes subscription
+    upstream, fans out each event over WS to every connected browser.
+    Key benefit: viewer count decoupled from Supabase free-tier 200-conn cap.
+
+    Project:  playkaboom-realtime    (Railway proj 680fe590-7e2d-4891-9097-
+                                                   9b34b5d6bf77)
+    Service:  playkaboom-realtime    (svc id 81b51a03-b5b3-40fc-a3df-
+                                              0e57b30a9b9b)
+    Domain:   wss://playkaboom-realtime-production.up.railway.app
+    Health:   curl https://playkaboom-realtime-production.up.railway.app/health
+              → { ok: true, clients: N, upstream: true, uptime_s: M }
+    Env vars: SUPABASE_URL / SUPABASE_ANON_KEY / ALLOWED_ORIGINS
+              (no DB password — uses anon-key Realtime subscription)
+
+  Layer 2 — Supabase Realtime direct (FALLBACK)
+    The browser ALSO subscribes directly to postgres_changes via
+    @supabase/supabase-js so a Railway redeploy / brief drop doesn't make
+    the feed stale. 1 Supabase connection per /logs viewer; current scale
+    (single-digit DAU) is 1% of the 200-conn ceiling.
+
+  Layer 3 — TanStack refetch @ 60s (LAST-RESORT POLL)
+    Was 8s polling; bumped to 60s now that two push paths cover the fast
+    case. Still fires on visibilitychange / online / pageshow per the
+    morning's commit so a tab returning from background gets a fresh
+    snapshot regardless of which layer recovered first.
+
+DEPLOY SEQUENCE EXECUTED (in this exact order — order matters)
+
+  1. Supabase migration push:
+       supabase db push --linked --include-all
+     Applied 20260509000001_realtime_games.sql (adds public.games and
+     public.lp_actions to the supabase_realtime publication; sets
+     replica identity full so row payload ships with each change).
+     A second NOTIFY-trigger migration (20260509000002) was authored
+     and then deleted before push when the relay's auth model was
+     simplified — never landed, never applied. Don't recreate it.
+
+  2. git push origin main — pushed 5 stacked commits:
+       ee61629 docs: Seeker TWA / web-repo boundary
+       3aeda53 fix(web): MAX-button rounding + /vault page cleanup
+       ec97b1b feat(realtime): swap /logs polling for Supabase Realtime push
+       6912e13 feat(realtime): Railway WS relay (initial pg.Client design)
+       9444870 refactor(realtime): use supabase-js Realtime upstream
+                                  instead of pg LISTEN
+     The 6912e13 / 9444870 pair could have been squashed; left as a stack
+     because the refactor was a meaningful change of approach (moved the
+     auth model from raw pg LISTEN — needs DB password — to supabase-js
+     Realtime — needs only SUPABASE_URL + ANON_KEY which were already in
+     env). Keeping both makes the reasoning legible in `git log`.
+
+  3. Railway init from CLI (new project + service):
+       cd apps/realtime
+       railway init --name playkaboom-realtime
+       railway up -d -c -m "initial deploy"
+       railway service playkaboom-realtime          # link service
+       railway variable set SUPABASE_URL=...        # 3 env vars
+       railway variable set SUPABASE_ANON_KEY=...
+       railway variable set ALLOWED_ORIGINS=https://playkaboom.gg,...
+       railway domain                                # generate public URL
+
+  4. Vercel env var:
+       npx vercel env add NEXT_PUBLIC_REALTIME_WS_URL production
+         (paste wss://playkaboom-realtime-production.up.railway.app)
+
+  5. Vercel rebuild — and HERE'S THE GOTCHA:
+       npx vercel --prod --yes
+     produced a new deploy with status Ready, but the bundle DID NOT
+     contain the WS URL. Reason: Vercel hits its build cache aggressively;
+     a plain --prod after env vars change can serve a stale build. Fix:
+       npx vercel --prod --force --yes
+     Force flag invalidates the build cache so NEXT_PUBLIC_ vars are
+     re-baked. Build took ~4 min instead of the usual 2; verify by
+     grepping the served /logs page chunk for the WS URL string.
+
+VERIFICATION DONE
+  • Bundle inspection:
+      curl https://www.playkaboom.gg/logs \
+        | grep -oE "_next/static/chunks/app/logs/page[^\"]*"   →  finds chunk
+      curl https://www.playkaboom.gg/$chunk \
+        | grep -aoE "playkaboom-realtime[^\"]*\.up\.railway\.app"
+        → "playkaboom-realtime-production.up.railway.app"  ✓
+  • End-to-end WS handshake from origin https://playkaboom.gg:
+      relay accepts, sends {"type":"hello","clients":1,"upstream":true}
+      cleanly disconnects, /health back to clients:0  ✓
+
+KNOWN ROAD-FORWARD
+  • Vercel CLI password caching prompted a manual `vercel --prod --force`
+    re-run twice during this session because the first --prod hit cache.
+    Records this gotcha in case it bites again on the next deploy where
+    a NEXT_PUBLIC_ env var changes.
+  • Railway trial credits cover the relay for ~1 month; upgrade to Hobby
+    ($5/mo) before they run out or the service auto-pauses.
+  • The relay subscribes to BOTH games and lp_actions inserts and emits
+    type "lp_action" to clients. Today nothing in the web client consumes
+    that; it's wired ahead for the next time the /vault LP panel needs
+    real-time deposit/withdraw updates without a refresh.
+  • Idempotency is handled client-side by signature-dedup. If a future
+    Postgres trigger ever emits the same INSERT twice, no double-credit.
+
+POST-SESSION STATE
+  origin/main HEAD : 9444870  (pushed)
+  Vercel prod      : dpl_Hxoj8ay3EW8aahZnEXBQB4zmVoik (rfolscjpe), Ready
+  Railway service  : playkaboom-realtime, status SUCCESS
+  Supabase         : migration 20260509000001 applied; 20260509000002
+                     deleted (never applied)
+  Vercel env       : NEXT_PUBLIC_REALTIME_WS_URL = wss://playkaboom-
+                     realtime-production.up.railway.app
+
+CARRIED FORWARD (unchanged from earlier this session)
+  - update_vault: max_payout_bps 5000 → 100   (Squads 2/2)
+  - update_v2_config: min_health_bps 1000 → 2000   (Squads 2/2)
+  - Squads time_lock 0 → 24h
+  - Verified-program flag on Solscan
+  - Treasury split: program upgrade vs periodic Squads sweep decision
+    (treasury_split_bps is currently consumed by zero on-chain ix; entire
+    GGR sits in vault boosting unit_value at the full rate, see PART 2)
