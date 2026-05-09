@@ -2402,3 +2402,70 @@ NEW (this session):
   - Treasury split economics decision: program-side auto-split vs
     periodic Squads sweep. Coordinate with max_payout_bps fix so both
     LP-economics changes ship in one disclosure cycle.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 4 — Seeker TWA repo boundary (durable rule)
+══════════════════════════════════════════════════════════════════════════════
+
+Context: 2026-05-08 commit 2915cc9 ("feat(pwa): add assetlinks.json +
+manifest icons for Seeker TWA") shipped 3 files into apps/web/public/
+that are needed by the Bubblewrap TWA wrapper at
+~/Projects/playkaboom-solana-seeker. Surfaced this session as a
+question about why mobile-app stuff was landing in the web repo. The
+answer: those three files MUST live on the web origin per Google's
+Digital Asset Links spec — there is NO way around it. Everything else
+mobile-related stays in the seeker repo.
+
+Rule (also saved as feedback memory
+~/.claude/projects/-Users-pp/memory/feedback_seeker_twa_repo_boundary.md
+so future sessions enforce it without being told):
+
+  ALLOWED to live in this (playkaboom) repo:
+    - apps/web/public/.well-known/assetlinks.json
+        Chrome fetches this from playkaboom.gg/.well-known/assetlinks.json
+        to verify the gg.playkaboom.twa package + release-cert SHA-256
+        fingerprint match. Without it, the TWA falls back to Custom Tab
+        WITH a URL bar — defeats the point of the TWA shell.
+    - apps/web/public/icons/icon-192.png
+    - apps/web/public/icons/icon-512.png
+        Referenced by apps/web/public/manifest.json (the PWA manifest).
+        Used by both the browser PWA install prompt AND the TWA launcher
+        icon. Web origin is the canonical source — TWA pulls them at
+        runtime from playkaboom.gg.
+
+  FORBIDDEN to land in this repo (always belongs in
+  ~/Projects/playkaboom-solana-seeker):
+    - app/build.gradle, build.gradle, settings.gradle
+    - app/src/main/AndroidManifest.xml (different from PWA manifest!)
+    - app/src/main/res/** (Android drawables / strings / layouts)
+    - twa-manifest.json (Bubblewrap config)
+    - gradle/, gradlew, gradlew.bat
+    - proguard-rules.pro, local.properties
+    - The release keystore — kept ONLY at ~/.keystores/, never any repo
+    - dApp Store publisher token / submission JSON
+
+  Why this matters operationally:
+    1. Auto-deploy: every push to ~/Projects/playkaboom main triggers a
+       Vercel prod deploy via .github/workflows/vercel-deploy.yml.
+       Bundling Android build files would either break the Next build
+       or ship Java/Kotlin into the JS bundle.
+    2. Audit surface: this repo is the audited surface (Anchor program
+       + Next API). Mixing in Android shell artifacts pollutes scope.
+    3. Versioning: the TWA shell ships independently to the dApp Store
+       on its own cadence — conflating histories breaks release notes.
+    4. Signing-cert hygiene: co-locating Android build files invites
+       accidental commits of local.properties (which references the
+       keystore path / sometimes the password) into git.
+
+  How to apply going forward:
+    - Keystore-fingerprint rotation → single-purpose commit updating only
+      apps/web/public/.well-known/assetlinks.json. Don't bundle other
+      web changes.
+    - New PWA / TWA icons or screenshots → add them to apps/web/public/
+      only. The TWA pulls them at runtime; no native rebuild needed.
+    - All gradle/AndroidManifest/twa-manifest/keystore work happens in
+      ~/Projects/playkaboom-solana-seeker. That repo owns the APK build,
+      the dApp Store submission flow, and the release signing.
+    - Reject any commit that adds *.gradle, AndroidManifest.xml,
+      twa-manifest.json, or gradlew* to this repo — wrong-repo signal.
