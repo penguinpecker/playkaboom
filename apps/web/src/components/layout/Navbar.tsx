@@ -62,9 +62,20 @@ export function Navbar() {
     };
     void f();
     const i = setInterval(f, 8_000);
+    // Mobile background-tab suspension drifts setInterval to a halt over
+    // hours; re-fire on visibility/focus/online to recover instantly.
+    const onWake = () => {
+      if (typeof document === "undefined" || document.visibilityState === "visible") void f();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("online", onWake);
+    window.addEventListener("pageshow", onWake);
     return () => {
       cancelled = true;
       clearInterval(i);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("online", onWake);
+      window.removeEventListener("pageshow", onWake);
     };
   }, [publicKey, connection]);
 

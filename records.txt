@@ -2172,3 +2172,233 @@ PROCESS RULE ADDED THIS SESSION (saved as memory)
   This is in addition to the existing "only push files the user asked
   for" rule from earlier in this session
   (feedback_only_push_what_was_asked.md).
+
+
+────────────────────────────────────────────────────────────────────────────────
+SESSION LOG: 2026-05-09 — three /play UX fixes + first vault economics audit
+────────────────────────────────────────────────────────────────────────────────
+
+Three frontend bug fixes shipped together (one commit, not yet pushed),
+plus a full reconciliation of vault accumulation that surfaced one
+non-trivial finding about the on-chain treasury split.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 1 — Three /play bug fixes (one commit)
+══════════════════════════════════════════════════════════════════════════════
+
+BUG 1 — Vault-capacity warning shown mid-round (BetControls.tsx)
+  Symptom: while a player was actively in a round, the bet panel kept
+  showing the red "CANNOT BET / Bet exceeds vault capacity for N mines"
+  banner if their last-entered bet was now too large for the current
+  vault. Cosmetic but alarming — looked like the in-flight bet was at
+  risk.
+
+  Root cause: blockReason was computed unconditionally from the live
+  capacity hook regardless of game status. Bet input is read-only mid-
+  round, so the warning can't actually be acted on.
+
+  Fix: gate blockReason / wouldExceedLiquidity / vaultUnavailable on
+  a new `inLiveRound = isPlaying || isStarting || isCashing` flag.
+  When inLiveRound, all three are forced false/null, so the red banner,
+  red "Max safe bet" color, and "VAULT UNAVAILABLE"/"LOWER YOUR BET"
+  engage-button labels are all suppressed. Engage button is hidden
+  behind the EXIT & WITHDRAW button anyway.
+
+BUG 2 — Resumed game shows blank tiles (GameRecoveryBanner + store)
+  Symptom: player cleared a few safe tiles, paused (closed tab,
+  switched device, reloaded). On Resume, the grid rendered all 16
+  tiles as unflipped. Clicking any of the previously-revealed tiles
+  threw "Tile already revealed" (program error 0x178?).
+
+  Root cause: /api/session/[player] already returned `revealedMask`
+  + `revealedSafeMask` (u16 bitmasks decoded from the on-chain
+  GameSession), but useGameResume captured none of them, and the
+  Resume button just called setStatus("playing") + setGameToken().
+  The local Zustand state (`safeTiles`, `mineTiles`, `revealedTiles`
+  Sets) stayed empty.
+
+  Fix:
+    - stores/game-store.ts: new ResumeSnapshot type + hydrateResume()
+      action that decodes both u16 masks (bit i ↔ tile i, matching
+      lib.rs `tile_bit = 1u16 << tile_index` at line 362) into the
+      three Sets, plus seeds bet/mineCount/multiplier/commitment/
+      gameToken in one transition.
+    - hooks/use-game-resume.ts: extended StuckGameInfo with
+      revealedMask / revealedSafeMask / multiplier / commitment;
+      EMPTY_INFO updated; probe() now reads them off the response
+      payload (which the route was already returning, just unused).
+    - components/game/GameRecoveryBanner.tsx: resume() now calls
+      hydrateResume(...) when commitment + mineCount + betLamports
+      are present. Falls back to the old setStatus("playing") path
+      for the rare race where on-chain fields didn't make it through.
+    - The lone-mine-bit logic (revealedMask & ~revealedSafeMask) is
+      handled too, so a resume on a Lost-but-unsettled game would
+      correctly render the BOOM tile. In practice that path almost
+      never fires — Lost games settle within seconds — but it's
+      cheap to do correctly.
+
+BUG 3 — Polling stops after a few hours on mobile (4 hooks)
+  Symptom: live game status / wallet balance / vault state / global
+  feed all stop refreshing after the player has been in the tab for
+  a few hours, especially on mobile.
+
+  Root cause: setInterval and TanStack refetchInterval both drift to
+  a complete halt under mobile-tab background-suspension. iOS Safari
+  and Android Chrome aggressively throttle / freeze background JS
+  timers; when the tab returns to foreground, timers don't always
+  recover cleanly. There's also no `refetchOnWindowFocus` configured
+  globally (set to false in providers/web3.tsx for sane CU usage).
+
+  Fix: every relevant poll now also reacts to lifecycle events that
+  fire reliably regardless of timer state.
+    - useGameResume: visibilitychange + online + pageshow → probe()
+    - useContracts.tsx (vault account poll): same three events → f()
+    - BetControls.tsx (wallet balance poll): same three events → f()
+    - Navbar.tsx (wallet balance poll): same three events → f()
+    - useGlobalGames: refetchOnWindowFocus + refetchOnReconnect: true
+      (overrides the global default for this single query)
+
+  Net effect: a tab returning from background, a network reconnect,
+  or a bfcache restore now triggers an immediate fetch instead of
+  waiting up to 8-15 s (or forever, if the timer was throttled into
+  oblivion). One fetch per event per poll, so the cost is trivial.
+
+FILES TOUCHED (7):
+  apps/web/src/components/game/BetControls.tsx       (bug 1 + bug 3)
+  apps/web/src/components/game/GameRecoveryBanner.tsx (bug 2)
+  apps/web/src/components/layout/Navbar.tsx          (bug 3)
+  apps/web/src/hooks/use-game-resume.ts              (bug 2 + bug 3)
+  apps/web/src/hooks/use-global-games.ts             (bug 3)
+  apps/web/src/hooks/useContracts.tsx                (bug 3)
+  apps/web/src/stores/game-store.ts                  (bug 2)
+
+VERIFICATION:
+  npx tsc --noEmit -p apps/web → clean. No browser test (Privy can't
+  be driven from CLI). Manual mobile end-to-end pending push.
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 2 — Vault economics audit (mainnet, 2026-05-09 11:01 IST)
+══════════════════════════════════════════════════════════════════════════════
+
+Pulled from on-chain Vault + V2State + /api/vault/state + /api/activity/
+global. Numbers are authoritative as of slot reading at this timestamp.
+
+LIFETIME GAME P&L (on-chain Vault counters):
+  total_games           : 48          (DB has 46 indexed; 2 still missing
+                                       from the 2026-05-08 mine_count CHECK
+                                       silent-drop bug. Cron with safety
+                                       window or ?reset=1 would catch them
+                                       now that constraint is bumped.)
+  total_wagered         : 0.5901 SOL
+  total_payouts         : 0.1021 SOL
+  GGR                   : 0.4880 SOL
+  Realized hold         : 82.7%       (extreme noise, N=48; expected 2%)
+
+VAULT BALANCE & UNIT VALUE:
+  Vault PDA balance     : 11.6199 SOL
+  Vault assets (− rent) : 11.6160 SOL
+  total_units           : 1,102,889,109
+  total_pending_units   : 722,250
+  unit_value            : 10.5324 lamports/unit (e18-scaled 10532350921963814586)
+  health_bps            : 9993       (99.93% — vault is pristine)
+  unit_value_uplift     : +5.32% over ~11 days since 2026-04-28 init
+
+LP CLASS BREAKDOWN (units × current unit_value):
+  Seed (locked)         : 1,000,000,000 units × 10.5324  = 10.5324 SOL  90.67%
+  House (operator LP)   :   100,000,000 units × 10.5324  =  1.0532 SOL   9.07%
+  External user LPs     :     2,166,859 units × 10.5324  =  0.0228 SOL   0.20%
+  Pending withdrawals   :       722,250 units × 10.5324  =  0.0076 SOL   0.07%
+  Sum positions         :  1,102,889,109 × 10.5324 lam/u = 11.6160 SOL   ✓
+
+  Math check passes: sum-of-positions equals vault assets to within
+  the rent-floor adjustment (~3.9 mSOL). Accumulation is correct.
+
+TREASURY (Squads vault PDA, 464Fe…):
+  Current balance       : 1.140 SOL
+  Source                : 100% from operator manual top-ups during Phase H
+                          setup (member 1/2 funded the multisig vault to
+                          pay tx fees for D2 accept_ownership). Zero of
+                          the 1.14 SOL came from game profits.
+
+THE FINDING: treasury_split_bps is currently UNUSED by any settlement
+ix on-chain. Verified by exhaustive grep — every read/write site:
+  Line 144   : initialize sets vault.treasury_split_bps = 5_000
+  Line 928   : update_vault writes a new value
+  Line 2510  : event field on VaultUpdated
+  Line 1666  : field declaration
+
+cash_out (line 417), settle_game (line 482), and every other
+SOL-moving ix do NOT consume treasury_split_bps. The only path that
+moves SOL from vault to treasury is `withdraw_to_treasury(amount)`
+(line 843), which is owner-signed (Squads 2/2) and pulls a manually-
+specified amount — no automatic split per game.
+
+CONSEQUENCE: 100% of GGR (0.488 SOL) is currently boosting unit_value
+for ALL LP classes pro-rata, including external users — they're
+getting effectively 2× the yield the docs / handoff describe. The
+treasury has earned 0.000 SOL of game profit since launch.
+
+Two paths forward (not picked yet, queued for next session):
+  A. PROGRAM UPGRADE — auto-split at settle_game. Compute
+     net_profit = bet (loss) or bet − payout (win, negative); if
+     positive, transfer net_profit × treasury_split_bps / BPS to the
+     Squads treasury PDA. Pros: closes the gap automatically and
+     removes the operator step. Cons: program redeploy + verify dance,
+     extra lamport_mut per settle, and a one-time decision about
+     whether to retroactively sweep accumulated GGR.
+  B. PERIODIC SQUADS SWEEP — wrap a 2/2 multisig action into a
+     scheduled routine that calls withdraw_to_treasury(GGR_since_last
+     × 0.5) weekly/monthly. Pros: zero program change, full Squads
+     control. Cons: requires manual coordination, doesn't track per-
+     game share so accounting is whatever sum we pick at sweep time.
+
+  Either way, surfacing this in the LP-page disclosure matters before
+  the auto-split goes live — current external-LP yield (5.3% over 11d)
+  drops to ~half (2.65%) the moment a split kicks in.
+
+  Saved as a queued change alongside the existing max_payout_bps
+  5000 → 100 vault-survival fix; both touch LP economics and ideally
+  ship in the same Squads-vote bundle.
+
+UNRECONCILED 0.099 SOL: vault excess over face-value at unit=10 is
+0.587 SOL, but GGR is 0.488 SOL — leaves ~0.099 SOL unaccounted from
+on-chain data alone. Most likely from raw SOL transfers into the vault
+PDA during the 2026-05-08 deployer-funding dance / Phase H. Would need
+the full lp_actions table to reconcile precisely; deferred since the
+current accumulation math IS correct (sum-of-positions = vault assets).
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 3 — End-of-session state
+══════════════════════════════════════════════════════════════════════════════
+
+GIT:
+  origin/main HEAD : 701e008 (unchanged from 2026-05-08 session 3)
+  local HEAD       : a3d377d (V3 MAX-button reserve, 2026-05-08 unpushed) +
+                     this session's commit on top
+  Both commits awaiting explicit "ship it" before push, per the
+  feedback_confirm_before_push.md rule.
+
+ON-CHAIN (mainnet, no movement this session):
+  Vault PDA      : 11.6199 SOL
+  Squads vault   : 1.140 SOL
+  Deployer       : ~1.39 SOL (no admin ops)
+  Turnkey HSM    : ~0.99 SOL (slow drain from game settles)
+  total_games    : 48 (was 21 at end of 2026-05-08 session 2)
+
+CARRIED FORWARD (still pending — same list as 2026-05-08 PART 9 PART 10):
+  - update_vault: max_payout_bps 5000 → 100 (Squads 2/2)
+  - update_v2_config: min_health_bps 1000 → 2000 (Squads 2/2)
+  - Squads time_lock 0 → 24h
+  - Verified-program flag on Solscan
+  - GH Actions cron cadence migration (cron-job.org or Cloudflare Worker)
+  - 2 missing games in DB (mine_count silent-drop residue) — cron with
+    100-sig safety window should catch on next run
+  - XP loyalty UI rollout (silent ledger already populating)
+
+NEW (this session):
+  - Treasury split economics decision: program-side auto-split vs
+    periodic Squads sweep. Coordinate with max_payout_bps fix so both
+    LP-economics changes ship in one disclosure cycle.
