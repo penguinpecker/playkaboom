@@ -2609,3 +2609,191 @@ CARRIED FORWARD (unchanged from earlier this session)
   - Treasury split: program upgrade vs periodic Squads sweep decision
     (treasury_split_bps is currently consumed by zero on-chain ix; entire
     GGR sits in vault boosting unit_value at the full rate, see PART 2)
+
+
+══════════════════════════════════════════════════════════════════════════════
+PART 6 — 2026-05-09 SESSION 3: scope trim, cron migration, indexer
+                                GameSettled-overwrite recovery, MAX rounding
+══════════════════════════════════════════════════════════════════════════════
+
+Same day, continued. Several smaller fixes plus a major indexer bug that
+was discovered while debugging the user's "live feed not working"
+report. Five separate commits, all pushed.
+
+SCOPE TRIM (commit 1e78b40)
+  Original Railway relay subscribed to games INSERT + games UPDATE +
+  lp_actions INSERT, but only the first is consumed by the web client.
+  Per the architectural rule "Railway = live trade fees only" the relay
+  was over-broadcasting and the supabase_realtime publication was
+  over-permissioned.
+
+  Code:    apps/realtime/src/index.ts trimmed to single subscription
+           on games INSERT.
+  DB:      migration 20260509000003_realtime_scope_trim.sql drops
+           public.lp_actions from the supabase_realtime publication.
+  Effect:  Layer 1 + Layer 2 both broadcast game_settled only;
+           lp_actions changes go through the existing /api/vault/*
+           REST polling path unchanged.
+
+CRON MIGRATION (commit 3b0ade2)
+  GH-Actions schedule fires every 1-3h on free tier instead of the
+  requested 5min, leaving the indexer up to 3 hours behind on-chain.
+  That's the upstream cause of "live feed stale" — the relay only
+  broadcasts what's been written to public.games, and if the indexer
+  hasn't run, the broadcast doesn't have anything to send.
+
+  Migration: cron schedule moved into the Railway relay container as
+             a 60s setInterval that GETs the cron URL with a bearer
+             token. Containers run 24/7 so cadence is reliable; no
+             new infra (no cron-job.org, no Cloudflare Worker) and
+             no extra cost.
+  Workflow:  .github/workflows/index-events.yml schedule trigger
+             removed; workflow_dispatch retained for manual rescues.
+
+  Env plumbing:
+    - CRON_SECRET rotated to fresh 44-char base64 random
+    - Vercel: production env, --sensitive flag (rm + add)
+    - Railway: CRON_TICK_AUTH (matches CRON_SECRET);
+               CRON_TICK_URL=https://playkaboom.gg/api/cron/index-events
+    - GitHub repo secret: CRON_SECRET (still needed for vault-health.yml)
+
+  GOTCHA — trailing newline on stdin pipe:
+    Initial `cat /tmp/.cron_secret_new | railway variable set --stdin`
+    captured the trailing \n into the env value. Relay tickled with
+    `Bearer <secret>\n` → 401. Fix: `printf '%s' "$secret" | railway
+    variable set --stdin`. Same gotcha would apply to any cmdline
+    secret-set with cat-piped values. Save as durable lesson.
+
+  GOTCHA — Vercel build cache:
+    `vercel --prod` after a NEXT_PUBLIC_ env var change reused a
+    cached build artifact and served the old bundle. The env var was
+    correctly set but not baked in. Fix: `vercel --prod --force`
+    invalidates build cache; build takes ~4 min instead of 2 but
+    correctly inlines the new value. Visible by grepping the served
+    chunk for the literal value (e.g. `playkaboom-realtime-...
+    .up.railway.app`). Already documented in PART 5 but bears
+    repeating since this re-bit during this session.
+
+INDEXER GameSettled-OVERWRITE BUG (commit 83f4a44 / 215ad6a)
+
+  Symptom: user reported `/logs` showing "MINES (4×4) · 12 BOMBS" on
+  every row even though most games were actually m=3.
+
+  Root cause: GameSession PDA gets REUSED across rounds for the same
+  player — close_game deallocates → next start_game recreates at the
+  SAME address. The indexer's GameSettled handler did
+    `.update({mine_count, mine_layout, ...}).eq("game", PDA)`
+  with no in-flight guard, so each settle event matched EVERY prior
+  round of the same player and overwrote their mine_count + layout
+  with the latest game's values.
+
+  Bug existed since launch but only fired broadly during the
+  2026-05-09 ?reset=1 cron rescue (see "Recovery" below) when the
+  entire event history was reprocessed in one pass — every won row
+  for player X got reflagged with the latest game's mine_count.
+
+  Code fix:
+    apps/web/src/server/indexer.ts — added .is("mine_layout", null)
+    to the UPDATE. mine_layout starts NULL on the GameWon/GameLost
+    upsert sentinel, so the guard uniquely identifies the single
+    in-flight row this settle event corresponds to. Subsequent
+    reprocessing is a no-op against rows that already have a layout.
+
+RECOVERY MIGRATIONS (20260509000004 + 20260509000005)
+
+  After the indexer fix landed, the existing rows still carried the
+  corrupted values and couldn't self-correct (the new guard prevents
+  re-overwrite, which is also what now prevents the cron from fixing
+  them retroactively). Two-stage repair:
+
+  Stage 1 — migration 20260509000004_reset_corrupted_mine_counts.sql:
+    UPDATE every settled row (mine_layout IS NOT NULL) back to the
+    GameWon/GameLost upsert default (mine_count=0, mine_layout=NULL,
+    settled_layout=NULL, commitment='0...0', salt=NULL). Then DELETE
+    from processed_events for the affected window so the cron rescue
+    isn't blocked by dedupe records. Note: column is processed_at
+    not created_at — first push errored on that, fixed before
+    re-applying. (The amend-+-force-push roundtrip rewrote the local
+    branch tip to match what was actually applied to prod.)
+
+  Stage 2 — workflow_dispatch reset=true rescue, twice:
+    First run processed most events but timed out at 60s before
+    finishing all 600 sigs in MAX_SIGNATURES_PER_RUN. Result: 47
+    rows correct, 1 wrong (slot 418630335 m=12 K=1 cash-out tagged
+    as m=3). Second run was supposed to mop up but also timed out
+    before processing that specific event.
+
+  Stage 3 — migration 20260509000005_fix_lone_m12_row.sql:
+    Surgical UPDATE on the single mis-tagged row, identified by the
+    unique multiplier_bps=39200 fingerprint (3.92× = m=12 K=1 with
+    2% edge — no other (m,K) combo produces it under MAX_MINES=15).
+
+  Final state: all 47 rows for player 5pc1Yb correctly tagged.
+    41 m=3 + 5 m=15 (genuine YOLO 1-safe-tile losses, bets up to
+    0.22 SOL) + 1 m=12.
+
+MAX-BUTTON ROUNDING + /vault PAGE CLEANUP (commit 3aeda53)
+  (covered separately because it shipped before the cron migration)
+
+  - BetControls.tsx: Math.floor(safe * 1_000_000) / 1_000_000 instead
+    of Number(safe.toFixed(6)). toFixed rounds; on borderline maxBet
+    values (0.0105695 → "0.010570") it pushed the bet a fraction-of-
+    a-lamport over the cap and re-fired CANNOT BET on the very click
+    that should have set the bet. Floor is always safe.
+  - /vault page: removed Vault PDA + Vault V2 State PDA from Trust
+    Anchors list (they're auto-derivable from the program ID, end
+    users don't verify against them). Removed bottom owner+treasury
+    paragraph. chain.ts: SQUADS_VAULT and TURNKEY_HOUSE_AUTHORITY
+    are now cluster-aware so the live mainnet site shows mainnet
+    addresses instead of the devnet ones the file shipped with.
+
+KNOWN BUDGET CONSTRAINT — VERCEL FUNCTION TIMEOUT
+  /api/cron/index-events has maxDuration=60 (Hobby plan cap).
+  Reset=1 with 600 sigs from head is right at that boundary; cleared
+  processed_events pushed it over. Two ways to handle next time:
+    a) Lower MAX_SIGNATURES_PER_RUN from 600 to 300 in route.ts —
+       each rescue does less; the new 60s Railway tickler catches
+       up across multiple cycles. Free.
+    b) Bump maxDuration to 300 — needs Vercel Pro plan ($20/mo).
+  Not blocking: incremental indexing via the Railway tickler runs
+  fine within budget, so reset=1 is only needed for full backfill.
+
+SECURITY POSTURE NOTE (Railway env vars)
+  CRON_TICK_AUTH and SUPABASE_ANON_KEY on the Railway service are
+  regular variables (encrypted at rest, visible to workspace members
+  via UI). Railway has a "Sealed Variables" feature that makes them
+  write-once and unreadable even by their own UI/CLI/API once set —
+  this is the equivalent of Vercel's Sensitive flag. Currently
+  UI-only, no CLI flag for it. Manual TODO: in Railway dashboard
+  → playkaboom-realtime → Variables → click each secret → toggle
+  "Sealed". Did NOT do this during the session because verification
+  required reading the value back; do as a single follow-up step
+  after confirming the relay is healthy for a day.
+
+POST-SESSION STATE
+  origin/main HEAD       : d2758cb (pushed; commit chain
+                           3aeda53 → ec97b1b → 6912e13 → 9444870 →
+                           ea094fb → 1e78b40 → 3b0ade2 → 83f4a44 →
+                           215ad6a (force-push) → d2758cb)
+  Vercel prod            : last deploy from 25604027010 SUCCESS
+                           (CI 25604027013 passed Node + Anchor)
+  Railway service        : playkaboom-realtime SUCCESS, healthy,
+                           cron tickler firing every 60s
+  Supabase migrations    : 20260509000001 + 000003 + 000004 + 000005
+                           applied; 000002 (notify-trigger) was
+                           authored and deleted before push, never
+                           applied
+  Indexer state          : all 47 rows for player 5pc1Yb match
+                           on-chain truth (41 m=3 + 5 m=15 + 1 m=12)
+  GH Actions             : index-events.yml schedule REMOVED;
+                           workflow_dispatch only
+
+CARRIED FORWARD (queued)
+  - update_vault: max_payout_bps 5000 → 100         (Squads 2/2)
+  - update_v2_config: min_health_bps 1000 → 2000    (Squads 2/2)
+  - Squads time_lock 0 → 24h
+  - Verified-program flag on Solscan
+  - Treasury split (program-side auto-split vs periodic Squads sweep)
+  - MAX_SIGNATURES_PER_RUN 600 → 300 in cron route to avoid the
+    rescue-timeout pattern
+  - Mark Railway secrets as Sealed via dashboard UI
