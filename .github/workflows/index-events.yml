@@ -1,13 +1,21 @@
 name: Index program events
-# Polls /api/cron/index-events every 5 minutes (GH Actions free-tier cron
-# minimum). The endpoint pages getSignaturesForAddress against Alchemy RPC,
-# decodes events, and writes Supabase. Idempotent — safe to retry.
+# MIGRATED 2026-05-09: The cron schedule was removed because GH Actions free
+# tier was firing every 1-3h instead of the requested 5min, leaving the
+# indexer up to 3 hours behind on-chain. The Railway relay
+# (apps/realtime/) now polls /api/cron/index-events every 60s as part of
+# its always-on container — see CRON_TICK_URL / CRON_TICK_AUTH env on
+# the playkaboom-realtime service.
 #
-# Requires repo secret CRON_SECRET (must match the value set in Vercel env).
+# This workflow stays as a manual rescue (workflow_dispatch with
+# `reset=true`) for the rare case where the relay needs a backfill push
+# from a fresh cursor. Run it via:
+#   gh workflow run index-events.yml --repo penguinpecker/playkaboom \
+#     --ref main -f reset=true
+#
+# Requires repo secret CRON_SECRET (must match the value set in Vercel env
+# AND the CRON_TICK_AUTH on Railway).
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       reset:
