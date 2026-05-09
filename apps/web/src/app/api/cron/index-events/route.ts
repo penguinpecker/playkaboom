@@ -11,10 +11,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/** Hard cap on signatures fetched per run — keeps within Vercel function limits.
- * At 1 cron-min cadence this means we can absorb ~bursts of 600/min before
- * falling behind. Plenty for devnet and early mainnet. */
-const MAX_SIGNATURES_PER_RUN = 600;
+/** Hard cap on signatures fetched per run — keeps within Vercel's 60s
+ * maxDuration ceiling on the Hobby plan. The Railway cron tickler runs
+ * this endpoint every 60s, so at this cap we can absorb ~bursts of
+ * 300/min before falling behind. Lowered from 600 on 2026-05-09 because
+ * the manual `?reset=1` rescue (which fetches a fresh batch from head)
+ * was hitting the 60s timeout when processed_events was empty — at
+ * ~150ms per getTransaction RPC call on Alchemy mainnet, 300 sigs
+ * comfortably finishes in ~45s. If we ever bump to Vercel Pro
+ * (300s maxDuration) this can go back up. */
+const MAX_SIGNATURES_PER_RUN = 300;
 const PAGE_SIZE = 100;
 /** Safety window: every cron run also re-fetches the last N sigs even if
  * they're "before" the cursor, then relies on `processed_events` dedupe to
