@@ -136,9 +136,6 @@ export default function VaultPage() {
                 </div>
               ))}
             </div>
-            <p className="font-mono text-[9px] text-on-surface-variant/40 italic mt-3 leading-relaxed">
-              Owner + treasury are the same Squads vault (2-of-2). House signer is a Turnkey HSM — the private key never leaves the TEE. To deposit liquidity into the vault, use the deposit form above (mints LP units; you share P&L going forward).
-            </p>
           </div>
         </div>
       </div>
