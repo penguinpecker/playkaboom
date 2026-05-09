@@ -28,20 +28,6 @@ interface GamesRow {
   slot: number;
 }
 
-/** Shape of a `game_settled` NOTIFY payload from the Railway relay.
- *  Keys come straight from the json_build_object in the trigger. */
-interface GameSettledNotify {
-  signature: string;
-  player: string;
-  outcome: string;
-  bet: string;
-  payout: string;
-  multiplier_bps: number;
-  mine_count: number;
-  settled_at: string | null;
-  slot: number;
-}
-
 const rowToGame = (row: GamesRow): GlobalGame => ({
   signature: row.signature,
   player: row.player,
@@ -52,18 +38,6 @@ const rowToGame = (row: GamesRow): GlobalGame => ({
   mineCount: row.mine_count ?? 0,
   time: row.settled_at,
   slot: row.slot,
-});
-
-const notifyToGame = (n: GameSettledNotify): GlobalGame => ({
-  signature: n.signature,
-  player: n.player,
-  outcome: n.outcome,
-  bet: n.bet,
-  payout: n.payout,
-  multiplierBps: n.multiplier_bps,
-  mineCount: n.mine_count,
-  time: n.settled_at,
-  slot: n.slot,
 });
 
 /** Idempotent setQueryData that prepends a new game iff its signature
@@ -154,7 +128,9 @@ export function useGlobalGames(limit = 200) {
         }
         const msg = parsed as { type?: string; data?: unknown };
         if (msg.type === "game_settled" && msg.data) {
-          applyIncoming(queryClient, queryKey, notifyToGame(msg.data as GameSettledNotify), limit);
+          // Relay forwards Supabase Realtime's payload.new directly, so
+          // the row shape matches Layer 2 — same parser for both paths.
+          applyIncoming(queryClient, queryKey, rowToGame(msg.data as GamesRow), limit);
         }
       };
       ws.onclose = () => {
