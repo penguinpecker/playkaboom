@@ -1,6 +1,6 @@
 "use client";
 import { useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { getSupabaseBrowser } from "@/lib/supabase-browser";
 
 export interface GlobalGame {
@@ -28,6 +28,20 @@ interface GamesRow {
   slot: number;
 }
 
+/** Shape of a `game_settled` NOTIFY payload from the Railway relay.
+ *  Keys come straight from the json_build_object in the trigger. */
+interface GameSettledNotify {
+  signature: string;
+  player: string;
+  outcome: string;
+  bet: string;
+  payout: string;
+  multiplier_bps: number;
+  mine_count: number;
+  settled_at: string | null;
+  slot: number;
+}
+
 const rowToGame = (row: GamesRow): GlobalGame => ({
   signature: row.signature,
   player: row.player,
@@ -40,20 +54,59 @@ const rowToGame = (row: GamesRow): GlobalGame => ({
   slot: row.slot,
 });
 
+const notifyToGame = (n: GameSettledNotify): GlobalGame => ({
+  signature: n.signature,
+  player: n.player,
+  outcome: n.outcome,
+  bet: n.bet,
+  payout: n.payout,
+  multiplierBps: n.multiplier_bps,
+  mineCount: n.mine_count,
+  time: n.settled_at,
+  slot: n.slot,
+});
+
+/** Idempotent setQueryData that prepends a new game iff its signature
+ *  isn't already in the cache. Used by both push paths so they can
+ *  fight to be first without ever creating duplicates. */
+function applyIncoming(
+  queryClient: QueryClient,
+  queryKey: readonly unknown[],
+  game: GlobalGame,
+  limit: number,
+) {
+  queryClient.setQueryData<GlobalGame[]>(queryKey, (prev) => {
+    const list = prev ?? [];
+    if (list.some((g) => g.signature === game.signature)) return list;
+    return [game, ...list].slice(0, limit);
+  });
+}
+
 /**
- * Global live-feed of settled games. Two sources of freshness:
+ * Global live-feed of settled games. Three layers of freshness, from
+ * fastest to most reliable:
  *
- *   1. Supabase Realtime — push subscription on `public.games`. Inserts
- *      land in the cache within ~100ms of the indexer writing the row.
- *      This is the fast path that replaces the old 8-second poll.
+ *   1. Railway WebSocket relay (primary push) — set
+ *      NEXT_PUBLIC_REALTIME_WS_URL to wss://<service>.up.railway.app.
+ *      The relay listens to Postgres NOTIFY on `game_settled` (one
+ *      Postgres connection serves all viewers) and broadcasts each
+ *      payload over WS. Latency ~100ms from indexer write to client.
  *
- *   2. TanStack refetchInterval @ 60s — a slow safety net that catches
- *      anything missed during a websocket reconnect / brief network blip.
+ *   2. Supabase Realtime (fallback push) — postgres_changes listener
+ *      on `public.games`. Activated by the 2026-05-09 migration that
+ *      adds the table to the supabase_realtime publication. Burns one
+ *      Supabase connection per client, so it's the cheaper path until
+ *      we outgrow the 200-connection free-tier ceiling.
+ *
+ *   3. TanStack refetch @ 60s (last-resort poll) — kicks in only when
+ *      both push paths are unreachable. Also handles the cold-start
+ *      "what was the feed before the websocket connected" snapshot.
  *      `refetchOnWindowFocus` + `refetchOnReconnect` cover mobile-tab
- *      suspension recovery (per the 2026-05-09 polling-fix commit).
+ *      suspension recovery.
  *
- * Falls back to pure polling if NEXT_PUBLIC_SUPABASE_URL/ANON_KEY are
- * missing — the hook degrades gracefully rather than crashing the page.
+ * All three deliver into the same TanStack cache via setQueryData;
+ * `applyIncoming` is signature-idempotent so the layers can run in
+ * parallel without creating duplicates.
  */
 export function useGlobalGames(limit = 200) {
   const queryClient = useQueryClient();
@@ -72,6 +125,74 @@ export function useGlobalGames(limit = 200) {
     },
   });
 
+  // ── Layer 1: Railway WS relay ────────────────────────────────────
+  useEffect(() => {
+    const url = process.env.NEXT_PUBLIC_REALTIME_WS_URL;
+    if (!url) return;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 1_000;
+    let cancelled = false;
+
+    const connect = () => {
+      if (cancelled) return;
+      try {
+        ws = new WebSocket(url);
+      } catch {
+        scheduleReconnect();
+        return;
+      }
+      ws.onopen = () => {
+        backoffMs = 1_000;
+      };
+      ws.onmessage = (event) => {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        const msg = parsed as { type?: string; data?: unknown };
+        if (msg.type === "game_settled" && msg.data) {
+          applyIncoming(queryClient, queryKey, notifyToGame(msg.data as GameSettledNotify), limit);
+        }
+      };
+      ws.onclose = () => {
+        ws = null;
+        scheduleReconnect();
+      };
+      ws.onerror = () => {
+        try {
+          ws?.close();
+        } catch {
+          /* noop */
+        }
+      };
+    };
+
+    const scheduleReconnect = () => {
+      if (cancelled) return;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      // Exponential backoff capped at 30s. Reset on successful open
+      // so a brief network blip doesn't stretch into long reconnect
+      // delays after recovery.
+      reconnectTimer = setTimeout(connect, backoffMs);
+      backoffMs = Math.min(backoffMs * 2, 30_000);
+    };
+
+    connect();
+    return () => {
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      try {
+        ws?.close();
+      } catch {
+        /* noop */
+      }
+    };
+  }, [limit, queryClient]);
+
+  // ── Layer 2: Supabase Realtime fallback ──────────────────────────
   useEffect(() => {
     const sb = getSupabaseBrowser();
     if (!sb) return;
@@ -81,15 +202,7 @@ export function useGlobalGames(limit = 200) {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "games" },
         (payload) => {
-          const incoming = rowToGame(payload.new as GamesRow);
-          queryClient.setQueryData<GlobalGame[]>(queryKey, (prev) => {
-            const list = prev ?? [];
-            // Idempotency: ignore inserts that already landed via the
-            // initial fetch (or a prior event). Indexer can replay rows
-            // with the same signature when ?reset=1 fires.
-            if (list.some((g) => g.signature === incoming.signature)) return list;
-            return [incoming, ...list].slice(0, limit);
-          });
+          applyIncoming(queryClient, queryKey, rowToGame(payload.new as GamesRow), limit);
         },
       )
       .on(
