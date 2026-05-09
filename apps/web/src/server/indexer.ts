@@ -110,6 +110,19 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
     case "GameSettled": {
       // The settle tx may be separate from the win/lose tx (cash_out path),
       // so we match by GameSession PDA instead of tx signature.
+      //
+      // Critical: the GameSession PDA is REUSED across rounds for the same
+      // player (close_game deallocates → next start_game recreates at the
+      // same address). Without a guard, this UPDATE matches every prior
+      // game by the same player and overwrites their mine_count/layout
+      // with this game's values. The 2026-05-09 cron `?reset=1` rescue
+      // hit exactly that bug — every win for player X got reflagged with
+      // the latest game's mine_count.
+      //
+      // Fix: only UPDATE rows that haven't been settled yet (mine_layout
+      // is null until GameSettled lands; mine_count starts at 0 from the
+      // GameWon/GameLost upsert sentinel). That uniquely identifies the
+      // single in-flight row this settle event corresponds to.
       const game = ev.game.toBase58();
       const upd = await db
         .from("games")
@@ -120,7 +133,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           commitment: ev.commitment.toString("hex"),
           salt: ev.salt.toString("hex"),
         })
-        .eq("game", game);
+        .eq("game", game)
+        .is("mine_layout", null);
       check("games", "GameSettled.update", upd);
       if (ev.verified) {
         logger.info({ sig: tx.signature, game, player: ev.player.toBase58() }, "settle verified");
