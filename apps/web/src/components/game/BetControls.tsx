@@ -196,7 +196,12 @@ export function BetControls() {
                     // funded wallets and still safe on small ones.
                     const ceiling = Math.min(maxBet, walletBalance * 0.9);
                     const safe = Math.max(0.001, ceiling);
-                    setBet(Number(safe.toFixed(6)));
+                    // FLOOR to 6dp (1000-lamport precision). toFixed(6)
+                    // rounds, which on borderline maxBet values (e.g.
+                    // 0.0105695 → "0.010570") pushes the bet a fraction-
+                    // of-a-lamport OVER the cap and re-fires "CANNOT BET"
+                    // immediately after the click. Flooring is always safe.
+                    setBet(Math.floor(safe * 1_000_000) / 1_000_000);
                   }}
                   disabled={isPlaying || isStarting || walletBalance <= 0 || maxBet <= 0}
                   className="bg-surface-container-highest px-3 py-1 text-[10px] font-headline font-bold text-primary hover:bg-primary/20 transition-colors disabled:opacity-30"

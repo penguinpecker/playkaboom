@@ -28,15 +28,20 @@ export const [VAULT_PDA] = deriveVaultPda(PROGRAM_ID);
 export const [V2_STATE_PDA] = deriveV2StatePda(PROGRAM_ID);
 export { deriveGamePda as getGamePda };
 
-/** Trust-anchor public keys surfaced in `/vault`. */
-export const SQUADS_VAULT_DEVNET = "At5oBj3KtiTBRkkquZTL1ceY2KDtz1KckLTuaQFbJjVh";
-export const TURNKEY_HOUSE_AUTHORITY_DEVNET =
-  "3TCMevgUMRU86Q96dj2mLELjsTAsZyvUp7Pecr8dQKWL";
+/** Operator-authority addresses surfaced in `/vault`. Cluster-switched so
+ *  the live mainnet site shows mainnet addresses, devnet still shows the
+ *  devnet Squads + Turnkey anchors used during pre-launch testing. */
+const SQUADS_VAULT_MAINNET = "464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5";
+const TURNKEY_HOUSE_AUTHORITY_MAINNET = "7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp";
+const SQUADS_VAULT_DEVNET = "At5oBj3KtiTBRkkquZTL1ceY2KDtz1KckLTuaQFbJjVh";
+const TURNKEY_HOUSE_AUTHORITY_DEVNET = "3TCMevgUMRU86Q96dj2mLELjsTAsZyvUp7Pecr8dQKWL";
+
+const SQUADS_VAULT = CLUSTER === "mainnet-beta" ? SQUADS_VAULT_MAINNET : SQUADS_VAULT_DEVNET;
+const TURNKEY_HOUSE_AUTHORITY =
+  CLUSTER === "mainnet-beta" ? TURNKEY_HOUSE_AUTHORITY_MAINNET : TURNKEY_HOUSE_AUTHORITY_DEVNET;
 
 export const CONTRACTS: Record<string, string> = {
   KaboomProgram: PROGRAM_ID.toBase58(),
-  Vault: VAULT_PDA.toBase58(),
-  "Vault V2 State": V2_STATE_PDA.toBase58(),
-  "Squads multisig (owner+treasury)": SQUADS_VAULT_DEVNET,
-  "Turnkey HSM (house signer)": TURNKEY_HOUSE_AUTHORITY_DEVNET,
+  "Squads multisig (2-of-2)": SQUADS_VAULT,
+  "Turnkey HSM (house signer)": TURNKEY_HOUSE_AUTHORITY,
 };
