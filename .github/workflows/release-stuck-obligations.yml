@@ -1,0 +1,45 @@
+name: Release stuck obligations
+# One-shot operator action to release leaked total_outstanding_max_payout
+# on the on-chain Vault. Only fixes Won/Lost+!settled GameSession PDAs
+# where the encrypted server session row is still in Supabase (the
+# operator-fixable subset). See
+# /api/admin/release-stuck-obligations/route.ts for full logic.
+#
+# Trigger:
+#   gh workflow run release-stuck-obligations.yml --repo penguinpecker/playkaboom --ref main
+#
+# Requires repo secret CRON_SECRET (must match Vercel env CRON_SECRET).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Hit release-stuck-obligations
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -eu
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "CRON_SECRET secret not configured" >&2
+            exit 1
+          fi
+          URL="https://www.playkaboom.gg/api/admin/release-stuck-obligations"
+          echo "POST $URL"
+          # -sS so curl errors print but no progress bar; -w prints status
+          # AFTER the body so the JSON response is on stdout for log parsing.
+          HTTP=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
+            -X POST "$URL" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Content-Type: application/json")
+          echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "Response body:"
+            cat /tmp/resp.json
+            exit 1
+          fi
+          echo "Response:"
+          cat /tmp/resp.json | python3 -m json.tool
