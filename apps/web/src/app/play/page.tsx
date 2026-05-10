@@ -5,7 +5,7 @@ import { GameRecoveryBanner } from "@/components/game/GameRecoveryBanner";
 import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 import { useGame } from "@/hooks/useGame";
 import { useGameResume } from "@/hooks/use-game-resume";
-import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
+import { useVaultBalance, useGameCounter } from "@/hooks/useContracts";
 import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 
 export default function PlayPage() {
@@ -13,7 +13,6 @@ export default function PlayPage() {
   const stuckInfo = useGameResume();
   const { state } = useGame();
   const { data: vaultBal } = useVaultBalance();
-  const { data: vaultHealth } = useVaultHealth();
   const { data: gameCount } = useGameCounter();
   return (
     <div className="px-2 sm:px-6 lg:px-8 pb-16 min-h-screen kinetic-grid">
@@ -60,10 +59,10 @@ export default function PlayPage() {
           </div>
           <div className="bg-surface-container-high p-4 stealth-card border-l-2 border-tertiary">
             <div className="font-headline text-[10px] tracking-widest text-on-surface-variant uppercase mb-1">
-              Vault Health
+              Vault Balance
             </div>
             <div className="font-headline text-2xl font-bold text-tertiary">
-              {vaultHealth ? vaultHealth.toString() : "—"}%
+              {vaultBal ? Number((Number(vaultBal) / 1e9).toFixed(2)).toFixed(2) : "—"} SOL
             </div>
           </div>
         </div>
@@ -95,14 +94,6 @@ export default function PlayPage() {
                 </span>
                 <span className="font-headline text-[10px] text-secondary">
                   {gameCount ? gameCount.toString() : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-2 border-b border-outline-variant/10">
-                <span className="font-headline text-[10px] text-on-surface-variant">
-                  Vault Health
-                </span>
-                <span className="font-headline text-[10px] text-emerald">
-                  {vaultHealth ? vaultHealth.toString() : "—"}%
                 </span>
               </div>
               <div className="flex justify-between items-center py-2">
