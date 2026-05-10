@@ -264,26 +264,42 @@ export function useGameActions(): ActionsResult {
           tileIndex: idx,
           gameToken: s.gameToken,
         });
-        store.setGameToken(data.gameToken);
         if (data.isMine) {
+          // G4: server already deleted its session row and returned an empty
+          // gameToken. Clear localStorage immediately (don't wait for the
+          // close ix to land) so a tab-close in the next 2s can't leave an
+          // orphan token pointing at a Lost game.
+          store.setGameToken(null);
           store.applyMineReveal(idx, data.signature);
           pushHistory(makeResult(s, walletAddress, false, 0, data.signature));
           if (data.closeInstruction) {
-            // Best-effort close — let it run async to reclaim rent.
+            // Best-effort close — async rent reclaim.
             setTimeout(() => {
               if (!data.closeInstruction) return;
-              signAndSend(deserializeIx(data.closeInstruction))
-                .then(() => store.setGameToken(null))
-                .catch(() => {});
+              signAndSend(deserializeIx(data.closeInstruction)).catch(() => {});
             }, 2000);
-          } else {
-            store.setGameToken(null);
           }
         } else {
+          // Safe reveal: server returned the rotated session token; persist it.
+          store.setGameToken(data.gameToken);
           const next = calcMultiplier(s.safeTiles.size + 1, s.mineCount, HOUSE_EDGE_BPS);
           store.applySafeReveal(idx, next, data.signature);
         }
       } catch (err) {
+        // G1: server refused to fire the FINAL safe reveal because that
+        // would auto-flip on-chain status to Won and lock out cash_out.
+        // Surface a clear prompt + leave status on "playing" so the Cash
+        // Out button stays live. Do NOT attempt an automatic cashOut —
+        // user explicitly initiates the claim.
+        if (err instanceof ApiClientError && err.payload.needsCashOut === true) {
+          const msg =
+            "That was the last safe tile — click EXIT & WITHDRAW to claim your winnings.";
+          store.setStatus("playing");
+          store.setPendingTile(null);
+          store.setError(msg);
+          toast(msg, "amber");
+          return;
+        }
         const friendly = decodeProgramError(
           err instanceof Error ? err.message : "Reveal failed",
         );
@@ -304,7 +320,17 @@ export function useGameActions(): ActionsResult {
 
     try {
       const cashRes = await apiSettle({ player: walletAddress, gameToken: s.gameToken });
-      if (!("phase" in cashRes) || cashRes.phase !== "cashout") return;
+      // G2: bare return here previously left status: "cashing" forever, no
+      // toast, no error — the spinner spun until the user reloaded. If the
+      // server didn't return the cash-out ix shape we expected, surface
+      // the issue and put the player back into "playing" so they can retry.
+      if (!("phase" in cashRes) || cashRes.phase !== "cashout") {
+        const msg = "Unexpected cash-out response from server. Try again.";
+        store.setStatus("playing");
+        store.setError(msg);
+        toast(msg, "error");
+        return;
+      }
       await signAndSend(deserializeIx(cashRes.instruction));
 
       // Best-effort: server publishes proof.
