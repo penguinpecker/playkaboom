@@ -20,6 +20,7 @@ import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
 import { PROGRAM_ID } from "@/lib/cluster";
 import { decodeProgramError } from "@/lib/program-errors";
+import { awaitAccountChangeWs, awaitSigConfirmedWs } from "@/lib/ws-confirm";
 import { useGameStore, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";
 import { useToast } from "@/components/providers/toast";
@@ -91,15 +92,21 @@ export function useGameActions(): ActionsResult {
           ? signed.serialize()
           : (signed as Transaction).serialize();
       const sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
-      // Confirmation runs AFTER we've returned the sig — caller updates
-      // UI immediately. Accept "processed" in the recovery check too
-      // (was confirmed/finalized only) so a tx in-the-leader-but-not-yet-
-      // voted state is treated as success.
+      // Confirmation: race awaitSigConfirmedWs (Connection's WS,
+      // includes pre-flight status check that short-circuits for
+      // already-finalized sigs) against confirmByPolling. Whichever
+      // resolves first wins. AggregateError from Promise.any unwrapped
+      // to its most useful cause for the caller's toast.
       const confirmation = (async () => {
         try {
-          await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
+          await Promise.any([
+            awaitSigConfirmedWs(connection, sig, "confirmed", 12_000).then(() => "ws"),
+            confirmByPolling(connection, sig, blockhash, lastValidBlockHeight).then(() => "poll"),
+          ]);
           return sig;
-        } catch (confirmErr) {
+        } catch (raceErr) {
+          // Last-ditch sigStatus before bubbling — handles
+          // "blockhash expired but tx landed" race.
           try {
             const { value } = await connection.getSignatureStatuses([sig]);
             const s = value[0];
@@ -115,7 +122,16 @@ export function useGameActions(): ActionsResult {
           } catch {
             /* fall through */
           }
-          throw confirmErr;
+          // Prefer the polling rejection's message over the
+          // AggregateError wrapper; polling carries actionable text
+          // ("blockhash expired", etc).
+          if (raceErr instanceof AggregateError) {
+            const pollErr = raceErr.errors.find(
+              (e) => e instanceof Error && !/ws (sig|account)/.test(e.message),
+            );
+            throw pollErr ?? raceErr.errors[0] ?? raceErr;
+          }
+          throw raceErr instanceof Error ? raceErr : new Error(String(raceErr));
         }
       })();
       return { sig, confirmation };
@@ -516,31 +532,39 @@ export function useGameActions(): ActionsResult {
             // PDA's actual deletion, which is the source of truth.
             void signAndSend(deserializeIx(c.instruction)).catch(() => {});
           }
-          // Hold pendingClose=true until the on-chain GameSession PDA is
-          // verifiably gone. Without this poll, pendingClose flipped
-          // false the moment the close-ix's confirmation Promise
-          // resolved (or rejected on "expired"), and the recovery banner
-          // would re-render briefly showing CLOSE GAME for the
-          // post-cashout PDA that was about to disappear. With the poll,
-          // pendingClose stays true through the entire RPC-propagation
-          // window and the banner never flickers.
+          // Wait for the on-chain GameSession PDA to be verifiably
+          // closed. Race accountSubscribe (WS push) against a 1s poll
+          // fallback. Polling is the source of truth (Solana doesn't
+          // contractually guarantee a final null notification on close);
+          // WS is the speed boost when it does fire.
           const [gamePda] = deriveGamePda(PROGRAM_ID, new PublicKey(player));
-          const pollDeadline = Date.now() + 30_000;
-          while (Date.now() < pollDeadline) {
-            try {
-              const info = await connection.getAccountInfo(gamePda, "confirmed");
-              if (info === null) {
-                // eslint-disable-next-line no-console
-                console.log("[cashOut/bg] on-chain GameSession verified gone");
-                return;
+          const wsClosed = awaitAccountChangeWs(
+            connection,
+            gamePda,
+            (info) => info === null || info.lamports === 0,
+            30_000,
+          );
+          const pollClosed = (async () => {
+            const deadline = Date.now() + 30_000;
+            while (Date.now() < deadline) {
+              try {
+                const info = await connection.getAccountInfo(gamePda, "confirmed");
+                if (info === null) return;
+              } catch {
+                /* network blip — try again */
               }
-            } catch {
-              /* network blip — try again */
+              await new Promise((r) => setTimeout(r, 1_000));
             }
-            await new Promise((r) => setTimeout(r, 1_000));
+            throw new Error("poll deadline reached");
+          })();
+          try {
+            await Promise.any([wsClosed, pollClosed]);
+            // eslint-disable-next-line no-console
+            console.log("[cashOut/bg] on-chain GameSession verified gone");
+          } catch {
+            // eslint-disable-next-line no-console
+            console.warn("[cashOut/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
           }
-          // eslint-disable-next-line no-console
-          console.warn("[cashOut/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
         } catch (bgErr) {
           // eslint-disable-next-line no-console
           console.warn("[cashOut/bg] non-fatal:", bgErr);
