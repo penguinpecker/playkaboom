@@ -236,7 +236,26 @@ export function BetControls({ stuckInfo }: Props = {}) {
     // and the disabled state above the button will repaint.
     lockStartedAtRef.current = Date.now();
     setLockElapsedMs(0);
-    void startGame();
+    // Belt-and-suspenders release: if startGame returns early without
+    // flipping isLocked (rare but happened in production: Privy
+    // !authenticated race during hydration), the useEffect that
+    // watches isLocked never fires and lockStartedAtRef stays set
+    // → every click after gets silently dropped at the lockedRef
+    // guard above. Always release on settle. The reactive isLocked
+    // (status-based) is the persistent lock if startGame did
+    // transition status, so this finally is safe.
+    void startGame().finally(() => {
+      // Only release if the reactive lock isn't holding it. If status
+      // transitioned to "starting" / "playing" / "cashing", isLocked
+      // is true and the useEffect[isLocked] handles the lifecycle.
+      // If status stayed "idle" (early-return path), this clears the
+      // sync ref so the next click can fire.
+      const cur = state.status;
+      if (cur === "idle") {
+        lockStartedAtRef.current = null;
+        setLockElapsedMs(0);
+      }
+    });
   };
 
   return (
