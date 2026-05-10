@@ -1,4 +1,5 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { PrivyClient, type AuthTokenClaims } from "@privy-io/server-auth";
 import { PublicKey } from "@solana/web3.js";
@@ -6,6 +7,37 @@ import { ApiError } from "./api-helpers";
 import { logger } from "./logger";
 
 let cachedClient: PrivyClient | null = null;
+
+// In-memory cache of verified Privy auth keyed by sha256(token). Privy's
+// verifyAuthToken + getUserById together cost 300-700ms p50; a single 8-tile
+// game hits this 10+ times so the cache pays for itself instantly.
+//
+// 60s TTL is short enough that revoked tokens stop working within a minute,
+// long enough to cover one full game session. Cache lives in the function
+// process — Vercel cold starts naturally re-prime; warm functions keep it
+// across requests.
+const AUTH_CACHE_TTL_MS = 60_000;
+const AUTH_CACHE_MAX_ENTRIES = 1_000;
+type CachedAuth = { value: VerifiedRequest; expiresAt: number };
+const authCache = new Map<string, CachedAuth>();
+
+function tokenKey(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function evictExpired(now: number): void {
+  if (authCache.size < AUTH_CACHE_MAX_ENTRIES) return;
+  for (const [k, v] of authCache) {
+    if (v.expiresAt <= now) authCache.delete(k);
+  }
+  // If still full after expiring, drop the oldest insertion (Map iteration
+  // is insertion-ordered).
+  while (authCache.size >= AUTH_CACHE_MAX_ENTRIES) {
+    const oldest = authCache.keys().next().value;
+    if (!oldest) break;
+    authCache.delete(oldest);
+  }
+}
 
 function privy(): PrivyClient {
   if (cachedClient) return cachedClient;
@@ -40,10 +72,21 @@ export interface VerifiedRequest {
 /**
  * Verifies the request's Privy token, returns the user's id and linked
  * Solana wallets. Throws `ApiError(401)` if missing or invalid.
+ *
+ * Cached for 60s by token-hash to avoid double-roundtrip to Privy on every
+ * authed request (verifyAuthToken + getUserById ≈ 360ms p50, 1.3s p99).
  */
 export async function verifyPrivyAuth(req: NextRequest): Promise<VerifiedRequest> {
   const token = extractToken(req);
   if (!token) throw new ApiError(401, "Missing auth token");
+
+  const now = Date.now();
+  const cacheKey = tokenKey(token);
+  const cached = authCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  if (cached) authCache.delete(cacheKey);
 
   let claims: AuthTokenClaims;
   try {
@@ -90,7 +133,10 @@ export async function verifyPrivyAuth(req: NextRequest): Promise<VerifiedRequest
       }
     }
   }
-  return { userId, wallets };
+  const verified: VerifiedRequest = { userId, wallets };
+  evictExpired(now);
+  authCache.set(cacheKey, { value: verified, expiresAt: now + AUTH_CACHE_TTL_MS });
+  return verified;
 }
 
 /**

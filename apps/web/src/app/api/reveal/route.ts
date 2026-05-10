@@ -25,12 +25,15 @@ export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, RevealTileInput);
 
-    await verifyPlayerAuth(req, body.player);
-
-    const rl = await enforceRateLimit(`reveal:${clientIp(req)}:${body.player}`);
+    // Auth + ratelimit + session-load are independent → run in parallel.
+    // Saves 100-300ms on the hot reveal path. Note: rate limit consumes
+    // a slot even if auth fails; that's the desired anti-abuse behavior.
+    const [, rl, session] = await Promise.all([
+      verifyPlayerAuth(req, body.player),
+      enforceRateLimit(`reveal:${clientIp(req)}:${body.player}`),
+      loadSession(body.player, body.gameToken),
+    ]);
     if (!rl.ok) throw new ApiError(429, "Too many requests");
-
-    const session = await loadSession(body.player, body.gameToken);
     if (!session) throw new ApiError(404, "No active session — start a new game");
     if (session.player !== body.player) {
       throw new ApiError(403, "Player mismatch");
@@ -66,10 +69,12 @@ export async function POST(req: NextRequest) {
       });
       signature = await sendHouseTx([revealIx, settleIx]);
       closeInstruction = serializeIx(buildCloseGame({ ctx, player: playerPk }));
-      // Auto-settle on mine — push to indexer immediately so the global
-      // activity feed reflects the loss within seconds rather than waiting
-      // up to 5min for the next cron run.
-      await indexFreshSignature(signature);
+      // Auto-settle on mine — push to indexer in the background. Don't
+      // await: the cron tickler + (when configured) the Helius webhook
+      // both pick up the same sig within seconds, and `processed_events`
+      // dedups any double-apply. Awaiting was costing the response 1.3s
+      // p50 / 5.2s p99 on every mine reveal.
+      void indexFreshSignature(signature);
     } else {
       signature = await sendHouseTx([revealIx]);
     }

@@ -19,24 +19,21 @@ export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, StartGameInput);
 
-    // Verify the requester actually owns the wallet they're playing as.
-    await verifyPlayerAuth(req, body.player);
-
-    const rl = await enforceRateLimit(`commit:${clientIp(req)}:${body.player}`);
-    if (!rl.ok) throw new ApiError(429, "Too many requests");
-
     const playerPk = new PublicKey(body.player);
 
-    // Run the two RPC checks in parallel — they're independent and each
-    // costs ~150-300ms on Alchemy. Sequential they cumulatively add ~500ms
-    // to engage-bet latency; parallel they share that window.
-    const [activeGame, slot] = await Promise.all([
+    // Auth, ratelimit, and the two RPC checks all run in parallel. They
+    // share no state and were cumulatively adding ~700ms p50 sequential.
+    // Rate limit consumes a slot even if auth fails — desired anti-abuse.
+    const [, rl, activeGame, slot] = await Promise.all([
+      verifyPlayerAuth(req, body.player),
+      enforceRateLimit(`commit:${clientIp(req)}:${body.player}`),
       playerHasActiveGame(playerPk),
       // `processed` is fine here: we just need a recent slot for the
       // session start_slot (used for the refund window). Saves ~150ms vs
       // confirmed because processed lands on the leader's first response.
       getConnection().getSlot("processed"),
     ]);
+    if (!rl.ok) throw new ApiError(429, "Too many requests");
 
     if (activeGame) {
       throw new ApiError(409, "Active game exists. Close it first.", { needsCleanup: true });

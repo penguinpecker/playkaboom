@@ -96,3 +96,31 @@ export function solanaRpc(): string {
 export function logLevel(): string {
   return process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "info" : "debug");
 }
+
+export function heliusApiKey(): string | null {
+  return process.env.HELIUS_API_KEY ?? null;
+}
+
+export function heliusRpcUrl(): string | null {
+  const k = heliusApiKey();
+  return k ? `https://mainnet.helius-rpc.com/?api-key=${k}` : null;
+}
+
+export function heliusWsUrl(): string | null {
+  const k = heliusApiKey();
+  return k ? `wss://mainnet.helius-rpc.com/?api-key=${k}` : null;
+}
+
+export function heliusSenderUrl(): string {
+  // SWQoS-only mode: minimum tip 0.000005 SOL, no Jito routing.
+  // Drop ?swqos_only=true (and bump JITO_TIP_LAMPORTS to ≥200_000) for
+  // dual SWQoS+Jito routing if margins ever justify it.
+  return "https://sender.helius-rpc.com/fast?swqos_only=true";
+}
+
+export function jitoTipLamports(): number {
+  const raw = process.env.JITO_TIP_LAMPORTS;
+  if (!raw) return 5_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : 5_000;
+}
