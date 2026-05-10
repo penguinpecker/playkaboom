@@ -214,16 +214,33 @@ export function useGameActions(): ActionsResult {
   }, [walletAddress, store, signAndSend, toast]);
 
   const startGame = useCallback(async () => {
+    // CRITICAL: setStatus FIRST, before any early-return paths. If we
+    // bail before flipping isLocked, BetControls' lockStartedAtRef
+    // (set synchronously by handleStart) never transitions out of the
+    // pending state and EVERY subsequent click is silently dropped
+    // until something else clears it — exactly the "button stuck,
+    // game starts later" symptom. Flipping status to "starting" first
+    // guarantees the reactive lock fires; if we bail, we revert.
+    store.setStatus("starting");
+    store.setError(null);
+    // eslint-disable-next-line no-console
+    console.log("[startGame] click received, status=starting");
+
     if (!authenticated) {
+      // eslint-disable-next-line no-console
+      console.warn("[startGame] not authenticated — redirecting to login");
+      store.setStatus("idle");
       login();
       return;
     }
     if (!walletAddress) {
-      store.setError("Wallet not ready");
+      // eslint-disable-next-line no-console
+      console.warn("[startGame] no wallet address — Privy hydration race?");
+      store.setStatus("idle");
+      store.setError("Wallet not ready — try again in a second.");
+      toast("Wallet not ready — try again in a second.", "amber");
       return;
     }
-    store.setStatus("starting");
-    store.setError(null);
 
     const betLamports = BigInt(Math.round(store.bet * LAMPORTS_PER_SOL));
     const tryCommit = () =>
