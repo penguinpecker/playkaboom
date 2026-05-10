@@ -354,14 +354,16 @@ export function useGameActions(): ActionsResult {
           pushHistory(makeResult(s, walletAddress, false, 0, data.signature));
           if (data.closeInstruction) {
             // Mark close in flight — BetControls disables Engage until
-            // confirm. Reveal-on-mine bundles [reveal, settle] in the
+            // the on-chain GameSession PDA is verifiably closed (or 30s
+            // deadline elapses, in which case the recovery banner takes
+            // over). Reveal-on-mine bundles [reveal, settle] in the
             // same on-chain tx, so once apiReveal returns the prereq
             // state for close_game (Lost+settled) is at least ack'd by
-            // the leader. Short 500ms grace lets the RPC node we'll
-            // query for close_game catch up; on the rare race-failure
-            // we retry once after another 800ms before giving up.
+            // the leader. 500ms grace before first attempt; retry once
+            // after 800ms; pendingClose holds until on-chain truth.
             store.setPendingClose(true);
             const closeIxBytes = data.closeInstruction;
+            const player = walletAddress;
             void (async () => {
               try {
                 await new Promise((r) => setTimeout(r, 500));
@@ -371,6 +373,42 @@ export function useGameActions(): ActionsResult {
                   await new Promise((r) => setTimeout(r, 800));
                   await signAndSend(deserializeIx(closeIxBytes)).catch(() => {});
                 }
+              } catch {
+                /* sign errors handled inside signAndSend */
+              }
+              // ALWAYS wait for on-chain truth before releasing the
+              // lock. Mirrors cashOut/bg — the close ix may have
+              // landed even if signAndSend's confirmation threw, and
+              // /api/commit reads the same chain state for its
+              // playerHasActiveGame check. Releasing too early ⇒ user
+              // clicks engage ⇒ 409.
+              try {
+                const [gamePda] = deriveGamePda(PROGRAM_ID, new PublicKey(player));
+                const wsClosed = awaitAccountChangeWs(
+                  connection,
+                  gamePda,
+                  (info) => info === null || info.lamports === 0,
+                  30_000,
+                );
+                const pollClosed = (async () => {
+                  const deadline = Date.now() + 30_000;
+                  while (Date.now() < deadline) {
+                    try {
+                      const info = await connection.getAccountInfo(gamePda, "confirmed");
+                      if (info === null) return;
+                    } catch {
+                      /* network blip — try again */
+                    }
+                    await new Promise((r) => setTimeout(r, 1_000));
+                  }
+                  throw new Error("poll deadline reached");
+                })();
+                await Promise.any([wsClosed, pollClosed]);
+                // eslint-disable-next-line no-console
+                console.log("[mine/bg] on-chain GameSession verified gone");
+              } catch {
+                // eslint-disable-next-line no-console
+                console.warn("[mine/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
               } finally {
                 store.setPendingClose(false);
               }
