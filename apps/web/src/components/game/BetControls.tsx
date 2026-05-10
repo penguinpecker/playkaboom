@@ -101,17 +101,32 @@ export function BetControls({ stuckInfo }: Props = {}) {
   // device (Engage button isn't rendered then anyway — CASH OUT takes
   // its place). Recovery banner above handles the actual unblock UX.
   const hasStuckGame = !inLiveRound && stuckInfo?.active === true;
-  // Sub-state for the button label so the user knows WHY it's disabled:
-  //   "resume"   = on-chain game with recoverable server session
-  //   "force"    = stuck, slot timer elapsed → close button is live above
-  //   "wait"     = stuck, slot timer NOT elapsed yet → countdown
-  const stuckSubstate: "resume" | "force" | "wait" | null = hasStuckGame
-    ? stuckInfo!.recoverable
-      ? "resume"
-      : stuckInfo!.refundable
-        ? "force"
-        : "wait"
-    : null;
+  // Mirror the banner's action-decision logic so the Engage button label
+  // points at exactly what the banner is offering. Previously this used
+  // a `recoverable` flag that mapped to the now-removed RESUME button,
+  // so the Engage label said "RESUME GAME ABOVE" while the banner
+  // actually showed FORCE CLOSE — confusing and wrong.
+  const stuckButtonLabel: string | null = (() => {
+    if (!hasStuckGame || !stuckInfo) return null;
+    let safeReveals = 0;
+    let m = stuckInfo.revealedSafeMask & 0xffff;
+    while (m) {
+      m &= m - 1;
+      safeReveals++;
+    }
+    const status = stuckInfo.status;
+    const wait = `READY IN ${fmtSeconds(stuckInfo.secondsUntilRefund)}`;
+    if (status === "Playing") {
+      if (safeReveals > 0) return "EXIT & WITHDRAW ABOVE"; // cash_out (instant)
+      return stuckInfo.refundable ? "REFUND ABOVE" : wait;
+    }
+    if (status === "Won" || status === "Lost") {
+      if (stuckInfo.settled) return "CLOSE GAME ABOVE"; // close_game (instant)
+      return stuckInfo.refundable ? "FORCE CLOSE ABOVE" : wait;
+    }
+    if (status === "Expired") return "CLOSE GAME ABOVE";
+    return "RESOLVE GAME ABOVE";
+  })();
 
   useEffect(() => {
     if (!publicKey || !connection) return;
@@ -192,13 +207,8 @@ export function BetControls({ stuckInfo }: Props = {}) {
     // dispatch start_game — it would 409 from the server and the user gets
     // the "nothing happens" UX. Surface the right action via toast.
     if (hasStuckGame) {
-      const msg =
-        stuckSubstate === "resume"
-          ? "You have an in-flight game above — RESUME or REFUND it first."
-          : stuckSubstate === "force"
-            ? "Stuck on-chain game — click FORCE CLOSE above to unblock."
-            : `Stuck on-chain game above — closable in ${fmtSeconds(stuckInfo!.secondsUntilRefund)}.`;
-      toast(msg, "amber");
+      const label = stuckButtonLabel ?? "RESOLVE GAME ABOVE";
+      toast(`Resolve previous game above first (${label}).`, "amber");
       return;
     }
     // Loud guards (used to silently early-return — clicks looked dead).
@@ -435,11 +445,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
                 <span className="material-symbols-outlined" style={{ fontSize: 24 }}>
                   lock
                 </span>
-                {stuckSubstate === "resume"
-                  ? "RESUME GAME ABOVE"
-                  : stuckSubstate === "force"
-                    ? "CLOSE STUCK GAME ABOVE"
-                    : `STUCK GAME · READY IN ${fmtSeconds(stuckInfo!.secondsUntilRefund)}`}
+                {stuckButtonLabel ?? "RESOLVE GAME ABOVE"}
               </>
             ) : vaultUnavailable ? (
               <>
