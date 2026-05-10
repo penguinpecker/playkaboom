@@ -287,10 +287,41 @@ export function useReferralActions() {
 }
 
 export function clearPendingReferrer() {
-  if (typeof window !== "undefined") localStorage.removeItem(REFERRER_LOCAL_KEY);
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.removeItem(REFERRER_LOCAL_KEY);
+  } catch {
+    /* noop */
+  }
+  // Also expire the V5 fallback cookie.
+  try {
+    document.cookie = "kb.ref.wallet=; max-age=0; path=/; SameSite=Lax";
+  } catch {
+    /* noop */
+  }
+}
+
+function readWalletCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const m = document.cookie.match(/(?:^|;\s*)kb\.ref\.wallet=([^;]+)/);
+  if (!m || !m[1]) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
 }
 
 export function getPendingReferrer(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFERRER_LOCAL_KEY);
+  // Try localStorage first (the normal path); fall back to the V5
+  // cookie set by /r/[code] when localStorage was unavailable
+  // (Safari Private Browsing, Solana Seeker TWA, etc.).
+  try {
+    const fromLs = localStorage.getItem(REFERRER_LOCAL_KEY);
+    if (fromLs) return fromLs;
+  } catch {
+    /* fall through to cookie */
+  }
+  return readWalletCookie();
 }
