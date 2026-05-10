@@ -6,12 +6,12 @@ import {
   buildSettleGame,
   serializeIx,
 } from "@playkaboom/sdk";
-import { RevealTileInput } from "@playkaboom/shared";
+import { GRID_SIZE, RevealTileInput } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { checkTile, saltBuffer } from "@/server/game";
 import { encryptSession } from "@/server/session";
-import { loadSession, saveSession } from "@/server/session-store";
+import { loadSession, saveSession, deleteSession } from "@/server/session-store";
 import { sendHouseTx } from "@/server/solana";
 import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
@@ -47,6 +47,28 @@ export async function POST(req: NextRequest) {
     const ctx = { programId: programId() };
 
     const { isMine, updated } = checkTile(session, body.tileIndex);
+
+    // Perfect-game trap defense (G1). The on-chain `reveal_tile` handler
+    // auto-flips status → Won when safe_reveals == GRID_SIZE - mine_count
+    // (programs/kaboom/src/lib.rs:397-400). After that, `cash_out` rejects
+    // with GameNotPlaying and `settle_game` doesn't pay out — the player's
+    // winnings are stuck. Refuse to dispatch the final safe reveal here;
+    // the player must `cash_out` first to claim. Mine reveals are not
+    // affected (those auto-settle into Lost).
+    if (!isMine) {
+      const newSafeReveals = updated.reveals.filter(
+        (t) => (updated.mineLayout & (1 << t)) === 0,
+      ).length;
+      const totalSafe = GRID_SIZE - session.mineCount;
+      if (newSafeReveals >= totalSafe) {
+        throw new ApiError(
+          409,
+          "That was the last safe tile — cash out now to claim your winnings.",
+          { needsCashOut: true },
+        );
+      }
+    }
+
     const revealIx = buildRevealTile({
       ctx,
       player: playerPk,
@@ -86,9 +108,17 @@ export async function POST(req: NextRequest) {
       "reveal",
     );
 
-    // Persist the updated session for cross-device recovery; also re-issue
-    // the cookie-side token so the existing client keeps working.
-    const newToken = await saveSession(body.player, updated, session.createdAt);
+    // G4: on mine the game is Lost+settled on-chain; delete the server-side
+    // session so the next /api/session probe returns gameToken=null and the
+    // recovery banner shows the FORCE-CLOSE path (not RESUME with a stale
+    // token that points at a Lost game and would error on every reveal).
+    // Return an empty token so the client clears localStorage too.
+    let newToken = "";
+    if (!isMine) {
+      newToken = await saveSession(body.player, updated, session.createdAt);
+    } else {
+      await deleteSession(body.player);
+    }
     void encryptSession; // keep import for type-only; saveSession encrypts
 
     return NextResponse.json({
