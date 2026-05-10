@@ -431,65 +431,95 @@ export function useGameActions(): ActionsResult {
     store.setStatus("cashing");
 
     try {
+      // eslint-disable-next-line no-console
+      console.log("[cashOut] requesting cashout ix from server");
       const cashRes = await apiSettle({ player: walletAddress, gameToken: token });
-      // G2: bare return here previously left status: "cashing" forever, no
-      // toast, no error — the spinner spun until the user reloaded. If the
-      // server didn't return the cash-out ix shape we expected, surface
-      // the issue and put the player back into "playing" so they can retry.
       if (!("phase" in cashRes) || cashRes.phase !== "cashout") {
         const msg = "Unexpected cash-out response from server. Try again.";
         store.setStatus("playing");
         store.setError(msg);
         toast(msg, "error");
+        // eslint-disable-next-line no-console
+        console.warn("[cashOut] unexpected response shape:", cashRes);
         return;
       }
-      await signAndSend(deserializeIx(cashRes.instruction));
+      // eslint-disable-next-line no-console
+      console.log("[cashOut] signing + broadcasting cash_out ix");
+
+      // OPTIMISTIC pattern (same as startGame): broadcast the tx, get
+      // the sig back immediately (~200ms after RPC ACK), then update
+      // local state as if it succeeded. Confirmation runs in background.
+      // The OLD code awaited full confirm before applying payout, which
+      // meant the user stared at "CASHING OUT…" for 1.5-3s with no
+      // progress; if confirm timed out before the tx landed, we toasted
+      // an error and reverted to "playing" while the SOL had actually
+      // moved on chain. Net: user "lost" their cashout from the UI's
+      // perspective even though the on-chain state was correct.
+      const { sig, confirmation } = await signAndBroadcast(
+        deserializeIx(cashRes.instruction),
+      );
+      // eslint-disable-next-line no-console
+      console.log("[cashOut] tx broadcast, sig:", sig);
 
       const payout = s.bet * s.multiplier;
       store.applyCashOut(payout);
-      pushHistory(makeResult(s, walletAddress, true, payout, ""));
+      pushHistory(makeResult(s, walletAddress, true, payout, sig));
       store.setGameToken(null);
-
-      // Mark close window open BEFORE the async chain so BetControls
-      // gates Engage from this exact moment, not after the WinModal
-      // dismiss/Play Again click.
       store.setPendingClose(true);
 
-      // Capture into local non-null vars before the IIFE so TS doesn't
-      // re-widen them when the closure runs after applyCashOut/setGameToken.
-      // Use the recovered/refreshed `token` (not s.gameToken which could
-      // have been the stale null we replaced above).
+      // Confirmation + downstream settle/close all run in background.
+      // UI is already at "won" with the WinModal opening; if any of
+      // this fails, we toast a warning but DO NOT revert the won state
+      // — the cash_out tx itself is what moved the SOL, so the player
+      // got paid as long as that one landed.
       const settleToken: string = token;
       const player = walletAddress;
 
-      // Settle + close-game in a tight inline chain (no fixed setTimeout
-      // wait). Was: fire-and-forget settle + setTimeout(3000) +
-      // apiCleanup + close. Removing the 3s heuristic delay cuts the
-      // post-cashout busy window from 5-7s to ~2-3s. Settle is awaited
-      // (was parallel) so cleanup never sees a !settled state and
-      // doesn't accidentally pick the close_unsettled path.
+      void confirmation
+        .then(() => {
+          // eslint-disable-next-line no-console
+          console.log("[cashOut] cash_out tx confirmed");
+        })
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn("[cashOut] confirm failed:", err);
+          toast("Cashout confirmation slow — winnings will arrive momentarily", "amber");
+        });
+
       void (async () => {
         try {
+          // eslint-disable-next-line no-console
+          console.log("[cashOut/bg] running server settle + close");
           await apiSettle({ player, gameToken: settleToken, phase: "settle" });
           const c = await apiCleanup({ player });
           if (c.active && (c.action === "close_game" || c.action === "close_unsettled_game")) {
             await signAndSend(deserializeIx(c.instruction));
           }
-        } catch {
-          /* swallow — server cron + banner cover any leftover state */
+          // eslint-disable-next-line no-console
+          console.log("[cashOut/bg] settle + close complete");
+        } catch (bgErr) {
+          // eslint-disable-next-line no-console
+          console.warn("[cashOut/bg] non-fatal:", bgErr);
         } finally {
           store.setPendingClose(false);
         }
       })();
     } catch (err) {
+      // This catch only fires for failures BEFORE the tx is broadcast
+      // (apiSettle 4xx/5xx, sign rejected, sendRawTransaction error).
+      // Once we have a sig, the optimistic path above runs and the
+      // confirmation .catch handles post-broadcast issues without
+      // reverting UI. So this path is "true failure, no tx in flight".
       const friendly = decodeProgramError(
         err instanceof Error ? err.message : "Cash out failed",
       );
+      // eslint-disable-next-line no-console
+      console.error("[cashOut] pre-broadcast failure:", err);
       store.setStatus("playing");
       store.setError(friendly);
       toast(friendly, "error");
     }
-  }, [walletAddress, store, signAndSend, pushHistory, toast]);
+  }, [walletAddress, store, signAndBroadcast, signAndSend, pushHistory, toast, getAccessToken]);
 
   return {
     authenticated,
