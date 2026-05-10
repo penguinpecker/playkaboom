@@ -41,6 +41,13 @@ const csp = [
     "https://api.devnet.solana.com",
     "https://*.g.alchemy.com",
     "wss://*.g.alchemy.com",
+    // Helius — client posts player txs through Sender for fast landing,
+    // and (when NEXT_PUBLIC_HELIUS_API_KEY is set) hits the RPC for
+    // getPriorityFeeEstimate. Server-side WS subscribe runs from Node
+    // and isn't subject to browser CSP.
+    "https://sender.helius-rpc.com",
+    "https://mainnet.helius-rpc.com",
+    "wss://mainnet.helius-rpc.com",
     "https://hermes.pyth.network",
     // Privy bundles WalletConnect for wallet picker. Explorer API hosts the
     // wallet list; relay.walletconnect.{com,org} carries the v2 session WS.
