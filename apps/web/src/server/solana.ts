@@ -2,12 +2,15 @@ import "server-only";
 import {
   type AccountInfo,
   ComputeBudgetProgram,
+  Keypair,
   PublicKey,
   Transaction,
+  type Connection,
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { programId } from "./env";
 import { getConnection } from "./connection";
+import { getErConnection } from "./magicblock";
 import { getHouseSigner } from "./turnkey-signer";
 import {
   deriveGamePda,
@@ -44,6 +47,16 @@ export class OnChainError extends Error {
     this.account = opts.account;
     this.logs = opts.logs;
   }
+}
+
+export interface SendHouseTxOpts {
+  /**
+   * Where to route the transaction. Defaults to "l1" (existing mainnet RPC).
+   * "er" sends to the configured Magicblock Ephemeral Rollup endpoint — used
+   * by settle_game_er; reveal_tile_er does NOT go through this path (it's
+   * signed by the per-game session key, not Turnkey — see sendErTx).
+   */
+  target?: "l1" | "er";
 }
 
 // Floor + ceiling for the priority fee. Floor is what we always pay (keeps
@@ -112,8 +125,12 @@ async function computePriorityFee(): Promise<number> {
  * caused settle/reveal drops during congestion. Worst-case spend bounded
  * at 10_000 lamports/tx (~$0.002).
  */
-export async function sendHouseTx(instructions: TransactionInstruction[]): Promise<string> {
-  const conn = getConnection();
+export async function sendHouseTx(
+  instructions: TransactionInstruction[],
+  opts: SendHouseTxOpts = {},
+): Promise<string> {
+  const target = opts.target ?? "l1";
+  const conn = target === "er" ? getErConnection() : getConnection();
   const house = getHouseSigner();
   const priceMicroLamports = await computePriorityFee();
 
@@ -136,7 +153,7 @@ export async function sendHouseTx(instructions: TransactionInstruction[]): Promi
       maxRetries: 3,
       preflightCommitment: "processed",
     });
-    logger.debug({ sig }, "house tx submitted via RPC");
+    logger.debug({ sig, target }, "house tx submitted via RPC");
     void lastValidBlockHeight; // referenced for clarity; we don't poll-confirm here
     return sig;
   } catch (err) {
@@ -160,6 +177,42 @@ export async function sendHouseTx(instructions: TransactionInstruction[]): Promi
     }
     throw err;
   }
+}
+
+/**
+ * Submit a transaction to the Magicblock ER endpoint signed by the supplied
+ * Keypair(s) — NOT Turnkey. Used by reveal_tile_er, where each reveal is
+ * signed by the per-game ephemeral session key. Fee payer is the first
+ * signer (which is the session keypair on the reveal path; the session key
+ * is rent-funded by start_game_er — see Anchor contract).
+ */
+export async function sendErTx(
+  instructions: TransactionInstruction[],
+  signers: Keypair[],
+): Promise<string> {
+  if (signers.length === 0) throw new Error("sendErTx requires at least one signer");
+  const conn: Connection = getErConnection();
+
+  const tx = new Transaction();
+  // ER doesn't have mainnet's priority-fee market; floor is fine here.
+  tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: COMPUTE_PRICE_FLOOR_MICROLAMPORTS }));
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_LIMIT }));
+  for (const ix of instructions) tx.add(ix);
+
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("processed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = signers[0]!.publicKey;
+  tx.sign(...signers);
+
+  const sig = await conn.sendRawTransaction(tx.serialize(), {
+    skipPreflight: false,
+    maxRetries: 3,
+    preflightCommitment: "processed",
+  });
+  logger.debug({ sig, target: "er" }, "er tx submitted");
+  void lastValidBlockHeight;
+  return sig;
 }
 
 export async function playerHasActiveGame(player: PublicKey): Promise<boolean> {

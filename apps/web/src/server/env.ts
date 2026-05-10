@@ -97,3 +97,18 @@ export function logLevel(): string {
   return process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "info" : "debug");
 }
 
+// ── Magicblock Ephemeral Rollup feature flags ────────────────────────────────
+// Default OFF. Existing L1 + Turnkey path keeps running unchanged when
+// MAGICBLOCK_ENABLED !== 'true'. The ER endpoints default to the Asia public
+// node which is closest to our user base.
+export function useMagicblock(): boolean {
+  return (process.env.MAGICBLOCK_ENABLED ?? "").toLowerCase() === "true";
+}
+
+export function magicblockErUrl(): string {
+  return process.env.MAGICBLOCK_ER_URL ?? "https://as.magicblock.app/";
+}
+
+export function magicblockErWsUrl(): string {
+  return process.env.MAGICBLOCK_ER_WS_URL ?? "wss://as.magicblock.app/";
+}

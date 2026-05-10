@@ -21,6 +21,15 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use sha2::{Digest, Sha256};
 
+// ─── Magicblock Ephemeral Rollup integration ────────────────────────────────
+// Imports used by the ER-routed game flow (`start_game_er`, `delegate_game`,
+// `reveal_tile_er`, `settle_game_er`). All ER-specific code is additive and
+// lives alongside the existing base-layer flow — none of the legacy
+// instructions are modified.
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
+
 declare_id!("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 
 #[cfg(not(feature = "no-entrypoint"))]
@@ -109,8 +118,14 @@ pub const GAME_SEED: &[u8] = b"kaboom_game";
 pub const STATS_SEED: &[u8] = b"kaboom_stats";
 pub const REFERRAL_SEED: &[u8] = b"kaboom_referral";
 
+/// PDA seed for ER-routed games (`GameSessionV2`). Distinct from `GAME_SEED`
+/// so that legacy on-chain GameSession accounts remain untouched and the two
+/// flows can coexist on mainnet during rollout.
+pub const GAME_V2_SEED: &[u8] = b"game_v2";
+
 // ─── Program ─────────────────────────────────────────────────────────────────
 
+#[ephemeral]
 #[program]
 pub mod kaboom {
     use super::*;
@@ -1478,6 +1493,436 @@ pub mod kaboom {
         });
         Ok(())
     }
+
+    // ─── Magicblock Ephemeral Rollup flow ──────────────────────────────────
+    // Four additive instructions that mirror the legacy `start_game`,
+    // `reveal_tile`, and `settle_game` flow, plus a `delegate_game` step
+    // that hands the GameSessionV2 PDA to the Magicblock delegation
+    // program. The Turnkey HSM signs only twice per game (delegate +
+    // settle); reveals are signed by a per-game ephemeral key carried in
+    // `GameSessionV2.session_key`.
+
+    /// Player begins an ER-routed game. Mirrors `start_game` exactly,
+    /// but writes to `GameSessionV2` and records the per-game session key.
+    pub fn start_game_er(
+        ctx: Context<StartGameEr>,
+        mine_count: u8,
+        bet: u64,
+        commitment: [u8; 32],
+        session_key: Pubkey,
+    ) -> Result<()> {
+        let vault = &ctx.accounts.vault;
+        require!(!vault.paused, KaboomError::VaultPaused);
+        require!(
+            (MIN_MINES..=MAX_MINES).contains(&mine_count),
+            KaboomError::InvalidMineCount
+        );
+        require!(bet >= MIN_BET_LAMPORTS, KaboomError::BetTooLow);
+        require!(commitment != [0u8; 32], KaboomError::InvalidCommitment);
+        require!(session_key != Pubkey::default(), KaboomError::Unauthorized);
+
+        let vault_lamports = ctx.accounts.vault.to_account_info().lamports();
+        let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+        let available = vault_lamports.saturating_sub(rent);
+
+        let v2 = &ctx.accounts.v2_state;
+        let pre_health = calc_health_bps(v2, available)?;
+        let effective_max_bet_bps = (vault.max_bet_bps as u64)
+            .checked_mul(pre_health as u64)
+            .ok_or(KaboomError::MathOverflow)?
+            / BPS;
+        let effective_max_payout_bps = (vault.max_payout_bps as u64)
+            .checked_mul(pre_health as u64)
+            .ok_or(KaboomError::MathOverflow)?
+            / BPS;
+        let max_bet = mul_div_floor(available, effective_max_bet_bps, BPS)?;
+        require!(bet <= max_bet, KaboomError::BetExceedsMax);
+
+        let worst_payout_u64 = worst_case_payout(bet, mine_count, vault.house_edge_bps)?;
+        let worst_payout = worst_payout_u64 as u128;
+        let max_payout = mul_div_floor(available, effective_max_payout_bps, BPS)? as u128;
+        require!(
+            worst_payout <= max_payout,
+            KaboomError::VaultInsufficientFunds
+        );
+
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.player.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                },
+            ),
+            bet,
+        )?;
+
+        let clock = Clock::get()?;
+
+        let stats = &mut ctx.accounts.player_stats;
+        if stats.player == Pubkey::default() {
+            stats.player = ctx.accounts.player.key();
+            stats.bump = ctx.bumps.player_stats;
+            stats.version = 1;
+        }
+
+        let game = &mut ctx.accounts.game;
+        game.player = ctx.accounts.player.key();
+        game.bump = ctx.bumps.game;
+        game.status = GameStatus::Playing;
+        game.bet = bet;
+        game.mine_count = mine_count;
+        game.commitment = commitment;
+        game.revealed_mask = 0;
+        game.revealed_safe_mask = 0;
+        game.safe_reveals = 0;
+        game.multiplier_bps = BPS;
+        game.start_slot = clock.slot;
+        game.created_at = clock.unix_timestamp;
+        game.settled = false;
+        game.mine_layout = 0;
+        game.salt = [0u8; 32];
+        game.version = 2;
+        game.max_payout = worst_payout_u64;
+        game.session_key = Some(session_key);
+
+        let vault_mut = &mut ctx.accounts.vault;
+        vault_mut.total_games = vault_mut.total_games.saturating_add(1);
+        vault_mut.total_wagered = vault_mut.total_wagered.saturating_add(bet);
+
+        let v2_mut = &mut ctx.accounts.v2_state;
+        v2_mut.total_outstanding_max_payout = v2_mut
+            .total_outstanding_max_payout
+            .checked_add(worst_payout_u64)
+            .ok_or(KaboomError::MathOverflow)?;
+        let new_assets = available.saturating_add(bet);
+        enforce_min_health(v2_mut, new_assets)?;
+
+        emit!(GameStarted {
+            player: game.player,
+            game: game.key(),
+            bet,
+            mine_count,
+            commitment,
+            slot: clock.slot,
+        });
+        Ok(())
+    }
+
+    /// House signs once to hand the GameSessionV2 PDA over to the delegation
+    /// program. `remaining_accounts[0]`, if present, pins the ER validator.
+    pub fn delegate_game(ctx: Context<DelegateGame>) -> Result<()> {
+        // Snapshot the player key before delegation zeroes the PDA data.
+        let player_key = ctx.accounts.game.player;
+
+        let pda_seeds: &[&[u8]] = &[GAME_V2_SEED, player_key.as_ref()];
+        let validator = ctx.remaining_accounts.first().map(|a| a.key());
+        ctx.accounts.delegate_game(
+            &ctx.accounts.payer,
+            pda_seeds,
+            DelegateConfig {
+                commit_frequency_ms: 0,
+                validator,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Ephemeral-session reveal. Signer constraint on the accounts struct
+    /// (`session_signer.key == game.session_key.unwrap()`) means Turnkey is
+    /// NOT involved. Body mirrors legacy `reveal_tile` for state mutation.
+    pub fn reveal_tile_er(
+        ctx: Context<RevealTileEr>,
+        tile_index: u8,
+        is_mine: bool,
+    ) -> Result<()> {
+        require!(tile_index < GRID_SIZE, KaboomError::InvalidTileIndex);
+
+        let game = &mut ctx.accounts.game;
+        require!(
+            game.status == GameStatus::Playing,
+            KaboomError::GameNotPlaying
+        );
+
+        let clock = Clock::get()?;
+        require!(
+            clock.slot <= game.start_slot.saturating_add(GAME_EXPIRY_SLOTS),
+            KaboomError::GameExpired
+        );
+
+        let tile_bit: u16 = 1u16 << tile_index;
+        require!(
+            game.revealed_mask & tile_bit == 0,
+            KaboomError::TileAlreadyRevealed
+        );
+
+        game.revealed_mask |= tile_bit;
+
+        if is_mine {
+            game.status = GameStatus::Lost;
+            emit!(TileRevealed {
+                player: game.player,
+                game: game.key(),
+                tile_index,
+                is_mine: true,
+                multiplier_bps: game.multiplier_bps,
+                safe_reveals: game.safe_reveals,
+                slot: clock.slot,
+            });
+            emit!(GameLost {
+                player: game.player,
+                game: game.key(),
+                bet: game.bet,
+                tile_index,
+                safe_reveals: game.safe_reveals,
+                slot: clock.slot,
+            });
+        } else {
+            game.revealed_safe_mask |= tile_bit;
+            game.safe_reveals = game.safe_reveals.saturating_add(1);
+
+            let vault = &ctx.accounts.vault;
+            game.multiplier_bps =
+                calc_multiplier(game.safe_reveals, game.mine_count, vault.house_edge_bps)?;
+
+            let total_safe = GRID_SIZE - game.mine_count;
+            if game.safe_reveals >= total_safe {
+                game.status = GameStatus::Won;
+            }
+
+            emit!(TileRevealed {
+                player: game.player,
+                game: game.key(),
+                tile_index,
+                is_mine: false,
+                multiplier_bps: game.multiplier_bps,
+                safe_reveals: game.safe_reveals,
+                slot: clock.slot,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// House publishes the proof, mirrors legacy `settle_game` payout/stats
+    /// logic, then schedules commit-and-undelegate via the Magic program so
+    /// the GameSessionV2 PDA returns to base-layer ownership.
+    pub fn settle_game_er<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SettleGameEr<'info>>,
+        mine_layout: u16,
+        salt: [u8; 32],
+    ) -> Result<()> {
+        let game = &mut ctx.accounts.game;
+        require!(
+            game.status == GameStatus::Won || game.status == GameStatus::Lost,
+            KaboomError::GameNotPlaying
+        );
+        require!(!game.settled, KaboomError::GameAlreadySettled);
+
+        // Commitment verification: sha256(mine_layout_le || salt) == game.commitment.
+        // Identical wire format to legacy settle_game so the same preimage
+        // round-trips through either path.
+        let layout_bytes = mine_layout.to_le_bytes();
+        let mut hasher = Sha256::new();
+        hasher.update(layout_bytes);
+        hasher.update(salt);
+        let computed = hasher.finalize();
+        require!(
+            computed.as_slice() == game.commitment,
+            KaboomError::CommitmentMismatch
+        );
+
+        let actual_mine_count = mine_layout.count_ones() as u8;
+        require!(
+            actual_mine_count == game.mine_count,
+            KaboomError::CommitmentMismatch
+        );
+        require!(
+            game.revealed_safe_mask & mine_layout == 0,
+            KaboomError::RevealMismatch
+        );
+        let revealed_mine_mask = game.revealed_mask & !game.revealed_safe_mask;
+        require!(
+            revealed_mine_mask & mine_layout == revealed_mine_mask,
+            KaboomError::RevealMismatch
+        );
+        if game.status == GameStatus::Lost {
+            require!(revealed_mine_mask != 0, KaboomError::RevealMismatch);
+        }
+
+        game.mine_layout = mine_layout;
+        game.salt = salt;
+        game.settled = true;
+        // Session key is retired once we settle.
+        game.session_key = None;
+        let max_payout_release = game.max_payout;
+
+        {
+            let v2 = &mut ctx.accounts.v2_state;
+            v2.total_outstanding_max_payout = v2
+                .total_outstanding_max_payout
+                .saturating_sub(max_payout_release);
+        }
+
+        let stats = &mut ctx.accounts.player_stats;
+        if stats.player == Pubkey::default() {
+            stats.player = game.player;
+            stats.bump = ctx.bumps.player_stats;
+            stats.version = 1;
+        }
+        stats.games_played = stats.games_played.saturating_add(1);
+        stats.total_wagered = stats.total_wagered.saturating_add(game.bet);
+        stats.last_played = Clock::get()?.unix_timestamp;
+
+        let payout: u64 = if game.status == GameStatus::Won {
+            (game.bet as u128)
+                .checked_mul(game.multiplier_bps as u128)
+                .ok_or(KaboomError::MathOverflow)?
+                .checked_div(BPS as u128)
+                .ok_or(KaboomError::MathOverflow)?
+                .try_into()
+                .map_err(|_| KaboomError::MathOverflow)?
+        } else {
+            0
+        };
+
+        if game.status == GameStatus::Won {
+            stats.games_won = stats.games_won.saturating_add(1);
+            stats.total_payouts = stats.total_payouts.saturating_add(payout);
+            let net_win = payout.saturating_sub(game.bet);
+            if net_win > stats.biggest_win {
+                stats.biggest_win = net_win;
+            }
+            if game.multiplier_bps > stats.biggest_multiplier_bps {
+                stats.biggest_multiplier_bps = game.multiplier_bps;
+            }
+            stats.current_streak = stats.current_streak.saturating_add(1);
+            if stats.current_streak > stats.best_streak {
+                stats.best_streak = stats.current_streak;
+            }
+        } else {
+            stats.current_streak = 0;
+        }
+
+        // Referral credit — same convention as legacy settle_game.
+        if let Some(referrer_key) = stats.referrer {
+            if let Some(referral_info) = ctx.remaining_accounts.first() {
+                let (expected_referral_pda, _) = Pubkey::find_program_address(
+                    &[REFERRAL_SEED, referrer_key.as_ref()],
+                    &crate::ID,
+                );
+                require!(
+                    referral_info.key() == expected_referral_pda,
+                    KaboomError::ReferralMismatch
+                );
+                let mut ra: Account<ReferralAccount> = Account::try_from(referral_info)?;
+                require!(ra.referrer == referrer_key, KaboomError::ReferralMismatch);
+
+                let cut_bps = match ra.tier {
+                    0 => REFERRAL_BRONZE_BPS,
+                    1 => REFERRAL_SILVER_BPS,
+                    _ => REFERRAL_GOLD_BPS,
+                };
+                let cut = mul_div_floor(game.bet, cut_bps as u64, BPS)?;
+
+                let vault_info = ctx.accounts.vault.to_account_info();
+                let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+                let vault_available = vault_info.lamports().saturating_sub(rent);
+                let actual_cut = cut.min(vault_available);
+
+                if actual_cut > 0 {
+                    **vault_info.try_borrow_mut_lamports()? = vault_info
+                        .lamports()
+                        .checked_sub(actual_cut)
+                        .ok_or(KaboomError::MathOverflow)?;
+                    **referral_info.try_borrow_mut_lamports()? = referral_info
+                        .lamports()
+                        .checked_add(actual_cut)
+                        .ok_or(KaboomError::MathOverflow)?;
+                }
+
+                ra.accrued_lamports = ra.accrued_lamports.saturating_add(actual_cut);
+                ra.total_earned = ra.total_earned.saturating_add(actual_cut);
+                ra.referred_volume = ra.referred_volume.saturating_add(game.bet);
+
+                let new_tier = if ra.referred_volume >= GOLD_VOLUME_LAMPORTS {
+                    2
+                } else if ra.referred_volume >= SILVER_VOLUME_LAMPORTS {
+                    1
+                } else {
+                    0
+                };
+                if new_tier != ra.tier {
+                    ra.tier = new_tier;
+                    emit!(ReferralTierChanged {
+                        referrer: ra.referrer,
+                        new_tier,
+                        slot: Clock::get()?.slot,
+                    });
+                }
+
+                ra.exit(&crate::ID)?;
+
+                emit!(ReferralAccrued {
+                    referrer: referrer_key,
+                    player: game.player,
+                    amount: actual_cut,
+                    tier: ra.tier,
+                    slot: Clock::get()?.slot,
+                });
+            }
+        }
+
+        emit!(GameSettled {
+            player: game.player,
+            game: game.key(),
+            mine_count: game.mine_count,
+            mine_layout,
+            salt,
+            commitment: game.commitment,
+            verified: true,
+            slot: Clock::get()?.slot,
+        });
+
+        {
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let assets_now = vault_assets(&vault_info)?;
+            let v2 = &ctx.accounts.v2_state;
+            let h = calc_health_bps(v2, assets_now)?;
+            emit!(VaultUnitValueUpdated {
+                vault: ctx.accounts.vault.key(),
+                vault_assets: assets_now,
+                total_units: v2.total_units,
+                health_bps: h,
+                slot: Clock::get()?.slot,
+            });
+        }
+
+        emit!(StatsUpdated {
+            player: stats.player,
+            games_played: stats.games_played,
+            games_won: stats.games_won,
+            total_wagered: stats.total_wagered,
+            total_payouts: stats.total_payouts,
+            biggest_win: stats.biggest_win,
+            current_streak: stats.current_streak,
+            slot: Clock::get()?.slot,
+        });
+
+        // Schedule commit-and-undelegate of the GameSessionV2 PDA back to
+        // base layer. Magic program + magic context are auto-injected by
+        // the `#[commit]` macro.
+        let game_ai = ctx.accounts.game.to_account_info();
+        MagicIntentBundleBuilder::new(
+            ctx.accounts.house_authority.to_account_info(),
+            ctx.accounts.magic_context.to_account_info(),
+            ctx.accounts.magic_program.to_account_info(),
+        )
+        .commit_and_undelegate(&[game_ai])
+        .build_and_invoke()?;
+
+        Ok(())
+    }
 }
 
 // ─── Multiplier ──────────────────────────────────────────────────────────────
@@ -1795,6 +2240,52 @@ impl GameSession {
         + 8 + 8 + 8
         + 1 + 2 + 32
         + 1 + 8 + 24;
+}
+
+// ─── Magicblock ER session account ──────────────────────────────────────────
+// `GameSession._reserved` is only 24 bytes, while `Option<Pubkey>` needs 33
+// (1 tag + 32). We therefore add a NEW account variant rather than overload
+// the existing reserved space — this preserves byte-for-byte backward
+// compatibility with all in-flight legacy GameSession accounts on mainnet.
+// Decision: new account, new PDA seed (`GAME_V2_SEED`). The old `GameSession`
+// continues to power the existing instruction flow untouched.
+#[account]
+pub struct GameSessionV2 {
+    pub player: Pubkey,
+    pub bump: u8,
+    pub status: GameStatus,
+    pub bet: u64,
+    pub mine_count: u8,
+    pub commitment: [u8; 32],
+    pub revealed_mask: u16,
+    pub revealed_safe_mask: u16,
+    pub safe_reveals: u8,
+    pub multiplier_bps: u64,
+    pub start_slot: u64,
+    pub created_at: i64,
+    pub settled: bool,
+    pub mine_layout: u16,
+    pub salt: [u8; 32],
+    pub version: u8,
+    pub max_payout: u64,
+    /// The ephemeral session key authorized to sign `reveal_tile_er` during
+    /// the delegated phase. Set by `start_game_er`. Once `settle_game_er`
+    /// runs and the account is committed-and-undelegated, this field is
+    /// effectively retired for that session.
+    pub session_key: Option<Pubkey>,
+    pub _reserved: [u8; 32],
+}
+
+impl GameSessionV2 {
+    pub const SPACE: usize = 8
+        + 32 + 1 + 1
+        + 8 + 1 + 32
+        + 2 + 2 + 1
+        + 8 + 8 + 8
+        + 1 + 2 + 32
+        + 1 + 8
+        + 1 + 32 // session_key: Option<Pubkey>
+        + 32;
 }
 
 /// Per-player lifetime stats. Source of truth for leaderboards.
@@ -2275,6 +2766,121 @@ pub struct HouseLpAction<'info> {
     pub owner: Signer<'info>,
 }
 
+// ─── Magicblock ER Accounts ─────────────────────────────────────────────────
+// Additive — none of the legacy account structs above are modified.
+
+#[derive(Accounts)]
+pub struct StartGameEr<'info> {
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(
+        init,
+        payer = player,
+        space = GameSessionV2::SPACE,
+        seeds = [GAME_V2_SEED, player.key().as_ref()],
+        bump,
+    )]
+    pub game: Account<'info, GameSessionV2>,
+
+    #[account(
+        init_if_needed,
+        payer = player,
+        space = PlayerStats::SPACE,
+        seeds = [STATS_SEED, player.key().as_ref()],
+        bump,
+    )]
+    pub player_stats: Account<'info, PlayerStats>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Delegate the ER GameSessionV2 PDA to the Magicblock delegation program.
+/// The `#[delegate]` macro auto-injects sibling `buffer_game`,
+/// `delegation_record_game`, `delegation_metadata_game`, plus the
+/// `owner_program`, `delegation_program`, and `system_program` accounts
+/// (see the SDK's attribute-delegate crate).
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateGame<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        mut,
+        del,
+        seeds = [GAME_V2_SEED, game.player.as_ref()],
+        bump = game.bump,
+    )]
+    pub game: Account<'info, GameSessionV2>,
+}
+
+/// Reveal-tile while delegated to the ER. The session key is the only signer
+/// — the Turnkey HSM is NOT touched. `session_key.unwrap()` triggers an
+/// error variant if the session was never initialised.
+#[derive(Accounts)]
+pub struct RevealTileEr<'info> {
+    #[account(seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+
+    #[account(
+        mut,
+        seeds = [GAME_V2_SEED, game.player.as_ref()],
+        bump = game.bump,
+        constraint = game.session_key.is_some() @ KaboomError::SessionKeyMissing,
+        constraint = game.session_key == Some(session_signer.key())
+            @ KaboomError::Unauthorized,
+    )]
+    pub game: Account<'info, GameSessionV2>,
+
+    /// The per-game ephemeral key. Burnt after `settle_game_er`.
+    pub session_signer: Signer<'info>,
+}
+
+/// Settle-and-undelegate. The Turnkey HSM (vault.house_authority) signs, the
+/// commitment is verified, the same payout/stats logic as legacy
+/// `settle_game` runs, then `MagicIntentBundleBuilder::commit_and_undelegate`
+/// schedules the game account back to base layer.
+///
+/// The `#[commit]` macro auto-injects `magic_program` + `magic_context`
+/// fields, removing the need to spell them out here.
+#[commit]
+#[derive(Accounts)]
+pub struct SettleGameEr<'info> {
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(
+        mut,
+        seeds = [GAME_V2_SEED, game.player.as_ref()],
+        bump = game.bump,
+    )]
+    pub game: Account<'info, GameSessionV2>,
+
+    #[account(
+        mut,
+        seeds = [STATS_SEED, game.player.as_ref()],
+        bump,
+    )]
+    pub player_stats: Account<'info, PlayerStats>,
+
+    /// Turnkey HSM. Same key as the legacy flow's `house_authority`.
+    #[account(mut, constraint = house_authority.key() == vault.house_authority
+        @ KaboomError::Unauthorized)]
+    pub house_authority: Signer<'info>,
+    // Optional remaining_accounts[0]: ReferralAccount (mut) — same convention
+    // as legacy `settle_game`.
+}
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 #[error_code]
@@ -2362,6 +2968,9 @@ pub enum KaboomError {
     InsufficientLiquidity,
     #[msg("LP position still has units; cannot close.")]
     LpPositionNotEmpty,
+    // ─── Magicblock ER additions ────────────────────────────────────────────
+    #[msg("Game has no session key set; cannot reveal in ER mode.")]
+    SessionKeyMissing,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────

@@ -1,16 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { StartGameInput } from "@playkaboom/shared";
-import { buildStartGame, serializeIx } from "@playkaboom/sdk";
+import { buildStartGame, deriveGamePda, serializeIx } from "@playkaboom/sdk";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { createGameSession } from "@/server/game";
 import { saveSession } from "@/server/session-store";
 import { playerHasActiveGame } from "@/server/solana";
-import { programId } from "@/server/env";
+import { programId, useMagicblock } from "@/server/env";
 import { getConnection } from "@/server/connection";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
+import { buildStartGameEr, deriveGameV2Pda } from "@/server/er-instructions";
+import { generateGameSessionKey, storeSessionKey } from "@/server/session-keys";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +42,58 @@ export async function POST(req: NextRequest) {
     }
 
     const { payload, commitment } = createGameSession(body.player, body.mineCount);
+
+    // Magicblock ER path (additive). When enabled we:
+    //   1) generate a per-game ephemeral session keypair
+    //   2) build start_game_er with the session pubkey baked in
+    //   3) persist the encrypted secret server-side keyed by GameSession PDA
+    // The delegate_game ix (Turnkey-signed) is intentionally NOT bundled
+    // into the client-facing instruction — the player only signs start_game_er.
+    // delegate_game runs server-side immediately after the player's start
+    // tx is confirmed, in a separate Turnkey-signed L1 tx. (Handled by a
+    // follow-up server call; see /api/reveal which will short-circuit if
+    // the game isn't yet delegated.)
+    if (useMagicblock()) {
+      const session = generateGameSessionKey();
+      const ix = buildStartGameEr({
+        ctx: { programId: programId() },
+        player: playerPk,
+        mineCount: body.mineCount,
+        betLamports: BigInt(body.betLamports),
+        commitment,
+        sessionKey: session.publicKey,
+      });
+      const [gamePda] = deriveGameV2Pda(programId(), playerPk);
+      await storeSessionKey(gamePda, session.secretKey);
+
+      const gameToken = await saveSession(body.player, payload, slot, {
+        betLamports: BigInt(body.betLamports),
+        mineCount: body.mineCount,
+        startSlot: slot,
+      });
+
+      logger.info(
+        {
+          player: body.player,
+          mineCount: body.mineCount,
+          bet: body.betLamports.toString(),
+          mode: "er",
+          sessionKey: session.publicKey.toBase58(),
+        },
+        "commit",
+      );
+
+      return NextResponse.json({
+        commitment: commitment.toString("hex"),
+        instruction: serializeIx(ix),
+        gameToken,
+        mode: "er",
+        sessionKey: session.publicKey.toBase58(),
+        // `delegateInstruction` is intentionally absent — the server runs
+        // delegate_game via sendHouseTx after the player's start tx lands.
+      });
+    }
+
     const ix = buildStartGame({
       ctx: { programId: programId() },
       player: playerPk,
