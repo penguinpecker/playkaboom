@@ -107,10 +107,14 @@ export function useGameActions(): ActionsResult {
     [wallet, connection, signTransaction],
   );
 
-  // Allow components outside this hook (e.g. StuckGameBanner) to trigger the
-  // exact same cleanup flow without re-implementing it. Set on the window so
-  // hooks/components don't have to thread a prop through every layer.
-  // (Yes, this is a window-scoped escape hatch; treated like an event bus.)
+  // Cleanup a stuck on-chain GameSession PDA from a previous interrupted
+  // round. The server determines which recovery ix to dispatch based on the
+  // current on-chain status (close_game / close_unsettled_game /
+  // refund_expired) and tells us if the slot timer has elapsed yet.
+  //
+  // For the not-yet-ready cases (Won/Lost & !settled before slot+600,
+  // Playing before slot+300) we set a precise countdown error and let the
+  // GameRecoveryBanner on /play handle the wait + retry flow.
   const cleanupStuck = useCallback(async (): Promise<boolean> => {
     if (!walletAddress) return false;
     store.setStatus("cleaning");
@@ -120,32 +124,53 @@ export function useGameActions(): ActionsResult {
         gameToken: store.gameToken ?? undefined,
       });
       if (!data.active) {
+        store.setGameToken(null);
         store.setStatus("idle");
-        return false;
+        return true;
       }
-      const tryClose = async (ix?: SerializedIx) => {
-        if (!ix) return false;
+
+      const trySend = async (ix: SerializedIx) => {
         try {
           await signAndSend(deserializeIx(ix));
           store.setGameToken(null);
           store.setStatus("idle");
           return true;
-        } catch {
+        } catch (err) {
+          store.setStatus("idle");
+          store.setError(
+            decodeProgramError(err instanceof Error ? err.message : "Cleanup tx failed"),
+          );
           return false;
         }
       };
-      if (await tryClose(data.closeInstruction)) return true;
-      if (data.refundInstruction) {
-        try {
-          await signAndSend(deserializeIx(data.refundInstruction));
-          await new Promise((r) => setTimeout(r, 2000));
-          if (await tryClose(data.closeInstruction)) return true;
-        } catch {
-          // fall through
+
+      switch (data.action) {
+        case "close_game":
+        case "close_unsettled_game":
+        case "refund_expired":
+          return await trySend(data.instruction);
+        case "wait_close_unsettled": {
+          const secs = data.secondsUntilReady;
+          store.setStatus("idle");
+          store.setError(
+            `Stuck game from a previous round. Force-close becomes available in ~${secs}s — use the FORCE CLOSE button below the bet controls.`,
+          );
+          return false;
+        }
+        case "wait_refund": {
+          const secs = data.secondsUntilReady;
+          store.setStatus("idle");
+          store.setError(
+            `Active game in progress. Refund becomes available in ~${secs}s — use the REFUND BET button below the bet controls.`,
+          );
+          return false;
+        }
+        case "unknown": {
+          // Fallback path — server couldn't decode, try close then refund.
+          if (await trySend(data.closeInstruction)) return true;
+          return await trySend(data.refundInstruction);
         }
       }
-      store.setStatus("idle");
-      store.setError("Could not clean up stuck game. Try again in a moment.");
       return false;
     } catch (err) {
       store.setStatus("idle");
@@ -270,12 +295,16 @@ export function useGameActions(): ActionsResult {
       store.applyCashOut(payout);
       pushHistory(makeResult(s, walletAddress, true, payout, ""));
       store.setGameToken(null);
-      // Close game PDA in the background.
+      // Close game PDA in the background. After cash_out → settle the game
+      // is Won+settled, so server returns action "close_game" with the
+      // ready-to-send ix. Other actions (wait_*) are no-ops here — the
+      // banner handles those.
       setTimeout(() => {
         apiCleanup({ player: walletAddress })
           .then((c) => {
-            if (c.active && c.closeInstruction) {
-              return signAndSend(deserializeIx(c.closeInstruction));
+            if (!c.active) return;
+            if (c.action === "close_game" || c.action === "close_unsettled_game") {
+              return signAndSend(deserializeIx(c.instruction));
             }
           })
           .catch(() => {});

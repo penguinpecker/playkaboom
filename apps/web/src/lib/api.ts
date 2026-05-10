@@ -73,11 +73,30 @@ export async function apiSettle(
   return post("/api/settle", input);
 }
 
-export interface CleanupResponse {
-  active: boolean;
-  closeInstruction?: SerializedIx;
-  refundInstruction?: SerializedIx;
-}
+export type CleanupResponse =
+  | { active: false }
+  | {
+      active: true;
+      action: "close_game" | "close_unsettled_game" | "refund_expired";
+      instruction: SerializedIx;
+      readyAt: number;
+      secondsUntilReady: 0;
+    }
+  | {
+      active: true;
+      action: "wait_close_unsettled" | "wait_refund";
+      readyAt: number;
+      secondsUntilReady: number;
+      currentSlot: number;
+    }
+  | {
+      // Decode failure fallback — the legacy two-ix shape; client will try
+      // each in turn.
+      active: true;
+      action: "unknown";
+      closeInstruction: SerializedIx;
+      refundInstruction: SerializedIx;
+    };
 export async function apiCleanup(input: {
   player: string;
   gameToken?: string;
