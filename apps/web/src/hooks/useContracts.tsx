@@ -11,6 +11,7 @@ import {
   useSolanaWallets as useWallets,
   useStandardSignTransaction,
 } from "@privy-io/react-auth/solana";
+import { useQuery } from "@tanstack/react-query";
 import {
   deriveVaultPda,
   deriveV2StatePda,
@@ -32,56 +33,57 @@ const HOUSE_EDGE_BPS_DEFAULT = 200;
 // a comfortable margin (current production rent is ~0.0048 SOL).
 const VAULT_RENT_LAMPORTS_FLOOR = 12_000_000n;
 
-function useVaultAccount() {
+interface VaultAccountData {
+  lamports: bigint;
+  vault: VaultAccount | null;
+  v2: VaultV2StateAccount | null;
+}
+
+const EMPTY_VAULT_DATA: VaultAccountData = {
+  lamports: 0n,
+  vault: null,
+  v2: null,
+};
+
+/**
+ * Single shared poller for the on-chain vault state.
+ *
+ * Every hook below (useVaultBalance, useVaultHealth, useVaultCapacity,
+ * useVaultMaxBet, useVaultMaxPayout, useGameCounter, useContracts) calls
+ * this. Previously this was a useState+useEffect+setInterval that
+ * created an INDEPENDENT poller PER CALL — 7 callers meant 7 timers,
+ * each on its own 15s schedule starting from when the component mounted.
+ * Result: Vault Balance and Vault Health on the same screen could be
+ * read from polls 14 seconds apart, and during a high-obligation
+ * moment the displayed values for the same on-chain state would be
+ * inconsistent (one fresh, one stale).
+ *
+ * TanStack Query dedupes by queryKey: all 7 consumers share the same
+ * single poller and the same cached value, so all derived stats render
+ * from the same snapshot every render.
+ */
+function useVaultAccount(): VaultAccountData {
   const { connection } = useConnection();
-  const [data, setData] = useState<{
-    lamports: bigint;
-    vault: VaultAccount | null;
-    v2: VaultV2StateAccount | null;
-  }>({
-    lamports: 0n,
-    vault: null,
-    v2: null,
+  const { data } = useQuery({
+    queryKey: ["vault-account", connection.rpcEndpoint],
+    queryFn: async (): Promise<VaultAccountData> => {
+      const [lamports, vaultInfo, v2Info] = await Promise.all([
+        connection.getBalance(VAULT_PDA, "confirmed"),
+        connection.getAccountInfo(VAULT_PDA, "confirmed"),
+        connection.getAccountInfo(V2_PDA, "confirmed"),
+      ]);
+      return {
+        lamports: BigInt(lamports),
+        vault: vaultInfo ? decodeVault(vaultInfo.data) : null,
+        v2: v2Info ? decodeVaultV2State(v2Info.data) : null,
+      };
+    },
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    staleTime: 5_000,
   });
-  useEffect(() => {
-    let cancelled = false;
-    const f = async () => {
-      try {
-        const [lamports, vaultInfo, v2Info] = await Promise.all([
-          connection.getBalance(VAULT_PDA, "confirmed"),
-          connection.getAccountInfo(VAULT_PDA, "confirmed"),
-          connection.getAccountInfo(V2_PDA, "confirmed"),
-        ]);
-        if (cancelled) return;
-        setData({
-          lamports: BigInt(lamports),
-          vault: vaultInfo ? decodeVault(vaultInfo.data) : null,
-          v2: v2Info ? decodeVaultV2State(v2Info.data) : null,
-        });
-      } catch {
-        /* noop */
-      }
-    };
-    void f();
-    const id = setInterval(f, 15_000);
-    // Wake-up triggers so the vault state recovers from background-tab
-    // suspension. Without these, after a few hours of inactivity the
-    // displayed vault balance / health / max bet stays frozen.
-    const onWake = () => {
-      if (typeof document === "undefined" || document.visibilityState === "visible") void f();
-    };
-    document.addEventListener("visibilitychange", onWake);
-    window.addEventListener("online", onWake);
-    window.addEventListener("pageshow", onWake);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onWake);
-      window.removeEventListener("online", onWake);
-      window.removeEventListener("pageshow", onWake);
-    };
-  }, [connection]);
-  return data;
+  return data ?? EMPTY_VAULT_DATA;
 }
 
 export function useContracts() {
