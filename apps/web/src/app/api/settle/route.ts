@@ -20,12 +20,13 @@ export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, SettleInput);
 
-    await verifyPlayerAuth(req, body.player);
-
-    const rl = await enforceRateLimit(`settle:${clientIp(req)}:${body.player}`);
+    // Auth + ratelimit + session-load in parallel (see reveal/route.ts).
+    const [, rl, session] = await Promise.all([
+      verifyPlayerAuth(req, body.player),
+      enforceRateLimit(`settle:${clientIp(req)}:${body.player}`),
+      loadSession(body.player, body.gameToken),
+    ]);
     if (!rl.ok) throw new ApiError(429, "Too many requests");
-
-    const session = await loadSession(body.player, body.gameToken);
     if (!session) throw new ApiError(404, "No active session — start a new game");
     if (session.player !== body.player) {
       throw new ApiError(403, "Player mismatch");
@@ -47,9 +48,10 @@ export async function POST(req: NextRequest) {
         }),
       ]);
       logger.info({ player: body.player, sig }, "settle");
-      // Inline-index the fresh sig so /api/activity/global, leaderboard,
-      // player_stats etc. reflect the new state in seconds (cron is 5min).
-      await indexFreshSignature(sig);
+      // Background-index the fresh sig (see reveal/route.ts). Awaiting was
+      // adding 1.3s p50 / 5.2s p99 to settle response time. Cron + dedup
+      // covers the same ground without blocking the player.
+      void indexFreshSignature(sig);
       // Game is closed on chain; clear server-side session.
       await deleteSession(body.player);
       return NextResponse.json({ signature: sig, mineLayout: session.mineLayout, verified: true });
