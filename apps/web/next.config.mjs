@@ -48,6 +48,10 @@ const csp = [
     "https://sender.helius-rpc.com",
     "https://mainnet.helius-rpc.com",
     "wss://mainnet.helius-rpc.com",
+    // Railway realtime relay — fans out public.games settle events to
+    // every connected browser. Wired in apps/realtime/. Has been silently
+    // CSP-blocked since the worker shipped 2026-05-09.
+    "wss://playkaboom-realtime-production.up.railway.app",
     "https://hermes.pyth.network",
     // Privy bundles WalletConnect for wallet picker. Explorer API hosts the
     // wallet list; relay.walletconnect.{com,org} carries the v2 session WS.
