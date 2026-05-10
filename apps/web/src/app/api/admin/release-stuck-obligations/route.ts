@@ -72,11 +72,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const ctx = { programId: programId() };
     const housePk = housePubkey();
 
-    // Fetch all GameSession PDAs by exact account size.
-    const accounts = await conn.getProgramAccounts(ctx.programId, {
-      filters: [{ dataSize: GAMESESSION_DATASIZE }],
-      commitment: "confirmed",
-    });
+    // Fetch all GameSession PDAs by exact account size. getProgramAccounts
+    // is the heaviest RPC call we make — Alchemy's CU/s limit kicks in
+    // routinely on a single invocation. Retry up to 4 times with
+    // exponential backoff. If it still 429s after that, surface the error.
+    const accounts = await (async () => {
+      const delays = [0, 2_500, 5_000, 9_000];
+      let lastErr: unknown;
+      for (let i = 0; i < delays.length; i++) {
+        if (delays[i]! > 0) await new Promise((r) => setTimeout(r, delays[i]!));
+        try {
+          return await conn.getProgramAccounts(ctx.programId, {
+            filters: [{ dataSize: GAMESESSION_DATASIZE }],
+            commitment: "confirmed",
+          });
+        } catch (e) {
+          lastErr = e;
+          const msg = e instanceof Error ? e.message : String(e);
+          if (!/429|Too Many Requests|throttled|rate ?limit/i.test(msg)) throw e;
+          logger.warn({ attempt: i + 1, msg }, "release-stuck: 429 from RPC, retrying");
+        }
+      }
+      throw lastErr ?? new Error("getProgramAccounts failed after retries");
+    })();
     logger.info({ count: accounts.length }, "release-stuck: scanned program accounts");
 
     const candidates: { pda: PublicKey; game: GameSessionAccount }[] = [];
