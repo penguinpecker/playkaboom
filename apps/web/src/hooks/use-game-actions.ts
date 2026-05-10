@@ -39,7 +39,7 @@ interface ActionsResult {
 }
 
 export function useGameActions(): ActionsResult {
-  const { authenticated, login, logout } = usePrivy();
+  const { authenticated, login, logout, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
   // useSignTransaction is for Privy embedded wallets and accepts a Transaction
   // object directly (returns a signed Transaction). useStandardSignTransaction
@@ -345,12 +345,60 @@ export function useGameActions(): ActionsResult {
 
   const cashOut = useCallback(async () => {
     const s = useGameStore.getState();
-    if (s.status !== "playing" || s.safeTiles.size === 0) return;
-    if (!walletAddress || !s.gameToken) return;
+    // Loud guards: previously these returned silently and the click looked
+    // dead to the user. Now every blocked path either toasts or attempts
+    // recovery (re-fetch session from server when local token is missing).
+    if (!walletAddress) {
+      const msg = "Wallet not connected — reconnect and try again.";
+      store.setError(msg);
+      toast(msg, "error");
+      return;
+    }
+    if (s.status !== "playing") {
+      const msg = `Cannot cash out from status "${s.status}" — refresh the page.`;
+      store.setError(msg);
+      toast(msg, "error");
+      return;
+    }
+    if (s.safeTiles.size === 0) {
+      const msg = "No safe tiles revealed yet — reveal at least one before cashing out.";
+      store.setError(msg);
+      toast(msg, "error");
+      return;
+    }
+    // Recovery: gameToken missing locally → fetch from server's session
+    // mirror, hydrate the store, then proceed with cashOut. Most common
+    // cause is a state desync after a "Tile already revealed" or other
+    // mid-game error that left the client out of step with the server.
+    let token = s.gameToken;
+    if (!token) {
+      try {
+        const accessToken = await getAccessToken();
+        const res = await fetch(`/api/session/${walletAddress}`, {
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { gameToken?: string | null };
+          if (data.gameToken) {
+            token = data.gameToken;
+            store.setGameToken(token);
+          }
+        }
+      } catch {
+        /* fall through to error below */
+      }
+      if (!token) {
+        const msg = "Game session lost — use FORCE CLOSE in the recovery banner above to refund and start a new round.";
+        store.setError(msg);
+        toast(msg, "error");
+        return;
+      }
+    }
     store.setStatus("cashing");
 
     try {
-      const cashRes = await apiSettle({ player: walletAddress, gameToken: s.gameToken });
+      const cashRes = await apiSettle({ player: walletAddress, gameToken: token });
       // G2: bare return here previously left status: "cashing" forever, no
       // toast, no error — the spinner spun until the user reloaded. If the
       // server didn't return the cash-out ix shape we expected, surface
@@ -376,7 +424,9 @@ export function useGameActions(): ActionsResult {
 
       // Capture into local non-null vars before the IIFE so TS doesn't
       // re-widen them when the closure runs after applyCashOut/setGameToken.
-      const settleToken = s.gameToken;
+      // Use the recovered/refreshed `token` (not s.gameToken which could
+      // have been the stale null we replaced above).
+      const settleToken: string = token;
       const player = walletAddress;
 
       // Settle + close-game in a tight inline chain (no fixed setTimeout
