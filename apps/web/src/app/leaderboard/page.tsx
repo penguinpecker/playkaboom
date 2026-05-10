@@ -140,7 +140,7 @@ export default function LeaderboardPage() {
           {/* Desktop column headers — hidden on mobile (rows are self-labeled). */}
           <div className="hidden sm:grid grid-cols-5 px-6 py-3 border-b border-outline-variant/10">
             {(tab === "alltime"
-              ? ["Rank", "Operator", "Biggest Win", "Multiplier", "Status"]
+              ? ["Rank", "Operator", "Biggest Win", "Biggest Loss", "Status"]
               : tab === "volume"
                 ? ["Rank", "Operator", "Total Wagered", "Games", "Status"]
                 : ["Rank", "Operator", "Best Streak", "Games Won", "Status"]
@@ -165,7 +165,7 @@ export default function LeaderboardPage() {
                     : `${"best_streak" in row ? row.best_streak : 0}`;
               const cellB =
                 tab === "alltime"
-                  ? `${("biggest_multiplier_bps" in row ? Number(row.biggest_multiplier_bps) : 0) / 10_000}×`
+                  ? `${(("biggest_loss" in row ? Number(row.biggest_loss) : 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL`
                   : tab === "volume"
                     ? `${"games_played" in row ? row.games_played : 0}`
                     : `${"games_won" in row ? row.games_won : 0}`;
@@ -187,7 +187,11 @@ export default function LeaderboardPage() {
                     </div>
                   </div>
                   <span className="font-headline text-xs sm:text-sm font-bold text-primary whitespace-nowrap">{cellA}</span>
-                  <span className="hidden sm:inline font-headline text-sm font-bold text-secondary">{cellB}</span>
+                  <span
+                    className={`hidden sm:inline font-headline text-sm font-bold ${tab === "alltime" ? "text-error" : "text-secondary"}`}
+                  >
+                    {cellB}
+                  </span>
                   <span
                     className={`hidden sm:inline-block font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
                   >
