@@ -56,69 +56,83 @@ export function useGameActions(): ActionsResult {
   const wallet = wallets[0];
   const walletAddress = wallet?.address;
 
-  const signAndSend = useCallback(
-    async (ix: TransactionInstruction): Promise<string> => {
+  // Sign + broadcast a player tx, returning the signature AND a
+  // confirmation promise. Caller updates UI on `sig` immediately
+  // (optimistic — RPC has acknowledged the tx) and attaches a follow-up
+  // .then/.catch to `confirmation` for the eventual outcome.
+  //
+  // This split exists because awaiting confirmByPolling before returning
+  // (the old shape) gave the UI no way to render an in-flight tx for the
+  // 1.5-3s confirm window. Worse: if confirmByPolling threw on
+  // "blockhash expired" while the tx actually landed in the last valid
+  // block, the caller treated it as failure and reverted local state to
+  // idle — but the on-chain game stayed active. Refreshing the page
+  // surfaced "you have an active game". Optimistic return + background
+  // confirm fixes both: UI updates within ~200ms of click, and a tx that
+  // lands but never gets a confirm signal still produces correct local
+  // state (because we set "playing" the moment we have a sig).
+  const signAndBroadcast = useCallback(
+    async (ix: TransactionInstruction): Promise<{ sig: string; confirmation: Promise<string> }> => {
       if (!wallet) throw new Error("No wallet");
       const payer = new PublicKey(wallet.address);
-      // Run blockhash + priority-fee fetch in parallel so the priority-fee
-      // RPC roundtrip is overlapped with blockhash (already on the critical
-      // path). Net additional latency: ~0ms.
       const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
-        // `processed` blockhash is one slot newer than `confirmed` and still
-        // valid for the full ~150-block window — saves ~150-200ms vs confirmed.
         connection.getLatestBlockhash("processed"),
         buildPriorityIxs(connection, PROGRAM_ID),
       ]);
       const tx = new Transaction();
-      // ComputeBudget ixs MUST come before the program ix in the tx order.
       for (const pix of priorityIxs) tx.add(pix);
       tx.add(ix);
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = payer;
-      const signed = await signTransaction({
-        transaction: tx,
-        connection,
-        address: wallet.address,
-      });
+      const signed = await signTransaction({ transaction: tx, connection, address: wallet.address });
       const raw =
         signed instanceof VersionedTransaction
           ? signed.serialize()
           : (signed as Transaction).serialize();
-      // skipPreflight: server already built + validated the ix. Saves
-      // ~200-400ms of RPC simulate before forwarding. If the tx is
-      // somehow malformed we lose the slot fee (~5k lamports) — acceptable
-      // trade for the latency win.
       const sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
-      // G3: confirmByPolling can throw (timeout or "blockhash expired")
-      // even when the tx actually landed in the very last valid block. If
-      // we just propagate the error, the caller treats this as failure
-      // and the local store reverts to "playing" while on-chain is in a
-      // post-tx state — every subsequent reveal then errors GameNotPlaying.
-      // Do one last-ditch status check before bubbling the error.
-      try {
-        await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
-      } catch (confirmErr) {
+      // Confirmation runs AFTER we've returned the sig — caller updates
+      // UI immediately. Accept "processed" in the recovery check too
+      // (was confirmed/finalized only) so a tx in-the-leader-but-not-yet-
+      // voted state is treated as success.
+      const confirmation = (async () => {
         try {
-          const { value } = await connection.getSignatureStatuses([sig]);
-          const s = value[0];
-          if (
-            s &&
-            !s.err &&
-            (s.confirmationStatus === "confirmed" ||
-              s.confirmationStatus === "finalized")
-          ) {
-            // Tx confirmed despite confirm-loop bailing. Treat as success.
-            return sig;
+          await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
+          return sig;
+        } catch (confirmErr) {
+          try {
+            const { value } = await connection.getSignatureStatuses([sig]);
+            const s = value[0];
+            if (
+              s &&
+              !s.err &&
+              (s.confirmationStatus === "processed" ||
+                s.confirmationStatus === "confirmed" ||
+                s.confirmationStatus === "finalized")
+            ) {
+              return sig;
+            }
+          } catch {
+            /* fall through */
           }
-        } catch {
-          /* fall through to the original error */
+          throw confirmErr;
         }
-        throw confirmErr;
-      }
-      return sig;
+      })();
+      return { sig, confirmation };
     },
     [wallet, connection, signTransaction],
+  );
+
+  // Backwards-compatible "await confirm before returning" wrapper for the
+  // few callers that genuinely need the post-confirm guarantee (e.g. close
+  // ix in cashOut chain). The optimistic signAndBroadcast above is the
+  // default for anything user-initiated where UI responsiveness matters.
+  const signAndSend = useCallback(
+    async (ix: TransactionInstruction): Promise<string> => {
+      const { confirmation } = await signAndBroadcast(ix);
+      return confirmation;
+    },
+    [signAndBroadcast],
   );
 
   // Cleanup a stuck on-chain GameSession PDA from a previous interrupted
@@ -253,14 +267,33 @@ export function useGameActions(): ActionsResult {
 
     store.setGameToken(commit.gameToken);
     try {
-      const sig = await signAndSend(deserializeIx(commit.instruction));
+      // Optimistic flow: as soon as the RPC ACKs the tx (~200ms), flip
+      // the local UI to "playing" with the sig. This is the fix for the
+      // recurring "I clicked ENGAGE, nothing happened on screen, but a
+      // game started in the background" report — the OLD code awaited
+      // confirmByPolling (1.5-3s) before updating UI, and on confirm
+      // timeout it reverted to idle while the tx landed anyway.
+      const { sig, confirmation } = await signAndBroadcast(deserializeIx(commit.instruction));
       store.beginGame(commit.commitment, sig);
+      // Background confirm. If it fails after we've optimistically
+      // entered "playing", the next /api/session probe will reveal
+      // truth (on-chain game exists or not) and the banner will show.
+      // We deliberately do NOT setStatus("idle") here — that would
+      // recreate the original race the optimistic path is solving.
+      void confirmation.catch((err) => {
+        const msg = err instanceof Error ? err.message : "Confirmation timed out";
+        // eslint-disable-next-line no-console
+        console.warn("[startGame] confirmation problem:", msg);
+        toast(`Confirmation slow — your game may take an extra moment to load`, "amber");
+      });
     } catch (err) {
+      // sendRawTransaction or sign actually threw (user rejected, RPC
+      // rejected the tx outright, etc.) — no sig was produced, safe to
+      // revert.
       store.setStatus("idle");
       store.setError(decodeProgramError(err instanceof Error ? err.message : "Sign failed"));
-      // Game token still useful for cleanup
     }
-  }, [authenticated, walletAddress, store, signAndSend, cleanupStuck, login]);
+  }, [authenticated, walletAddress, store, signAndBroadcast, cleanupStuck, login, toast]);
 
   const revealTile = useCallback(
     async (idx: number) => {

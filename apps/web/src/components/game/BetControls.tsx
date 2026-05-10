@@ -201,12 +201,37 @@ export function BetControls({ stuckInfo }: Props = {}) {
       toast(msg, "amber");
       return;
     }
-    // Drop redundant clicks: synchronous lock check before any React
-    // re-render. Catches double-taps in the same event-loop tick.
-    if (lockStartedAtRef.current != null) return;
-    if (isStarting || isPlaying || isPendingClose) return;
-    if (state.bet > walletBalance || state.bet > maxBet) return;
-    if (wouldExceedLiquidity) return;
+    // Loud guards (used to silently early-return — clicks looked dead).
+    // Each path now toasts so the user sees WHY nothing fired.
+    if (lockStartedAtRef.current != null) {
+      // Double-tap caught by the sync ref; no toast since the visual
+      // LOCKED state is already showing.
+      return;
+    }
+    if (isStarting) {
+      toast("Already starting a round — wait for it to confirm.", "amber");
+      return;
+    }
+    if (isPlaying) {
+      toast("Game already in progress — reveal a tile or cash out.", "amber");
+      return;
+    }
+    if (isPendingClose) {
+      toast("Finalizing previous round — try again in a second.", "amber");
+      return;
+    }
+    if (state.bet > walletBalance) {
+      toast(`Bet exceeds wallet balance (${walletBalance.toFixed(4)} SOL).`, "error");
+      return;
+    }
+    if (state.bet > maxBet) {
+      toast(`Bet exceeds vault max bet (${maxBet.toFixed(4)} SOL).`, "error");
+      return;
+    }
+    if (wouldExceedLiquidity) {
+      toast("Bet would exceed vault capacity — lower the amount or pick fewer mines.", "error");
+      return;
+    }
     // Begin the dynamic lock. The ticker effect will start counting up
     // and the disabled state above the button will repaint.
     lockStartedAtRef.current = Date.now();
