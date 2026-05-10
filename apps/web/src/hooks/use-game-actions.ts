@@ -14,7 +14,7 @@ import {
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { calcMultiplier } from "@playkaboom/shared";
-import { deserializeIx, type SerializedIx } from "@playkaboom/sdk";
+import { deriveGamePda, deserializeIx, type SerializedIx } from "@playkaboom/sdk";
 import { apiCleanup, apiCommit, apiReveal, apiSettle, ApiClientError } from "@/lib/api";
 import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
@@ -510,10 +510,37 @@ export function useGameActions(): ActionsResult {
           await apiSettle({ player, gameToken: settleToken, phase: "settle" });
           const c = await apiCleanup({ player });
           if (c.active && (c.action === "close_game" || c.action === "close_unsettled_game")) {
-            await signAndSend(deserializeIx(c.instruction));
+            // Fire-and-forget — don't strictly await confirmation here
+            // because confirmByPolling can throw "expired" while the tx
+            // actually landed. We instead poll on-chain below for the
+            // PDA's actual deletion, which is the source of truth.
+            void signAndSend(deserializeIx(c.instruction)).catch(() => {});
+          }
+          // Hold pendingClose=true until the on-chain GameSession PDA is
+          // verifiably gone. Without this poll, pendingClose flipped
+          // false the moment the close-ix's confirmation Promise
+          // resolved (or rejected on "expired"), and the recovery banner
+          // would re-render briefly showing CLOSE GAME for the
+          // post-cashout PDA that was about to disappear. With the poll,
+          // pendingClose stays true through the entire RPC-propagation
+          // window and the banner never flickers.
+          const [gamePda] = deriveGamePda(PROGRAM_ID, new PublicKey(player));
+          const pollDeadline = Date.now() + 30_000;
+          while (Date.now() < pollDeadline) {
+            try {
+              const info = await connection.getAccountInfo(gamePda, "confirmed");
+              if (info === null) {
+                // eslint-disable-next-line no-console
+                console.log("[cashOut/bg] on-chain GameSession verified gone");
+                return;
+              }
+            } catch {
+              /* network blip — try again */
+            }
+            await new Promise((r) => setTimeout(r, 1_000));
           }
           // eslint-disable-next-line no-console
-          console.log("[cashOut/bg] settle + close complete");
+          console.warn("[cashOut/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
         } catch (bgErr) {
           // eslint-disable-next-line no-console
           console.warn("[cashOut/bg] non-fatal:", bgErr);
