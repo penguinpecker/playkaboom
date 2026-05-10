@@ -63,15 +63,18 @@ export function awaitSigConfirmedWs(
   return new Promise((resolve, reject) => {
     let subId: number | null = null;
     let settled = false;
+    // signatureSubscribe is one-shot: server fires the notification and
+    // auto-disposes the subscription. If our callback fires, the sub is
+    // already gone server-side — calling removeSignatureListener after
+    // would just trigger a noisy `console.warn` from web3.js
+    // ("Ignored unsubscribe request..."). Track whether the
+    // notification already arrived so we only unsubscribe on timeout.
+    let notificationFired = false;
     const finish = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (subId !== null) {
-        // signatureSubscribe is auto-disposed by the server after the
-        // terminal notification, so removeSignatureListener may surface
-        // a "subscription not found" inside web3.js. v1 swallows that
-        // internally, but we catch defensively.
+      if (subId !== null && !notificationFired) {
         void connection.removeSignatureListener(subId).catch(() => {});
       }
       fn();
@@ -80,6 +83,15 @@ export function awaitSigConfirmedWs(
       () => finish(() => reject(new Error(`ws sig timeout after ${timeoutMs}ms`))),
       timeoutMs,
     );
+
+    const onNotification: Parameters<typeof connection.onSignature>[1] = (result, context) => {
+      notificationFired = true;
+      if (result.err) {
+        finish(() => reject(new Error(`tx failed: ${JSON.stringify(result.err)}`)));
+      } else {
+        finish(() => resolve({ slot: context.slot, err: null }));
+      }
+    };
 
     // 1) Pre-flight status check. Crucial — without it, an already-
     // finalized sig leaves the WS subscription dangling for the full
@@ -99,17 +111,7 @@ export function awaitSigConfirmedWs(
         }
         // 2) Not yet at commitment — subscribe.
         try {
-          subId = connection.onSignature(
-            signature,
-            (result, context) => {
-              if (result.err) {
-                finish(() => reject(new Error(`tx failed: ${JSON.stringify(result.err)}`)));
-              } else {
-                finish(() => resolve({ slot: context.slot, err: null }));
-              }
-            },
-            commitment,
-          );
+          subId = connection.onSignature(signature, onNotification, commitment);
         } catch (err) {
           finish(() => reject(err instanceof Error ? err : new Error(String(err))));
         }
@@ -119,17 +121,7 @@ export function awaitSigConfirmedWs(
         // Status check failed (network blip) — still try the subscribe;
         // worst case it timeouts and polling races to a win.
         try {
-          subId = connection.onSignature(
-            signature,
-            (result, context) => {
-              if (result.err) {
-                finish(() => reject(new Error(`tx failed: ${JSON.stringify(result.err)}`)));
-              } else {
-                finish(() => resolve({ slot: context.slot, err: null }));
-              }
-            },
-            commitment,
-          );
+          subId = connection.onSignature(signature, onNotification, commitment);
         } catch {
           finish(() => reject(statusErr instanceof Error ? statusErr : new Error(String(statusErr))));
         }

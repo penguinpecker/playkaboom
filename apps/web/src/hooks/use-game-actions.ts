@@ -520,6 +520,17 @@ export function useGameActions(): ActionsResult {
         });
 
       void (async () => {
+        // Wait for cash_out to confirm on chain before calling /api/settle.
+        // settle_game requires game.status == Won|Lost, and cash_out is what
+        // flips status from Playing → Won. If we don't wait, settle_game
+        // lands first and errors GameNotPlaying.
+        // Swallow rejection (toast already fired in the parallel
+        // confirmation handler above) — try the bg work anyway.
+        await confirmation.catch(() => {});
+
+        // Server-side settle + close: best-effort. If anything here
+        // throws we still fall through to the PDA-close watch below
+        // (which is what the engage-button lock actually waits on).
         try {
           // eslint-disable-next-line no-console
           console.log("[cashOut/bg] running server settle + close");
@@ -528,15 +539,23 @@ export function useGameActions(): ActionsResult {
           if (c.active && (c.action === "close_game" || c.action === "close_unsettled_game")) {
             // Fire-and-forget — don't strictly await confirmation here
             // because confirmByPolling can throw "expired" while the tx
-            // actually landed. We instead poll on-chain below for the
-            // PDA's actual deletion, which is the source of truth.
+            // actually landed. We poll on-chain below for the PDA's
+            // actual deletion, which is the source of truth.
             void signAndSend(deserializeIx(c.instruction)).catch(() => {});
           }
-          // Wait for the on-chain GameSession PDA to be verifiably
-          // closed. Race accountSubscribe (WS push) against a 1s poll
-          // fallback. Polling is the source of truth (Solana doesn't
-          // contractually guarantee a final null notification on close);
-          // WS is the speed boost when it does fire.
+        } catch (bgErr) {
+          // eslint-disable-next-line no-console
+          console.warn("[cashOut/bg] settle/cleanup non-fatal:", bgErr);
+        }
+
+        // Engage button stays locked via pendingClose until the on-chain
+        // GameSession PDA is verifiably gone (or the 30s deadline
+        // elapses, in which case the recovery banner takes over). This
+        // block runs unconditionally — even if settle/cleanup above
+        // failed, we still wait for chain truth before unlocking, so
+        // the player can never start a new game while the previous PDA
+        // is still alive on chain.
+        try {
           const [gamePda] = deriveGamePda(PROGRAM_ID, new PublicKey(player));
           const wsClosed = awaitAccountChangeWs(
             connection,
@@ -557,17 +576,12 @@ export function useGameActions(): ActionsResult {
             }
             throw new Error("poll deadline reached");
           })();
-          try {
-            await Promise.any([wsClosed, pollClosed]);
-            // eslint-disable-next-line no-console
-            console.log("[cashOut/bg] on-chain GameSession verified gone");
-          } catch {
-            // eslint-disable-next-line no-console
-            console.warn("[cashOut/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
-          }
-        } catch (bgErr) {
+          await Promise.any([wsClosed, pollClosed]);
           // eslint-disable-next-line no-console
-          console.warn("[cashOut/bg] non-fatal:", bgErr);
+          console.log("[cashOut/bg] on-chain GameSession verified gone");
+        } catch {
+          // eslint-disable-next-line no-console
+          console.warn("[cashOut/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
         } finally {
           store.setPendingClose(false);
         }
