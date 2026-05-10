@@ -20,6 +20,7 @@ import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
 import { PROGRAM_ID } from "@/lib/cluster";
 import { decodeProgramError } from "@/lib/program-errors";
+import { buildJitoTipIx, sendViaSender } from "@/lib/sender";
 import { useGameStore, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";
 import { useToast } from "@/components/providers/toast";
@@ -59,6 +60,7 @@ export function useGameActions(): ActionsResult {
   const signAndSend = useCallback(
     async (ix: TransactionInstruction): Promise<string> => {
       if (!wallet) throw new Error("No wallet");
+      const payer = new PublicKey(wallet.address);
       // Run blockhash + priority-fee fetch in parallel so the priority-fee
       // RPC roundtrip is overlapped with blockhash (already on the critical
       // path). Net additional latency: ~0ms.
@@ -72,9 +74,12 @@ export function useGameActions(): ActionsResult {
       // ComputeBudget ixs MUST come before the program ix in the tx order.
       for (const pix of priorityIxs) tx.add(pix);
       tx.add(ix);
+      // Jito tip ix → eligible for Helius Sender's SWQoS-only routing.
+      // ~5000 lamports (~$0.001 at $200/SOL) per tx, paid by the player.
+      tx.add(buildJitoTipIx(payer));
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
-      tx.feePayer = new PublicKey(wallet.address);
+      tx.feePayer = payer;
       const signed = await signTransaction({
         transaction: tx,
         connection,
@@ -84,11 +89,18 @@ export function useGameActions(): ActionsResult {
         signed instanceof VersionedTransaction
           ? signed.serialize()
           : (signed as Transaction).serialize();
-      // skipPreflight: server already built + validated the ix, so the RPC
-      // simulate step before forwarding is redundant work that adds ~200-400ms
-      // on Alchemy free tier. If the tx is somehow malformed we lose the slot
-      // fee (~5k lamports) — acceptable trade for a 200-400ms UX win.
-      const sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
+      // Submit via Helius Sender → fans out to staked SWQoS connections from
+      // 7 regions, lands ~400-800ms vs 2-4s on naive sendRawTransaction.
+      // Falls back to RPC sendRawTransaction if Sender is unreachable
+      // (network blip, region issue) so a Helius outage doesn't break play.
+      let sig: string;
+      try {
+        sig = await sendViaSender(raw);
+      } catch (senderErr) {
+        // eslint-disable-next-line no-console
+        console.warn("[sender] failed, falling back to RPC", senderErr);
+        sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
+      }
       await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       return sig;
     },
