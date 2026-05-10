@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import {
@@ -28,14 +28,28 @@ export function VaultLpPanel() {
   const [busy, setBusy] = useState(false);
   const [currentSlot, setCurrentSlot] = useState<number | null>(null);
 
-  // Pull current slot once for cooldown countdown.
-  useMemo(() => {
+  // Poll the current slot every 5s so the withdraw cooldown countdown
+  // actually progresses while the user has the panel open. Previously
+  // this was a useMemo that ran once at mount — the countdown stayed
+  // frozen for hours and the COMPLETE WITHDRAWAL button never appeared
+  // (cooldownReady gate stuck at false), forcing users to hard-refresh
+  // to claim their LP withdrawal. The useMemo cleanup return was also
+  // dead — useMemo doesn't honor cleanup; useEffect does.
+  useEffect(() => {
     let cancelled = false;
-    connection.getSlot("confirmed").then((s) => {
-      if (!cancelled) setCurrentSlot(s);
-    }).catch(() => {});
+    const fetchSlot = () => {
+      connection
+        .getSlot("confirmed")
+        .then((s) => {
+          if (!cancelled) setCurrentSlot(s);
+        })
+        .catch(() => {});
+    };
+    fetchSlot();
+    const i = setInterval(fetchSlot, 5_000);
     return () => {
       cancelled = true;
+      clearInterval(i);
     };
   }, [connection]);
 

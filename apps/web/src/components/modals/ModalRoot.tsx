@@ -242,12 +242,28 @@ function WithdrawModal() {
   const [successAmount, setSuccessAmount] = useState<number | null>(null);
   const [successDest, setSuccessDest] = useState<string | null>(null);
 
+  // Poll wallet balance every 5s while the modal is open. Previously
+  // this fetched once on mount, so MAX + the "exceeds spendable" guard
+  // could be stale by hundreds of ms (post-deposit) to whole SOL (after
+  // a side tx in another tab). Stale-low blocked legitimate sends;
+  // stale-high made MAX overshoot and the on-chain tx fail confusingly.
   useEffect(() => {
     if (!fromAddr || !connection) return;
-    void connection
-      .getBalance(new PublicKey(fromAddr))
-      .then((b) => setBal(b / LAMPORTS_PER_SOL))
-      .catch(() => undefined);
+    let cancelled = false;
+    const refresh = () => {
+      void connection
+        .getBalance(new PublicKey(fromAddr))
+        .then((b) => {
+          if (!cancelled) setBal(b / LAMPORTS_PER_SOL);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const i = setInterval(refresh, 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(i);
+    };
   }, [fromAddr, connection]);
 
   const maxSendable =
@@ -257,7 +273,12 @@ function WithdrawModal() {
 
   const setMax = () => {
     if (bal === null) return;
-    setAmount(maxSendable.toFixed(6));
+    // FLOOR to 6dp instead of toFixed(6) (which rounds). Rounding can
+    // produce a value 1e-7 SOL above maxSendable, which then trips the
+    // "Amount exceeds spendable balance" guard at submit time and the
+    // user can't actually MAX-send.
+    const floored = Math.floor(maxSendable * 1_000_000) / 1_000_000;
+    setAmount(floored.toFixed(6));
   };
 
   const submit = async () => {
