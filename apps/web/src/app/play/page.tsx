@@ -1,11 +1,12 @@
 "use client";
+import { useEffect, useState } from "react";
 import { Grid } from "@/components/game/Grid";
 import { BetControls } from "@/components/game/BetControls";
 import { GameRecoveryBanner } from "@/components/game/GameRecoveryBanner";
 import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 import { useGame } from "@/hooks/useGame";
 import { useGameResume } from "@/hooks/use-game-resume";
-import { useVaultBalance, useGameCounter } from "@/hooks/useContracts";
+import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
 import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 
 export default function PlayPage() {
@@ -13,7 +14,23 @@ export default function PlayPage() {
   const stuckInfo = useGameResume();
   const { state } = useGame();
   const { data: vaultBal } = useVaultBalance();
+  const { data: vaultHealth } = useVaultHealth();
   const { data: gameCount } = useGameCounter();
+
+  // Smooth the displayed Vault Health to avoid mid-round flicker. Live
+  // on-chain health bounces 99 → 50 → 75 because YOUR own bet's
+  // worst_case_payout reserves vault capacity, plus other players'
+  // games concurrently start/settle. We only repaint the stat when the
+  // on-chain value moves by ≥5 percentage points so meaningful events
+  // still show through but every-poll wobble doesn't.
+  const [displayedHealth, setDisplayedHealth] = useState<number | null>(null);
+  useEffect(() => {
+    if (vaultHealth == null) return;
+    setDisplayedHealth((prev) => {
+      if (prev == null) return vaultHealth;
+      return Math.abs(vaultHealth - prev) >= 5 ? vaultHealth : prev;
+    });
+  }, [vaultHealth]);
   return (
     <div className="px-2 sm:px-6 lg:px-8 pb-16 min-h-screen kinetic-grid">
       {/* Hero: compact single-line on mobile to avoid the "double header" feel
@@ -59,10 +76,10 @@ export default function PlayPage() {
           </div>
           <div className="bg-surface-container-high p-4 stealth-card border-l-2 border-tertiary">
             <div className="font-headline text-[10px] tracking-widest text-on-surface-variant uppercase mb-1">
-              Vault Balance
+              Vault Health
             </div>
             <div className="font-headline text-2xl font-bold text-tertiary">
-              {vaultBal ? Number((Number(vaultBal) / 1e9).toFixed(2)).toFixed(2) : "—"} SOL
+              {displayedHealth != null ? displayedHealth.toString() : "—"}%
             </div>
           </div>
         </div>
@@ -94,6 +111,14 @@ export default function PlayPage() {
                 </span>
                 <span className="font-headline text-[10px] text-secondary">
                   {gameCount ? gameCount.toString() : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-outline-variant/10">
+                <span className="font-headline text-[10px] text-on-surface-variant">
+                  Vault Health
+                </span>
+                <span className="font-headline text-[10px] text-emerald">
+                  {displayedHealth != null ? displayedHealth.toString() : "—"}%
                 </span>
               </div>
               <div className="flex justify-between items-center py-2">
