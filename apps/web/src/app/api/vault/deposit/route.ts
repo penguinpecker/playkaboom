@@ -3,8 +3,10 @@ import { PublicKey } from "@solana/web3.js";
 import { z } from "zod";
 import {
   buildLpDeposit,
+  decodeLpPosition,
   decodeVault,
   decodeVaultV2State,
+  deriveLpPositionPda,
   deriveV2StatePda,
   deriveVaultPda,
   serializeIx,
@@ -35,9 +37,11 @@ export async function POST(req: NextRequest) {
     const conn = getConnection();
     const [vaultPda] = deriveVaultPda(programId());
     const [v2Pda] = deriveV2StatePda(programId());
-    const [vaultInfo, v2Info] = await Promise.all([
+    const [lpPda] = deriveLpPositionPda(programId(), new PublicKey(body.player));
+    const [vaultInfo, v2Info, lpInfo] = await Promise.all([
       conn.getAccountInfo(vaultPda, "confirmed"),
       conn.getAccountInfo(v2Pda, "confirmed"),
+      conn.getAccountInfo(lpPda, "confirmed"),
     ]);
     if (!vaultInfo || !v2Info) {
       throw new ApiError(503, "Vault not initialised");
@@ -57,15 +61,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Pre-flight cap check so we fail fast before the user signs.
+    // V4 fix: pre-flight cap check matches the ON-CHAIN check at
+    // programs/kaboom/src/lib.rs `lp_deposit` — total position (existing
+    // units + pending units, valued at current unit_value, plus the new
+    // deposit) must be <= per-user cap. The previous version compared
+    // the cap to JUST the new deposit amount, which falsely passed any
+    // user already near the cap and the on-chain ix then reverted —
+    // user paid gas + got a confusing error after signing.
+    const currentUnits = (() => {
+      if (!lpInfo) return 0n;
+      try {
+        const lp = decodeLpPosition(lpInfo.data);
+        return lp.units + lp.pendingUnits;
+      } catch {
+        return 0n;
+      }
+    })();
+    const currentPositionLamports = unitsToLamports(
+      currentUnits,
+      vaultAssets,
+      v2.totalUnits,
+    );
     const health = healthBps(v2, vaultAssets);
     const cap = effectiveMaxUserPositionLamports(v2, vaultAssets, health);
-    // We approximate post-deposit position as deposit value at current unit_value.
-    // This will be checked exactly on-chain.
-    if (cap < body.amountLamports) {
+    const newPositionLamports = currentPositionLamports + body.amountLamports;
+    if (cap < newPositionLamports) {
+      const headroom = cap > currentPositionLamports ? cap - currentPositionLamports : 0n;
       throw new ApiError(
         400,
-        `Deposit exceeds per-user cap (${cap.toString()} lamports remaining at health ${health}/10000)`,
+        `Deposit would exceed per-user cap. You hold ${currentPositionLamports.toString()} lamports; cap is ${cap.toString()} at health ${health}/10000. Max deposit right now: ${headroom.toString()} lamports.`,
       );
     }
 

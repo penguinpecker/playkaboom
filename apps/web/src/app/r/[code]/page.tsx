@@ -38,10 +38,24 @@ export default function ReferralLandingPage() {
         }
         const { wallet } = (await res.json()) as { wallet: string };
         if (cancelled) return;
+        // V5: write the referrer to BOTH localStorage AND a fallback
+        // cookie. Safari Private Browsing, the Solana Seeker TWA
+        // wrapper, and a few other constrained-storage environments
+        // throw on localStorage.setItem — previously we silently
+        // dropped the referrer and the user's first bet ran without
+        // attribution. Cookie fallback is read by getPendingReferrer.
         try {
           localStorage.setItem(REFERRER_LOCAL_KEY, wallet);
         } catch {
-          /* private mode / disabled storage — referrer simply won't persist */
+          /* fall through to cookie */
+        }
+        try {
+          // 30-day TTL, scoped to root path. Lax SameSite so it
+          // survives the redirect navigation but doesn't leak on
+          // cross-site iframes.
+          document.cookie = `kb.ref.wallet=${encodeURIComponent(wallet)}; max-age=2592000; path=/; SameSite=Lax`;
+        } catch {
+          /* both writes failed — at this point we're out of options */
         }
         router.replace("/");
       } catch {
