@@ -182,6 +182,24 @@ export function useGameResume(): StuckGameInfo {
     return () => clearInterval(i);
   }, [probe, info.active, tick]);
 
+  // Re-probe immediately when the store transitions to a terminal state
+  // (won/lost) or when the post-cashout pendingClose flag clears. The
+  // 15s poll alone is too slow — the player can finish a game and see
+  // a stale "RESUME" banner for the entire 15s window otherwise. Probe
+  // ASAP after relevant store changes so the banner reflects truth.
+  const storeStatus = useGameStore((s) => s.status);
+  const pendingClose = useGameStore((s) => s.pendingClose);
+  useEffect(() => {
+    if (storeStatus === "won" || storeStatus === "lost") {
+      void probe();
+    }
+  }, [storeStatus, probe]);
+  useEffect(() => {
+    // Fires once when pendingClose flips false → server settle + on-chain
+    // close should both have completed.
+    if (!pendingClose) void probe();
+  }, [pendingClose, probe]);
+
   // Mobile browsers aggressively suspend background tabs and the 15s
   // setInterval can drift or stall for hours, leaving the live-game state
   // frozen. Trigger an immediate probe whenever the tab becomes visible
