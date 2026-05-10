@@ -212,8 +212,15 @@ export default function ReferralsPage() {
         </div>
       ) : (
         <>
-          {/* Referrer prompt — pending from URL */}
-          {pendingRef && stats?.referrer === null && (
+          {/* Referrer prompt — pending from URL.
+              `!stats?.referrer` covers BOTH (a) no PlayerStats PDA yet
+              (brand-new player who hasn't bet — usePlayerStats returns
+              null) AND (b) PDA exists with referrer field unset.
+              Previously this was `=== null` which is false when the
+              whole stats object is null, hiding the prompt for every
+              first-time player — i.e. exactly the audience that came
+              in via /r/CODE. */}
+          {pendingRef && !stats?.referrer && (
             <div className="bg-gradient-to-br from-primary/10 to-secondary-container/10 border border-primary/20 p-6 mb-6">
               <div className="flex items-center gap-3 mb-3">
                 <span
