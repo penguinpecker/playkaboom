@@ -288,20 +288,27 @@ export function useGameActions(): ActionsResult {
           pushHistory(makeResult(s, walletAddress, false, 0, data.signature));
           if (data.closeInstruction) {
             // Mark close in flight — BetControls disables Engage until
-            // confirm so back-to-back play can't fire a fresh commit
-            // against a still-open on-chain GameSession PDA (the 409
-            // race the user reported).
+            // confirm. Reveal-on-mine bundles [reveal, settle] in the
+            // same on-chain tx, so once apiReveal returns the prereq
+            // state for close_game (Lost+settled) is at least ack'd by
+            // the leader. Short 500ms grace lets the RPC node we'll
+            // query for close_game catch up; on the rare race-failure
+            // we retry once after another 800ms before giving up.
             store.setPendingClose(true);
-            // Best-effort close — async rent reclaim.
-            setTimeout(() => {
-              if (!data.closeInstruction) {
+            const closeIxBytes = data.closeInstruction;
+            void (async () => {
+              try {
+                await new Promise((r) => setTimeout(r, 500));
+                try {
+                  await signAndSend(deserializeIx(closeIxBytes));
+                } catch {
+                  await new Promise((r) => setTimeout(r, 800));
+                  await signAndSend(deserializeIx(closeIxBytes)).catch(() => {});
+                }
+              } finally {
                 store.setPendingClose(false);
-                return;
               }
-              signAndSend(deserializeIx(data.closeInstruction))
-                .catch(() => {})
-                .finally(() => store.setPendingClose(false));
-            }, 2000);
+            })();
           }
         } else {
           // Safe reveal: server returned the rotated session token; persist it.
@@ -357,30 +364,40 @@ export function useGameActions(): ActionsResult {
       }
       await signAndSend(deserializeIx(cashRes.instruction));
 
-      // Best-effort: server publishes proof.
-      apiSettle({ player: walletAddress, gameToken: s.gameToken, phase: "settle" }).catch(() => {});
-
       const payout = s.bet * s.multiplier;
       store.applyCashOut(payout);
       pushHistory(makeResult(s, walletAddress, true, payout, ""));
       store.setGameToken(null);
-      // Close game PDA in the background. After cash_out → settle the game
-      // is Won+settled, so server returns action "close_game" with the
-      // ready-to-send ix. Mark pendingClose so BetControls blocks Engage
-      // until the close confirms — prevents the 409 "Active game exists"
-      // race when the user clicks Play Again before the close lands.
+
+      // Mark close window open BEFORE the async chain so BetControls
+      // gates Engage from this exact moment, not after the WinModal
+      // dismiss/Play Again click.
       store.setPendingClose(true);
-      setTimeout(() => {
-        apiCleanup({ player: walletAddress })
-          .then((c) => {
-            if (!c.active) return; // already closed; nothing to do
-            if (c.action === "close_game" || c.action === "close_unsettled_game") {
-              return signAndSend(deserializeIx(c.instruction));
-            }
-          })
-          .catch(() => {})
-          .finally(() => store.setPendingClose(false));
-      }, 3000);
+
+      // Capture into local non-null vars before the IIFE so TS doesn't
+      // re-widen them when the closure runs after applyCashOut/setGameToken.
+      const settleToken = s.gameToken;
+      const player = walletAddress;
+
+      // Settle + close-game in a tight inline chain (no fixed setTimeout
+      // wait). Was: fire-and-forget settle + setTimeout(3000) +
+      // apiCleanup + close. Removing the 3s heuristic delay cuts the
+      // post-cashout busy window from 5-7s to ~2-3s. Settle is awaited
+      // (was parallel) so cleanup never sees a !settled state and
+      // doesn't accidentally pick the close_unsettled path.
+      void (async () => {
+        try {
+          await apiSettle({ player, gameToken: settleToken, phase: "settle" });
+          const c = await apiCleanup({ player });
+          if (c.active && (c.action === "close_game" || c.action === "close_unsettled_game")) {
+            await signAndSend(deserializeIx(c.instruction));
+          }
+        } catch {
+          /* swallow — server cron + banner cover any leftover state */
+        } finally {
+          store.setPendingClose(false);
+        }
+      })();
     } catch (err) {
       const friendly = decodeProgramError(
         err instanceof Error ? err.message : "Cash out failed",
