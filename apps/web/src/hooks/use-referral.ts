@@ -2,9 +2,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useConnection } from "@solana/wallet-adapter-react";
-import { PublicKey, Transaction } from "@solana/web3.js";
+import { PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
 import { usePrivy } from "@privy-io/react-auth";
-import { useSolanaWallets, useStandardSignTransaction } from "@privy-io/react-auth/solana";
+import { useSolanaWallets, useSignTransaction } from "@privy-io/react-auth/solana";
 import {
   buildClaimReferral,
   buildSetReferrer,
@@ -178,7 +178,13 @@ export function useReferralActions() {
   const { connection } = useConnection();
   const { authenticated, login, getAccessToken } = usePrivy();
   const { wallets } = useSolanaWallets();
-  const { signTransaction } = useStandardSignTransaction();
+  // Privy *embedded* wallets (the only kind we mint — see
+  // providers/web3.tsx `embeddedWallets.solana.createOnLogin = "all-users"`)
+  // must use useSignTransaction, which takes a Transaction object directly.
+  // useStandardSignTransaction is for external Wallet-Standard wallets and
+  // throws "n.serializeMessage is not a function" against the legacy txs
+  // Privy embeds use. Same pattern as use-vault-lp.ts and use-game-actions.ts.
+  const { signTransaction } = useSignTransaction();
   const wallet = wallets[0];
   const queryClient = useQueryClient();
 
@@ -197,18 +203,19 @@ export function useReferralActions() {
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);
-      const serialized = tx.serialize({ requireAllSignatures: false });
-      const { signedTransaction } = await signTransaction({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        transaction: serialized as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        wallet: wallet as any,
+      const signed = await signTransaction({
+        transaction: tx,
+        connection,
+        address: wallet.address,
       });
       const raw =
-        signedTransaction instanceof Uint8Array
-          ? signedTransaction
-          : Buffer.from(signedTransaction);
-      const sig = await connection.sendRawTransaction(raw, { skipPreflight: false });
+        signed instanceof VersionedTransaction
+          ? signed.serialize()
+          : (signed as Transaction).serialize();
+      const sig = await connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
       await connection.confirmTransaction(
         { signature: sig, blockhash, lastValidBlockHeight },
         "confirmed",
