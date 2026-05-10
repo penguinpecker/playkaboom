@@ -12,6 +12,9 @@ export interface AllTimeRow {
   total_payouts: number;
   biggest_win: number;
   biggest_multiplier_bps: number;
+  /** Lamports — largest single bet that resulted in a loss. 0 until the
+   *  20260510000001 migration lands. */
+  biggest_loss: number;
   best_streak: number;
   current_streak: number;
   last_played: string | null;
