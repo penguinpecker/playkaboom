@@ -8,6 +8,8 @@ import { useGame } from "@/hooks/useGame";
 import { useVaultCapacity } from "@/hooks/useContracts";
 import { usePythSolUsd, formatUsd, solToUsd } from "@/hooks/use-pyth";
 import { GAME_CONFIG } from "@/lib/chain";
+import { useToast } from "@/components/providers/toast";
+import type { StuckGameInfo } from "@/hooks/use-game-resume";
 
 // Hard lockout window after a click fires. The Privy popup + RPC simulate +
 // tx send round-trip can take a few seconds, and during that window React
@@ -18,12 +20,29 @@ import { GAME_CONFIG } from "@/lib/chain";
 // confirm latency we see on devnet.
 const ENGAGE_LOCKOUT_MS = 5_000;
 
-export function BetControls() {
+interface Props {
+  /** Live on-chain GameSession state from useGameResume (mounted once at
+   *  /play). When `active` we MUST disable Engage — start_game would
+   *  return 409 because the program rejects a second start with an
+   *  existing GameSession PDA, and the user gets the broken "nothing
+   *  happens" experience. The recovery banner above handles all three
+   *  recovery actions (resume / refund / force-close). */
+  stuckInfo?: StuckGameInfo;
+}
+
+const fmtSeconds = (s: number) => {
+  if (s <= 0) return "now";
+  if (s < 60) return `${s}s`;
+  return `${Math.ceil(s / 60)}m`;
+};
+
+export function BetControls({ stuckInfo }: Props = {}) {
   const { state, setBet, setMineCount, startGame, cashOut } = useGame();
   const { authenticated, login } = usePrivy();
   const { wallets } = useWallets();
   const publicKey = wallets[0]?.address ? { toBase58: () => wallets[0]!.address } : null;
   const { connection } = useConnection();
+  const { toast } = useToast();
   // useVaultCapacity is the SINGLE SOURCE OF TRUTH for "can the vault
   // pay if I win?" — it mirrors the on-chain check exactly (health-aware,
   // mine-count-aware, obligations-aware). Use it instead of the simpler
@@ -69,6 +88,23 @@ export function BetControls() {
             ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${maxBet.toFixed(3)} SOL.`
             : null;
   const engageLocked = lockoutRemaining > 0;
+
+  // Block Engage entirely when the wallet has an unresolved on-chain
+  // GameSession. Does NOT apply when the player is mid-round on THIS
+  // device (Engage button isn't rendered then anyway — CASH OUT takes
+  // its place). Recovery banner above handles the actual unblock UX.
+  const hasStuckGame = !inLiveRound && stuckInfo?.active === true;
+  // Sub-state for the button label so the user knows WHY it's disabled:
+  //   "resume"   = on-chain game with recoverable server session
+  //   "force"    = stuck, slot timer elapsed → close button is live above
+  //   "wait"     = stuck, slot timer NOT elapsed yet → countdown
+  const stuckSubstate: "resume" | "force" | "wait" | null = hasStuckGame
+    ? stuckInfo!.recoverable
+      ? "resume"
+      : stuckInfo!.refundable
+        ? "force"
+        : "wait"
+    : null;
 
   useEffect(() => {
     if (!publicKey || !connection) return;
@@ -129,6 +165,19 @@ export function BetControls() {
   const handleStart = () => {
     if (!authenticated) {
       login();
+      return;
+    }
+    // Block: the player has an unresolved on-chain GameSession. Don't even
+    // dispatch start_game — it would 409 from the server and the user gets
+    // the "nothing happens" UX. Surface the right action via toast.
+    if (hasStuckGame) {
+      const msg =
+        stuckSubstate === "resume"
+          ? "You have an in-flight game above — RESUME or REFUND it first."
+          : stuckSubstate === "force"
+            ? "Stuck on-chain game — click FORCE CLOSE above to unblock."
+            : `Stuck on-chain game above — closable in ${fmtSeconds(stuckInfo!.secondsUntilRefund)}.`;
+      toast(msg, "amber");
       return;
     }
     // Drop redundant clicks: ref check is synchronous so it catches the
@@ -282,6 +331,7 @@ export function BetControls() {
             disabled={
               isStarting ||
               engageLocked ||
+              hasStuckGame ||
               (authenticated && (wouldExceedLiquidity || vaultUnavailable))
             }
             className="w-full mt-8 py-5 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-black text-lg tracking-[0.2em] glow-primary hover:brightness-125 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed disabled:grayscale"
@@ -312,6 +362,17 @@ export function BetControls() {
                   account_balance_wallet
                 </span>
                 CONNECT WALLET
+              </>
+            ) : hasStuckGame ? (
+              <>
+                <span className="material-symbols-outlined" style={{ fontSize: 24 }}>
+                  lock
+                </span>
+                {stuckSubstate === "resume"
+                  ? "RESUME GAME ABOVE"
+                  : stuckSubstate === "force"
+                    ? "CLOSE STUCK GAME ABOVE"
+                    : `STUCK GAME · READY IN ${fmtSeconds(stuckInfo!.secondsUntilRefund)}`}
               </>
             ) : vaultUnavailable ? (
               <>
