@@ -287,10 +287,20 @@ export function useGameActions(): ActionsResult {
           store.applyMineReveal(idx, data.signature);
           pushHistory(makeResult(s, walletAddress, false, 0, data.signature));
           if (data.closeInstruction) {
+            // Mark close in flight — BetControls disables Engage until
+            // confirm so back-to-back play can't fire a fresh commit
+            // against a still-open on-chain GameSession PDA (the 409
+            // race the user reported).
+            store.setPendingClose(true);
             // Best-effort close — async rent reclaim.
             setTimeout(() => {
-              if (!data.closeInstruction) return;
-              signAndSend(deserializeIx(data.closeInstruction)).catch(() => {});
+              if (!data.closeInstruction) {
+                store.setPendingClose(false);
+                return;
+              }
+              signAndSend(deserializeIx(data.closeInstruction))
+                .catch(() => {})
+                .finally(() => store.setPendingClose(false));
             }, 2000);
           }
         } else {
@@ -356,17 +366,20 @@ export function useGameActions(): ActionsResult {
       store.setGameToken(null);
       // Close game PDA in the background. After cash_out → settle the game
       // is Won+settled, so server returns action "close_game" with the
-      // ready-to-send ix. Other actions (wait_*) are no-ops here — the
-      // banner handles those.
+      // ready-to-send ix. Mark pendingClose so BetControls blocks Engage
+      // until the close confirms — prevents the 409 "Active game exists"
+      // race when the user clicks Play Again before the close lands.
+      store.setPendingClose(true);
       setTimeout(() => {
         apiCleanup({ player: walletAddress })
           .then((c) => {
-            if (!c.active) return;
+            if (!c.active) return; // already closed; nothing to do
             if (c.action === "close_game" || c.action === "close_unsettled_game") {
               return signAndSend(deserializeIx(c.instruction));
             }
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => store.setPendingClose(false));
       }, 3000);
     } catch (err) {
       const friendly = decodeProgramError(

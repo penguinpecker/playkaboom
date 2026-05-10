@@ -39,6 +39,7 @@ export function useGame() {
       sessionGames: state.sessionGames,
       error: state.error,
       lastTxHash: state.lastTxHash,
+      pendingClose: state.pendingClose,
     },
     setBet: state.setBet,
     setMineCount: state.setMineCount,

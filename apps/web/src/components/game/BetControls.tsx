@@ -11,14 +11,11 @@ import { GAME_CONFIG } from "@/lib/chain";
 import { useToast } from "@/components/providers/toast";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
 
-// Hard lockout window after a click fires. The Privy popup + RPC simulate +
-// tx send round-trip can take a few seconds, and during that window React
-// hasn't repainted the disabled state yet. Without this, fast double-clicks
-// race past the `isStarting` guard and try to open a second start_game tx
-// against the same player PDA — which the program rejects, leaving the
-// player thinking the game is "stuck". 5s is well past the worst-case
-// confirm latency we see on devnet.
-const ENGAGE_LOCKOUT_MS = 5_000;
+// Safety ceiling on the lock — if the busy state genuinely hangs for
+// longer than this, force-release so the player can retry instead of
+// staring at an indefinite spinner. Normal confirms are sub-2s; this only
+// fires on a real RPC hang.
+const LOCK_SAFETY_CEILING_MS = 60_000;
 
 interface Props {
   /** Live on-chain GameSession state from useGameResume (mounted once at
@@ -51,14 +48,18 @@ export function BetControls({ stuckInfo }: Props = {}) {
   const capacity = useVaultCapacity(state.bet, state.mineCount);
   const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
-  // Synchronous lockout — flipped on click before any React re-render so a
-  // second click in the same event-loop tick is dropped.
-  const lockoutUntilRef = useRef(0);
-  const [lockoutRemaining, setLockoutRemaining] = useState(0);
+  // Dynamic busy timer (replaces the fixed 5s ENGAGE_LOCKOUT countdown).
+  // Captures wall-clock at the moment the busy state begins; ticks every
+  // 200ms while busy; clears the moment status/pendingClose resolves.
+  // Display is "LOCKED · Ns" with N = real elapsed seconds, NOT a fake
+  // countdown — lock holds for as long as the actual confirm takes.
+  const lockStartedAtRef = useRef<number | null>(null);
+  const [lockElapsedMs, setLockElapsedMs] = useState(0);
 
   const isPlaying = state.status === "playing";
   const isStarting = state.status === "starting";
   const isCashing = state.status === "cashing";
+  const isPendingClose = state.pendingClose;
   // Mid-round: bet panel is read-only and re-betting is impossible until
   // the round ends, so any vault-capacity warning is irrelevant noise that
   // makes the player think their in-flight game is at risk. Suppress all
@@ -87,7 +88,13 @@ export function BetControls({ stuckInfo }: Props = {}) {
           : capacity.reason === "exceeds_cap"
             ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${maxBet.toFixed(3)} SOL.`
             : null;
-  const engageLocked = lockoutRemaining > 0;
+  // The lock is "true" while ANY of: starting (commit→sign→confirm in
+  // flight), cashing (cashOut tx in flight), or pendingClose (background
+  // close-game ix from previous round still in flight). Engage stays
+  // disabled for the entire window and the timer ticks up showing real
+  // elapsed time.
+  const isLocked = isStarting || isCashing || isPendingClose;
+  const engageLocked = isLocked;
 
   // Block Engage entirely when the wallet has an unresolved on-chain
   // GameSession. Does NOT apply when the player is mid-round on THIS
@@ -138,29 +145,43 @@ export function BetControls({ stuckInfo }: Props = {}) {
     };
   }, [publicKey, connection]);
 
-  // Drive the visible countdown while the lockout is active. Cleared once
-  // it reaches 0 or the component unmounts.
+  // When the busy state begins, capture wall-clock and start ticking.
+  // When it ends (status leaves the busy set AND pendingClose is false),
+  // clear immediately. The ticker shows REAL elapsed seconds, not a
+  // fake countdown — so the user sees how long their tx is actually
+  // taking and the lock auto-clears the instant confirm lands.
   useEffect(() => {
-    if (!engageLocked) return;
-    const tick = () => {
-      const remaining = Math.max(0, lockoutUntilRef.current - Date.now());
-      setLockoutRemaining(remaining);
-    };
-    const i = setInterval(tick, 100);
-    return () => clearInterval(i);
-  }, [engageLocked]);
-
-  // Release the lockout the moment the store transitions out of "starting".
-  // status → "playing" means success (the CASH OUT button takes over anyway,
-  // but we clear so the next round starts fresh).
-  // status → "idle" means the tx was rejected/failed — let the player retry
-  // without staring at a 5s countdown for no reason.
-  useEffect(() => {
-    if (state.status === "playing" || state.status === "idle") {
-      lockoutUntilRef.current = 0;
-      setLockoutRemaining(0);
+    if (isLocked) {
+      if (lockStartedAtRef.current == null) {
+        lockStartedAtRef.current = Date.now();
+        setLockElapsedMs(0);
+      }
+    } else {
+      lockStartedAtRef.current = null;
+      setLockElapsedMs(0);
     }
-  }, [state.status]);
+  }, [isLocked]);
+
+  useEffect(() => {
+    if (!isLocked) return;
+    const tick = () => {
+      if (lockStartedAtRef.current == null) return;
+      const elapsed = Date.now() - lockStartedAtRef.current;
+      setLockElapsedMs(elapsed);
+      // Safety: if we've been busy past the ceiling, something is wrong
+      // (RPC hang, stuck status). Force-release so the user can retry
+      // instead of staring at "LOCKED · 60s" forever. The store status
+      // change won't auto-fire here, but releasing the visual lock lets
+      // them click Engage again and the server's 409 path will catch
+      // any genuine still-active state.
+      if (elapsed >= LOCK_SAFETY_CEILING_MS) {
+        lockStartedAtRef.current = null;
+        setLockElapsedMs(0);
+      }
+    };
+    const i = setInterval(tick, 200);
+    return () => clearInterval(i);
+  }, [isLocked]);
 
   const handleStart = () => {
     if (!authenticated) {
@@ -180,14 +201,16 @@ export function BetControls({ stuckInfo }: Props = {}) {
       toast(msg, "amber");
       return;
     }
-    // Drop redundant clicks: ref check is synchronous so it catches the
-    // double-tap before the disabled prop or store status can update.
-    if (Date.now() < lockoutUntilRef.current) return;
-    if (isStarting || isPlaying) return;
+    // Drop redundant clicks: synchronous lock check before any React
+    // re-render. Catches double-taps in the same event-loop tick.
+    if (lockStartedAtRef.current != null) return;
+    if (isStarting || isPlaying || isPendingClose) return;
     if (state.bet > walletBalance || state.bet > maxBet) return;
     if (wouldExceedLiquidity) return;
-    lockoutUntilRef.current = Date.now() + ENGAGE_LOCKOUT_MS;
-    setLockoutRemaining(ENGAGE_LOCKOUT_MS);
+    // Begin the dynamic lock. The ticker effect will start counting up
+    // and the disabled state above the button will repaint.
+    lockStartedAtRef.current = Date.now();
+    setLockElapsedMs(0);
     void startGame();
   };
 
@@ -354,7 +377,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
                 >
                   progress_activity
                 </span>
-                LOCKED · {Math.ceil(lockoutRemaining / 1000)}s
+                LOCKED · {Math.max(1, Math.ceil(lockElapsedMs / 1000))}s
               </>
             ) : !authenticated ? (
               <>

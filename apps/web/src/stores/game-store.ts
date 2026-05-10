@@ -60,12 +60,19 @@ interface GameState {
   error: string | null;
   lastTxHash: string | null;
   gameToken: string | null;
+  /** True while a player-signed close ix from the previous round is still
+   *  in flight (cashOut path setTimeout(3000) → close_game; mine reveal
+   *  setTimeout(2000) → close_game). On-chain GameSession PDA still
+   *  exists during this window — server returns 409 to a fresh commit.
+   *  BetControls reads this and gates Engage. Cleared on close confirm. */
+  pendingClose: boolean;
   setBet: (bet: number) => void;
   setMineCount: (count: number) => void;
   setError: (err: string | null) => void;
   setStatus: (s: GameStatus) => void;
   setPendingTile: (idx: number | null) => void;
   setGameToken: (t: string | null) => void;
+  setPendingClose: (b: boolean) => void;
   hydrateResume: (snapshot: ResumeSnapshot) => void;
   beginGame: (commitment: string, txHash: string) => void;
   applySafeReveal: (idx: number, multiplier: number, txHash: string) => void;
@@ -93,6 +100,7 @@ const initial: Pick<
   | "error"
   | "lastTxHash"
   | "gameToken"
+  | "pendingClose"
 > = {
   status: "idle",
   bet: 0.001,
@@ -109,6 +117,7 @@ const initial: Pick<
   error: null,
   lastTxHash: null,
   gameToken: null,
+  pendingClose: false,
 };
 
 export const useGameStore = create<GameState>((set) => ({
@@ -125,6 +134,7 @@ export const useGameStore = create<GameState>((set) => ({
     }
     set({ gameToken });
   },
+  setPendingClose: (pendingClose) => set({ pendingClose }),
   hydrateResume: (snapshot) => {
     // Translate the on-chain bitmasks into the Set<number> shapes the Tile
     // component reads. Without this hydration the player sees an apparently
