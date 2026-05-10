@@ -75,7 +75,7 @@ export default function PlayPage() {
         </div>
         <div className="col-span-12 lg:col-span-4 lg:order-1 space-y-4 lg:space-y-6">
           <GameRecoveryBanner info={stuckInfo} />
-          <BetControls />
+          <BetControls stuckInfo={stuckInfo} />
           <section className="bg-surface-container-low p-4 sm:p-6 stealth-card border border-outline-variant/10">
             <h2 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-4">
               On-Chain Stats

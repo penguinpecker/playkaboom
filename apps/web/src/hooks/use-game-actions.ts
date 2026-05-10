@@ -112,9 +112,8 @@ export function useGameActions(): ActionsResult {
   // current on-chain status (close_game / close_unsettled_game /
   // refund_expired) and tells us if the slot timer has elapsed yet.
   //
-  // For the not-yet-ready cases (Won/Lost & !settled before slot+600,
-  // Playing before slot+300) we set a precise countdown error and let the
-  // GameRecoveryBanner on /play handle the wait + retry flow.
+  // Always emits a toast on non-success so the user sees feedback even when
+  // they're not looking at the inline error block in Grid.
   const cleanupStuck = useCallback(async (): Promise<boolean> => {
     if (!walletAddress) return false;
     store.setStatus("cleaning");
@@ -134,12 +133,15 @@ export function useGameActions(): ActionsResult {
           await signAndSend(deserializeIx(ix));
           store.setGameToken(null);
           store.setStatus("idle");
+          store.setError(null);
           return true;
         } catch (err) {
-          store.setStatus("idle");
-          store.setError(
-            decodeProgramError(err instanceof Error ? err.message : "Cleanup tx failed"),
+          const friendly = decodeProgramError(
+            err instanceof Error ? err.message : "Cleanup tx failed",
           );
+          store.setStatus("idle");
+          store.setError(friendly);
+          toast(friendly, "error");
           return false;
         }
       };
@@ -151,18 +153,18 @@ export function useGameActions(): ActionsResult {
           return await trySend(data.instruction);
         case "wait_close_unsettled": {
           const secs = data.secondsUntilReady;
+          const msg = `Stuck game from a previous round. Force-close available in ~${secs}s. Scroll down for FORCE CLOSE button.`;
           store.setStatus("idle");
-          store.setError(
-            `Stuck game from a previous round. Force-close becomes available in ~${secs}s — use the FORCE CLOSE button below the bet controls.`,
-          );
+          store.setError(msg);
+          toast(msg, "amber");
           return false;
         }
         case "wait_refund": {
           const secs = data.secondsUntilReady;
+          const msg = `Active game in progress. Refund available in ~${secs}s. Scroll down for REFUND BET button.`;
           store.setStatus("idle");
-          store.setError(
-            `Active game in progress. Refund becomes available in ~${secs}s — use the REFUND BET button below the bet controls.`,
-          );
+          store.setError(msg);
+          toast(msg, "amber");
           return false;
         }
         case "unknown": {
@@ -173,11 +175,15 @@ export function useGameActions(): ActionsResult {
       }
       return false;
     } catch (err) {
+      const friendly = decodeProgramError(
+        err instanceof Error ? err.message : "Cleanup failed",
+      );
       store.setStatus("idle");
-      store.setError(decodeProgramError(err instanceof Error ? err.message : "Cleanup failed"));
+      store.setError(friendly);
+      toast(friendly, "error");
       return false;
     }
-  }, [walletAddress, store, signAndSend]);
+  }, [walletAddress, store, signAndSend, toast]);
 
   const startGame = useCallback(async () => {
     if (!authenticated) {
@@ -201,19 +207,32 @@ export function useGameActions(): ActionsResult {
     } catch (err) {
       const isCleanupNeeded =
         err instanceof ApiClientError && err.payload.needsCleanup === true;
-      if (isCleanupNeeded && (await cleanupStuck())) {
-        try {
-          commit = await tryCommit();
-        } catch (retryErr) {
+      if (isCleanupNeeded) {
+        const cleaned = await cleanupStuck();
+        if (cleaned) {
+          try {
+            commit = await tryCommit();
+          } catch (retryErr) {
+            const msg = decodeProgramError(
+              retryErr instanceof Error ? retryErr.message : "Failed to start",
+            );
+            store.setStatus("idle");
+            store.setError(msg);
+            toast(msg, "error");
+            return;
+          }
+        } else {
+          // cleanupStuck has already set its own precise error/toast
+          // (wait_close_unsettled / wait_refund / on-chain failure).
+          // Don't overwrite it with the generic 409 message.
           store.setStatus("idle");
-          store.setError(
-            decodeProgramError(retryErr instanceof Error ? retryErr.message : "Failed to start"),
-          );
           return;
         }
       } else {
+        const msg = decodeProgramError(err instanceof Error ? err.message : "Failed to start");
         store.setStatus("idle");
-        store.setError(decodeProgramError(err instanceof Error ? err.message : "Failed to start"));
+        store.setError(msg);
+        toast(msg, "error");
         return;
       }
     }
