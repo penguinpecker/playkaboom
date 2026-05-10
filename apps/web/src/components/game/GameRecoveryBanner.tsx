@@ -182,6 +182,10 @@ export function GameRecoveryBanner({ info }: Props) {
           ? "Bet refunded — wallet unblocked"
           : "Stuck game closed — wallet unblocked";
       toast(successMsg, "success");
+      // G10: clear local store gameToken so a leftover token in
+      // localStorage from this round can't sneak into a future round and
+      // cause reveal-with-stale-layout corruption.
+      setGameToken(null);
       // Refresh the probe so the banner hides and BetControls becomes available.
       info.refresh();
     } catch (err) {
@@ -190,7 +194,7 @@ export function GameRecoveryBanner({ info }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [busy, wallet, connection, signTransaction, buildRecoveryIx, info, toast]);
+  }, [busy, wallet, connection, signTransaction, buildRecoveryIx, info, toast, setGameToken]);
 
   if (!info.active) return null;
   // Player has resumed (or is mid-game on this device) — banner has done its job.

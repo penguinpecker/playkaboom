@@ -1,8 +1,16 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { useGameStore } from "@/stores/game-store";
+
+// Debounce window for auth-loss → EMPTY_INFO reset. Privy's token
+// rotation transiently flips `authenticated` to false for a few hundred
+// ms; without this debounce, info.active flips false, BetControls'
+// hasStuckGame flips false, and the Engage button enables for a
+// heartbeat — long enough for a fast double-click to fire commit
+// against an existing on-chain GameSession and hit the 409 loop.
+const AUTH_RESET_DEBOUNCE_MS = 2_000;
 
 export type OnChainGameStatus = "Playing" | "Won" | "Lost" | "Expired";
 
@@ -85,12 +93,22 @@ export function useGameResume(): StuckGameInfo {
   const [info, setInfo] = useState<Omit<StuckGameInfo, "refresh">>(EMPTY_INFO);
   // Bumping this triggers a re-probe via the useEffect below.
   const [tick, setTick] = useState(0);
+  // Track when we last had auth — used to debounce the EMPTY_INFO reset
+  // through Privy token rotations.
+  const lastAuthAtRef = useRef<number>(0);
 
   const probe = useCallback(async () => {
     if (!authenticated || !wallet?.address) {
+      // Don't blow away info during a brief auth blip (Privy token
+      // rotation, network reconnect). If we had auth within the last
+      // AUTH_RESET_DEBOUNCE_MS window, leave info alone — the next
+      // probe (15s later or via visibility wake) will re-confirm.
+      const sinceAuth = Date.now() - lastAuthAtRef.current;
+      if (lastAuthAtRef.current > 0 && sinceAuth < AUTH_RESET_DEBOUNCE_MS) return;
       setInfo(EMPTY_INFO);
       return;
     }
+    lastAuthAtRef.current = Date.now();
     try {
       const token = await getAccessToken();
       if (!token) return;

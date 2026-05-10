@@ -101,7 +101,32 @@ export function useGameActions(): ActionsResult {
         console.warn("[sender] failed, falling back to RPC", senderErr);
         sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
       }
-      await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
+      // G3: confirmByPolling can throw (timeout or "blockhash expired")
+      // even when the tx actually landed in the very last valid block. If
+      // we just propagate the error, the caller treats this as failure
+      // and the local store reverts to "playing" while on-chain is in a
+      // post-tx state — every subsequent reveal then errors GameNotPlaying.
+      // Do one last-ditch status check before bubbling the error.
+      try {
+        await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
+      } catch (confirmErr) {
+        try {
+          const { value } = await connection.getSignatureStatuses([sig]);
+          const s = value[0];
+          if (
+            s &&
+            !s.err &&
+            (s.confirmationStatus === "confirmed" ||
+              s.confirmationStatus === "finalized")
+          ) {
+            // Tx confirmed despite confirm-loop bailing. Treat as success.
+            return sig;
+          }
+        } catch {
+          /* fall through to the original error */
+        }
+        throw confirmErr;
+      }
       return sig;
     },
     [wallet, connection, signTransaction],
