@@ -11,6 +11,10 @@
 create index if not exists idx_games_player_outcome
   on public.games (player, outcome);
 
+-- Postgres CREATE OR REPLACE VIEW only allows APPENDING columns to an
+-- existing view (anything else is "cannot change name of view column").
+-- biggest_loss therefore goes at the end of the column list — the API
+-- consumer reads by name, not position, so order is irrelevant client-side.
 create or replace view public.leaderboard_alltime as
 select
   ps.player,
@@ -24,10 +28,10 @@ select
   ps.total_payouts,
   ps.biggest_win,
   ps.biggest_multiplier_bps,
-  coalesce(bl.biggest_loss, 0)::bigint as biggest_loss,
   ps.best_streak,
   ps.current_streak,
-  ps.last_played
+  ps.last_played,
+  coalesce(bl.biggest_loss, 0)::bigint as biggest_loss
 from public.player_stats ps
 left join (
   select player, max(bet) as biggest_loss
