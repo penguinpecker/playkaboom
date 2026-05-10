@@ -232,6 +232,14 @@ export const useGameStore = create<GameState>((set) => ({
       mineCount: state.mineCount,
       sessionPnl: state.sessionPnl,
       sessionGames: state.sessionGames,
+      // CRITICAL: preserve pendingClose through Play Again. Without this,
+      // resetGame() spreads `...initial` which sets pendingClose: false,
+      // BetControls' isLocked flips false, Engage re-enables, the user
+      // fires a fresh commit while the previous round's close_game tx is
+      // still in flight on chain, server returns 409. The whole point of
+      // the pendingClose gate is to outlive the local "won/lost → idle"
+      // transition until the on-chain account is actually gone.
+      pendingClose: state.pendingClose,
     })),
 }));
 
