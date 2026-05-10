@@ -572,7 +572,39 @@ export function useGameActions(): ActionsResult {
         try {
           // eslint-disable-next-line no-console
           console.log("[cashOut/bg] running server settle + close");
-          await apiSettle({ player, gameToken: settleToken, phase: "settle" });
+          const settleRes = await apiSettle({ player, gameToken: settleToken, phase: "settle" });
+
+          // CRITICAL: await on-chain confirmation of settle_game before
+          // calling /api/cleanup. /api/settle returns the sig as soon as
+          // RPC ACKs the send (sendHouseTx doesn't await confirmation).
+          // If we call /api/cleanup immediately, it reads game state at
+          // "confirmed" and sees Won+!settled (the just-sent settle_game
+          // hasn't propagated yet). Server then tries to re-settle, but
+          // the session row was deleted by /api/settle on its successful
+          // send — so /api/cleanup falls back to wait_close_unsettled
+          // and returns no actionable ix. The bg flow then sends nothing,
+          // the PDA stays alive, and the 30s deadline below fires. This
+          // is the "[cashOut/bg] PDA still present after 30s" stuck case.
+          if ("signature" in settleRes) {
+            await awaitSigConfirmedWs(connection, settleRes.signature, "confirmed", 12_000)
+              .catch(() => {
+                // Fall back to a short status poll — confirmByPolling
+                // would need a blockhash we don't have, so just spin
+                // getSignatureStatuses for up to 6s.
+                return (async () => {
+                  const deadline = Date.now() + 6_000;
+                  while (Date.now() < deadline) {
+                    try {
+                      const r = await connection.getSignatureStatuses([settleRes.signature]);
+                      const v = r.value[0];
+                      if (v && !v.err && (v.confirmationStatus === "confirmed" || v.confirmationStatus === "finalized")) return;
+                    } catch { /* network blip */ }
+                    await new Promise((r) => setTimeout(r, 500));
+                  }
+                })();
+              });
+          }
+
           const c = await apiCleanup({ player });
           if (c.active && (c.action === "close_game" || c.action === "close_unsettled_game")) {
             // Fire-and-forget — don't strictly await confirmation here
@@ -580,6 +612,9 @@ export function useGameActions(): ActionsResult {
             // actually landed. We poll on-chain below for the PDA's
             // actual deletion, which is the source of truth.
             void signAndSend(deserializeIx(c.instruction)).catch(() => {});
+          } else if (c.active) {
+            // eslint-disable-next-line no-console
+            console.warn("[cashOut/bg] cleanup returned non-actionable:", c.action);
           }
         } catch (bgErr) {
           // eslint-disable-next-line no-console
