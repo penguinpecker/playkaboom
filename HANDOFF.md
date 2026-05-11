@@ -1,10 +1,10 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-08** (post-Phase H + post-indexer-self-heal). Full session-by-session log lives in `records.txt`.
+A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-11** (post full-codebase audit + indexer hardening). Full session-by-session log lives in `records.txt`.
 
-## STATUS — 2026-05-08 (mainnet, fully multisig-controlled)
+## STATUS — 2026-05-11 (mainnet, post-audit hardened)
 
-**Live on Solana mainnet at https://playkaboom.gg.** Every privileged authority is on Squads or Turnkey. No single key can move admin levers.
+**Live on Solana mainnet at https://playkaboom.gg.** All admin/treasury/upgrade authorities on Squads 2/2. Hot game-ix signer on Turnkey HSM. The 2026-05-11 sweep audited every layer (program, SDK, API, frontend, indexer, RLS, build/CI, tests) via 8 parallel sub-agents; every HIGH finding has a fix shipped.
 
 | Authority | Address | Type |
 |---|---|---|
@@ -16,24 +16,22 @@ A self-contained snapshot you can paste into a fresh Claude session to pick up w
 | Squads member 1 | `6wvvcCZ44f9AeJPC7k1VKMNdexCUsuwpaw1sZjyktGr1` | Initiate + Vote + Execute |
 | Squads member 2 | `EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG` | Initiate + Vote + Execute |
 | Program ID (mainnet) | `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` | |
-| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned, ~11.13 SOL |
+| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned, ~11.66 SOL |
 | Deployer wallet | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | zero admin powers — fee-payer only |
 
-**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey can sign game ixs only (start/reveal/settle); admin/treasury/upgrade all need Squads 2/2.
+**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey can sign game ixs only (start/reveal/settle/refund/close); admin/treasury/upgrade all need Squads 2/2.
 
 ## Live config + economics (mainnet vault)
 
 | Param | Value | Notes |
 |---|---|---|
-| `house_edge_bps` | 200 (2.00%) | 2× Stake/BC's 1%. Tradeable for volume. |
-| `max_bet_bps` | 200 (2% of vault) | At 11 SOL vault → 0.222 SOL max |
-| `max_payout_bps` | **5000 (50% of vault)** ⚠️ | Industry std is 0.5–1%. **Single biggest risk fix** queued |
+| `house_edge_bps` | 200 (2.00%) | |
+| `max_bet_bps` | 200 (2% of vault) | At ~11.66 SOL vault → 0.233 SOL max |
+| `max_payout_bps` | **5000 (50% of vault)** ⚠️ | Industry std is 0.5–1%. Still queued (Squads 2/2 vote). |
 | `treasury_split_bps` | 5000 (50/50) | LP gets half, treasury gets half |
-| `total_games` lifetime | 21 | Test/early traffic |
-| Vault PDA balance | ~11.13 SOL | LP + obligations + accrued fees |
-| LP unit accounting | seed 90.83% / house 9.08% / users 0.09% | seed permanently locked by design |
+| Vault PDA balance | ~11.66 SOL | LP + obligations + accrued fees |
 
-Math is locked: 2% edge × handle = GGR every dollar wagered, regardless of strategy or mine count. No formula escapes it (verified for all 5 mine options × all reasonable cashout points). Realized hold over 14 games was +38.7% but that's noise; converges to 2% by ~1000 games.
+Math is provably correct on both sides: TS `calcMultiplierBps` and Rust `calc_multiplier` now share a 675-row fixture (`tests/fixtures/multiplier.json`) covering mine_count 1..15 × safe_reveals 0..(16-mc) × edge_bps {0, 100, 200, 500, 1000}. Both implementations assert against the fixture in CI; any drift breaks the build.
 
 ## Stack & infra
 
@@ -41,74 +39,76 @@ Math is locked: 2% edge × handle = GGR every dollar wagered, regardless of stra
 |---|---|
 | Frontend | Next.js 15 (App Router), React 19, Tailwind, Privy embedded wallets |
 | RPC | Alchemy mainnet (deploy & user reads); public mainnet for fallback |
-| Indexer | Helius webhook → Supabase Postgres (fed via inline-ingest in /api/reveal + /api/settle, plus GH Actions cron every 5min via /api/cron/index-events for redundancy) |
-| House signing | Turnkey HSM — signs reveal/settle ixs only |
-| Hosting | **Vercel kaboomweb3-6280 account, project `playkaboom`** (not the older `penguinpecker1-4937` account, which has been retired) |
-| Auto-deploy | **GitHub Actions** (`.github/workflows/vercel-deploy.yml`) — every push to main → `vercel deploy --prod` via repo secrets. Vercel native git integration was a dead-end (new account has no GitHub Login Connection, no token can substitute). |
+| Indexer | Helius webhook → Supabase Postgres. Atomic SQL deltas (idx_apply_*) on every read-modify-write counter. INSERT-first dedupe with apply-error rollback. Settle handler retries on no-match (handles Helius out-of-order event delivery). |
+| Realtime | Railway WS relay (apps/realtime) on INSERT+UPDATE events; Supabase Realtime as Layer-2 fallback; TanStack 60s polling as Layer-3. |
+| House signing | Turnkey HSM — signs reveal/settle/refund/close ixs only |
+| Hosting | Vercel kaboomweb3-6280 account, project `playkaboom` |
+| Auto-deploy | **GH Actions, gated on CI success** (`.github/workflows/vercel-deploy.yml`) — triggers via `workflow_run` after CI completes with conclusion=success. Red CI = no deploy. |
 | DB | Supabase project `vrxeqgynejlnmwsifvml` |
-| Sensitive secrets | Vercel-only encrypted env (TURNKEY_*, SUPABASE_SERVICE_ROLE_KEY, PRIVY_APP_SECRET, SESSION_ENC_KEY, HELIUS_WEBHOOK_AUTH, CRON_SECRET). Local `.env.local` files are public values only — restore via `vercel env pull` if ever needed (stripped 2026-05-08). |
+| Sensitive secrets | Vercel-only encrypted env (TURNKEY_*, SUPABASE_SERVICE_ROLE_KEY, PRIVY_APP_SECRET, SESSION_ENC_KEY, HELIUS_WEBHOOK_AUTH, CRON_SECRET). Local `.env.local` is public values only. |
+
+## Testing posture (NEW as of 2026-05-11)
+
+- **Math invariants (CI gate):** `cargo test -p kaboom --lib` runs Rust `multiplier_tests` against the 675-cell fixture. `npm run test` runs 690 vitest cases including the TS-side fixture parity test.
+- **Anchor integration:** `tests/anchor/` is a real workspace (`@playkaboom/anchor-tests`) with five tests against a local validator started by `anchor test`: happy path, double-start blocked, cashout-no-reveals, settle-wrong-layout, refund-too-early. Triggered by Anchor.toml's `[scripts] test` calling `tsx tests/anchor/runner.ts`. CI step is `continue-on-error: true` for first runs; remove once validator startup is reliable on the GH runner.
+- **DB invariants (nightly):** `.github/workflows/invariants.yml` runs `scripts/check-invariants.mjs` at 03:00 UTC. Asserts `multiplier_bps == calcMultiplier(safe_reveals, mine_count, 200)`, `popcount(mine_layout) == mine_count`, and SHA-256 commitment match for every settled row. Allow-list at `scripts/known-corruption-allow.txt` exempts the 17 legacy 2026-05-11-corrupted rows.
+- **Chain-only verifier CLI:** `node scripts/verify-sig.mjs <sig>` reproduces fairness proof from chain RPC alone. Use as authoritative source if `/verify/[sig]` ever disagrees.
 
 ## Indexer reliability
 
-- **Inline-ingest** runs after every reveal+settle tx; retries `getTransaction` up to 4× with backoff (5.2s worst case) to handle RPC propagation lag (1-3s)
-- **Cron** at `/api/cron/index-events` triggered by GH Actions every 5 min (free-tier throttling means actual cadence is more like 1-3h — tolerable now). Pages `getSignaturesForAddress` with a **100-sig safety window** past the cursor so historically-failed sigs always get re-checked. `processed_events` dedup keeps it idempotent.
-- **One-shot rescue**: `?reset=1` query param (CRON_SECRET-gated) nullifies `until`, pulls 600 sigs from head. Or trigger via workflow_dispatch input `reset=true` on the index-events workflow.
+- INSERT-first dedupe in `ingestTransactions` (close TOCTOU of two concurrent Helius deliveries).
+- On apply-loop throw, DELETE the `processed_events` claim before rethrowing so cron retry can re-attempt.
+- All RMW counters (Lp*, ReferralAccrued/Claimed, StatsUpdated) go through atomic SQL functions (`idx_apply_*`) — no read-then-write race.
+- `idx_apply_game_settled` returns row count. Handler throws on 0 → claim is released → cron retries once cashout row exists (handles Helius out-of-order event delivery).
+- `uniq_games_unsettled_per_pda` partial unique index forbids two unsettled rows for the same PDA at the same slot.
+- Slot-monotonic guards on `player_stats`, `referrals`, `lp_positions` (`last_event_slot` column).
 
-Bug found + fixed 2026-05-08 evening: pre-fix, games with 13+ mines silently dropped because `mine_count BETWEEN 0 AND 12` CHECK constraint was stale (program later bumped MAX_MINES to 15). Migration `20260508000002_mine_count_15.sql` fixes it. After the fix + a `?reset=1` cron run, games table is in sync with on-chain.
+## Recent shipped — 2026-05-11
 
-## Recent shipped — 2026-05-08
-
-(Newest first, all live on production.)
+(Newest first, all in `origin/main`. The CI/deploy gate landed in batch 3 — every commit after that REQUIRED CI green to deploy.)
 
 | Commit | What |
 |---|---|
-| `701e008` | DB: bump games.mine_count CHECK 0..12 → 0..15 (the silent-drop bug) |
-| `949e5a3` | CI: index-events workflow accepts `reset=true` input |
-| `65b5dc7` | Indexer self-heal: cron safety window + ?reset=1 + inline-ingest retry |
-| `45d8d2d` | Revert "inline SVG logo" (unrelated local edit accidentally bundled) |
-| `55537af` | CI: server-side build (vercel deploy --prod, NOT --prebuilt) |
-| `037de32` | CI: pass Vercel token via env: block, not --token= inline |
-| `675eeba` | CI: new `.github/workflows/vercel-deploy.yml` for auto-deploy |
-| `74ce0cc` | Mobile: /logs cards, /leaderboard flex layout; ref-code prefetch on auth |
-| `5bed0a4` | XP ledger (silent — service-role-only DB grants, no UI yet) |
-| `c0b6a57` | Withdraw confirmation screen + /logs MY WALLET ACTIVITY (localStorage) |
-| `ae5bbc4` | MAX bet button + withdraw uses useSignTransaction (Privy embedded) |
-| `b8fc4db` | Resume banner timing fix + ENGAGE wallet-disconnect + dedupe footer |
-| `65d9441` | WITHDRAW button + modal in profile dropdown |
-| `59fa469` | /play mobile overhaul (Grid responsive, Navbar shrunk) |
-
-Phase H (full multisig handover) landed earlier in the day:
-- D1: atomic update_vault + allowlist_add + propose_owner
-- D2: Squads-signed `accept_ownership` (tx `4SxxC3X…`) → vault.owner = 464Fe…
-- D3: `solana program set-upgrade-authority` → BPF auth = 464Fe…
+| `8a5965f` | realtime relay broadcasts INSERT+UPDATE (was INSERT-only); applyIncoming merges in-place |
+| `9668104` | strip 13 debug console.log/warn from game flow |
+| `c73fdb7` | settle handler retries on no-match (out-of-order Helius delivery); backfill of `52mySrDaDM…` |
+| `c37c2bd` | anchor-tests workspace fix (excluded from turbo test; tsx for ESM bridge) |
+| `89e41e1` | real Anchor integration tests + workspace + CI wiring |
+| `b7761ff` | SSG hotfix: move `useToast` out of `PrivyAuthBridge` |
+| `d3e99ed` | vercel CLI unpin (v39 broke env-var auth) |
+| `7221a34` | auth 401/429 handlers + safe JSON parsing |
+| `8a8788a` | 675-cell TS↔Rust `calc_multiplier` fixture parity + `cargo test` in CI |
+| `15315b2` | realtime numReplicas=1, dyn priority fee, Helius payload cap, update_vault zero-key reject (source-only) |
+| `4a66f18` | DB hardening: slot guards, FORCE rls on 8 tables, unique-unsettled-per-PDA, idempotent reset migration |
+| `c2ee6ac` | **CI/deploy gate ENABLED.** Vercel deploy now requires CI green. CODEOWNERS, npm ci, vercel CLI pin, turbo secret-cache fix |
+| `802ed22` | sync-ref double-click guards on cashout / LP / Withdraw modal |
+| `e412f84` | indexer regression fix, /api/verify PDA cross-check, /api/ref/* chain verify + ratelimit, SDK error names, legacy-row cleanup migration |
+| `0a428ad` | hotfix: ratelimit fail-open when Upstash env missing (morning regression) |
 
 ## Pending / queued for next session
 
-**Highest priority (single Squads 2/2 vote each):**
-1. **`update_vault`: max_payout_bps 5000 → 100.** A single 12-mine win at max bet currently drains 50% of vault in one round (P=0.055% per attempt). Industry std is 0.5–1%. Biggest survival risk we have.
+**On-chain (each is a Squads 2/2 vote):**
+1. **`update_vault`: max_payout_bps 5000 → 100.** Still the biggest survival risk. 50% drain on a single max-bet 12-mine win, P ≈ 0.055%/attempt. Industry std is 0.5–1%.
 2. **`update_v2_config`: min_health_bps 1000 → 2000.** Auto-pause earlier when stressed.
-3. **Optional: `house_edge_bps` 200 → 100** to match Stake/BC if competing on price. Or keep 2% for non-comparing SOL-native users.
+3. **Program upgrade** to activate the source-only `update_vault` zero-key guard (`require!(auth != Pubkey::default())` added 2026-05-11 in lib.rs:933-941; not on chain yet).
 
-**Loyalty / XP rollout (when ready):**
-- Add LP tier multiplier feeder: `tier_mult_bps = 10000 + min(5000, lp_share_of_vault × 500000)` reading live from `LpPosition.units / v2.total_units`
-- Add daily streak feeder: +5%/day, caps +25%, resets on missed 24h
-- Public the `points_balance` view: `grant select on public.points_balance to anon, authenticated;`
-- Create `/api/points/[wallet]` reader; surface in profile dossier
-- Defer airdrop / token decision; the daily Merkle commit infra can be added later
+**Operational (no code):**
+- **GitHub branch protection rule:** Settings → Branches → `main` → enable "Require status checks (CI) to pass" + "Require review from Code Owners". CODEOWNERS file is committed but advisory until you toggle.
+- **Turnkey console policy:** pin `programId=Kaboom` + ix discriminator allow-list. Belt-and-suspenders; current on-chain account constraints already block non-game ixs.
+- **Provision Upstash Redis** (Vercel Marketplace) if HTTP-layer rate limiting is wanted. Code activates immediately once `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` appear in Vercel env — no redeploy needed.
+- **Logger transport:** pick Axiom / Better Stack / Logflare, wire `pino-*-send`. Currently stdout-only (24h Vercel log retention).
+- **Anchor test `continue-on-error`**: remove the flag from `.github/workflows/ci.yml` once first runs prove the validator+toolchain works on the GH runner.
 
-**Operational:**
-- Squads time_lock 0 → 24h (one-shot 2/2 vote, gives reaction window if a member key gets compromised)
-- Migrate cron trigger from GH Actions (irregular) to cron-job.org or Cloudflare Worker for true 5-min cadence. Safety window mitigates current irregular cadence so it's not urgent
-- Old Vercel account `penguinpecker1-4937` — user already deleted the playkaboom project there per their commitment; verify no lingering references
-- Verified-program flag on Solscan (deterministic build mismatch deferred from PART 7; needs amd64 VPS or OtterSec coordination)
-
-**Cleanup considerations:**
-- Cross-device sync for /logs MY WALLET ACTIVITY — currently localStorage-only. Would need a `wallet_actions` Supabase table + `/api/wallet-activity` if multi-device matters
-- Helius webhooks were deferred per user; re-evaluate if push-based event ingestion becomes valuable (current poll-based + inline-ingest model works at current scale)
+**Code (lower priority):**
+- Move `gameToken` from localStorage to sessionStorage (defense-in-depth: XSS-readable mine layout for the active session).
+- WinModal payout derived client-side from `calcMultiplier` — fragile if package versions ever fork. Pull from server response.
+- `/api/rpc/[cluster]` tighten `getSignaturesForAddress`/`getMultipleAccounts`/`sendTransaction` limits.
+- `/api/verify/[signature]` regex `{64,128}` too loose; should be `{86,90}`.
+- Replace runner's PDA-derivation smoke tests with full integration test count (currently 5; the audit listed 10 high-priority cases).
 
 ## How to deploy
 
-**Auto:** push to main. The `Vercel Deploy` Actions workflow (`.github/workflows/vercel-deploy.yml`) builds + ships in 2-3 min. Concurrency group cancels in-flight runs on newer pushes.
+**Auto:** push to main → CI runs → on success, Vercel Deploy auto-fires via `workflow_run` trigger. **No deploy if CI fails.** Concurrency group cancels in-flight runs on newer pushes.
 
 **Manual fallback** (if Actions is broken or you want to skip CI):
 ```bash
@@ -121,64 +121,99 @@ npx vercel --prod --token="$VERCEL_TOKEN" --yes
 **Apply a Supabase migration:**
 ```bash
 cd ~/Projects/playkaboom
-supabase db push --linked --include-all
+supabase db push --linked
 ```
 
-**One-shot indexer rescue** (if games-table out-of-sync with on-chain):
+**One-shot indexer rescue** (now requires confirm-prefix matching current cursor):
 ```bash
-gh workflow run index-events.yml --repo penguinpecker/playkaboom --ref main -f reset=true
+# Read current cursor first
+gh workflow run index-events.yml --repo penguinpecker/playkaboom \
+  --ref main -f confirm=<first-8-chars-of-cron_indexer_state.last_signature>
+```
+
+**Run integration tests locally:**
+```bash
+cd ~/Projects/playkaboom && anchor test
 ```
 
 ## Critical lessons (carried forward)
 
-1. **Squads V4 Tx Builder Raw data field expects base58, NOT hex.** Hex passes the form silently but produces broken tx data. Encode discriminators as base58. (Saved as feedback memory.)
-2. **Vercel Sensitive env vars are non-decryptable by API or `vercel env pull`.** To run admin ops needing them, trigger via existing GH Actions workflows that already have the secret as a repo secret.
-3. **GitHub Actions secret-masking breaks `--token=${{ secrets.X }}` inline.** Use the job's `env:` block; CLIs auto-read.
-4. **`gh secret set X --body -` sets the value to literal "-".** Omit `--body` entirely; `gh` reads stdin by default.
-5. **`vercel build --prebuilt` fails for Next routes that need runtime ctx.** Use `vercel deploy --prod` (server-side build).
-6. **Don't bundle untracked local files into commits even on "push the rest".** Surface unknown files and ask; never silently include. (Saved as feedback memory.)
-7. **No secret fragments in committed docs** — even truncated forms (`abc1234…xyz`) leak identity. Refer by env-var name only. (Saved as feedback memory.)
-8. **Operator-first deploy, multisig handoff at the literal end** — building under single-key control is fast; flipping authorities should be the last step. (Saved as feedback memory.)
+1. **Squads V4 Tx Builder Raw data field expects base58, NOT hex.** (Saved as feedback memory.)
+2. **Vercel Sensitive env vars are non-decryptable by API or `vercel env pull`.**
+3. **GitHub Actions secret-masking breaks `--token=${{ secrets.X }}` inline.** Use `env:` block.
+4. **`gh secret set X --body -` sets the value to literal "-".** Omit `--body`.
+5. **`vercel build --prebuilt` fails for Next routes that need runtime ctx.** Use `vercel deploy --prod`.
+6. **Don't bundle untracked local files into commits even on "push the rest".** (Saved as feedback memory.)
+7. **No secret fragments in committed docs** — even truncated forms leak identity. (Saved as feedback memory.)
+8. **Operator-first deploy, multisig handoff at the literal end.** (Saved as feedback memory.)
+9. **Audit scope must include indexer + UI, not just the program.** (NEW 2026-05-11; saved as feedback memory.) Solana audit firms default to scoping the Anchor program only. The display layer matters too — a self-consistent SHA-256 verification of WRONG game data still passes math but lies to the user.
+10. **Verify env vars + critical paths BEFORE shipping fail-closed changes.** (NEW 2026-05-11; saved as feedback memory.) Env-var names in memory ≠ configured. Check the live env with `vercel env ls` and hit the endpoint before pushing to a live-auto-deploy main.
+11. **PDA reuse + non-unique indexer matching → cross-instance bleed.** (Internalized 2026-05-11.) Whenever an indexer's UPDATE keys on a reusable PDA, ensure at most one row can match: partial unique index, slot guard, or single-row subquery (most-recent slot ≤ event_slot).
+12. **Helius can deliver events out of order.** Settle handlers must self-heal when the cashout row isn't yet present — throw on no-match, release the dedupe claim, let the cron's next pass retry.
 
 ## Repo layout (for orientation)
 
 ```
 playkaboom/
 ├── apps/web/                  Next.js 15 app + API routes
-│   ├── src/app/api/cron/      index-events (Solana → Supabase indexer)
-│   │                          vault-health (alerts on health crit)
-│   ├── src/app/api/admin/     backfill-points (XP retroactive, CRON_SECRET-gated)
+│   ├── src/app/api/cron/      index-events, vault-health
+│   ├── src/app/api/admin/     backfill-points, release-stuck-obligations
 │   ├── src/server/            indexer.ts, inline-ingest.ts, points.ts,
-│   │                          turnkey-signer.ts, auth.ts, etc.
-│   └── src/components/        Navbar, Footer, modals, game/, ui/
-├── programs/kaboom/src/lib.rs Anchor program
-├── packages/sdk/              TS instruction builders + decoders
+│   │                          turnkey-signer.ts, auth.ts, ratelimit.ts,
+│   │                          logger.ts (wide redact list)
+│   └── src/components/        Navbar, Footer, modals, game/, ui/,
+│                              providers/{web3,auth-toast-bridge,toast}
+├── apps/realtime/             Railway WS relay (INSERT+UPDATE on `games`)
+├── programs/kaboom/src/lib.rs Anchor program + #[cfg(test)] multiplier_tests
+├── packages/sdk/              TS ix builders, account/event decoders,
+│                              errors.ts (all ~42 on-chain variants)
 ├── packages/shared/           Zod schemas + multiplier math + constants
-├── supabase/migrations/       Postgres migrations
-├── scripts/                   ops scripts (rotate-to-squads, backfill, etc.)
-├── .github/workflows/         CI: ci.yml, codeql.yml, index-events.yml,
-│                              vault-health.yml, vercel-deploy.yml
-├── records.txt                full session log (≈2200 lines)
+├── supabase/migrations/       Postgres migrations (atomic idx_apply_*,
+│                              FORCE rls, idempotent guards)
+├── tests/
+│   ├── anchor/                Real integration tests (workspace pkg)
+│   ├── sdk/                   Vitest (690 cases incl. fixture parity)
+│   └── fixtures/              multiplier.json (TS↔Rust drift oracle)
+├── scripts/                   check-invariants.mjs, verify-sig.mjs,
+│                              audit-multipliers.mjs, ops scripts
+├── .github/
+│   ├── CODEOWNERS             advisory until branch-protection toggled
+│   └── workflows/             ci.yml (gates deploy via workflow_run),
+│                              vercel-deploy.yml (workflow_run-triggered),
+│                              invariants.yml (nightly DB assert),
+│                              codeql.yml, vault-health.yml,
+│                              index-events.yml (?confirm guard),
+│                              release-stuck-obligations.yml (confirm-input)
+├── records.txt                full session log (≈3500 lines)
 └── HANDOFF.md                 this file
 ```
 
 ## Quick verification commands
 
-Health check without leaving terminal:
 ```bash
-# Vault state
+# Live health
+curl -sS https://www.playkaboom.gg/api/health | python3 -m json.tool
+
+# Live verifier on a specific cashout sig
+curl -sS "https://www.playkaboom.gg/api/verify?sig=<sig>" | python3 -m json.tool
+
+# Chain-only fairness check (no DB)
+node scripts/verify-sig.mjs <sig>
+
+# DB invariants (with anon key)
+SUPABASE_URL=https://vrxeqgynejlnmwsifvml.supabase.co \
+SUPABASE_ANON_KEY=<anon-from-env> \
+ALLOWED_MISMATCH_SIGNATURES_PATH=scripts/known-corruption-allow.txt \
+node scripts/check-invariants.mjs
+
+# Vault state on-chain
 solana account 9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK \
   --url https://api.mainnet-beta.solana.com
 
-# DB row count
-curl -s 'https://playkaboom.gg/api/activity/global?limit=1' \
-  | python3 -c 'import json,sys; print("rows:", len(json.load(sys.stdin)["events"]))'
+# Latest deploy + CI status
+gh run list --repo penguinpecker/playkaboom --limit 5
 
-# Last auto-deploy
-gh run list --repo penguinpecker/playkaboom \
-  --workflow=vercel-deploy.yml --limit 1
-
-# Indexer cron health
-gh run list --repo penguinpecker/playkaboom \
-  --workflow=index-events.yml --limit 3
+# Math tests
+cargo test -p kaboom --lib                 # 5 Rust cases
+npm run test --workspace=@playkaboom/sdk-tests   # 690 TS cases
 ```

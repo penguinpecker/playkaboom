@@ -3178,3 +3178,318 @@ CALLER UPDATES (use-game-actions.ts)
   API change: callers now pass `connection` (not `connection.rpcEndpoint`)
   and `PublicKey` (not base58 string). Type-aligned with Connection's
   built-in onSignature / onAccountChange signatures.
+
+
+================================================================================
+PART 3 — 2026-05-11 SESSION 2: full-codebase audit + indexer hardening +
+            CI gating + realtime UPDATE fix
+================================================================================
+
+ORIGIN: USER REPORTED 3.92x WIN ON 1-MINE GAME
+  User shared a screenshot of /verify/[sig] showing "VERIFIED" with
+  mine_count=1, multiplier=39200 bps (3.92×). Math is impossible —
+  max multiplier with 1 mine + 1 reveal is 16/15 × 0.98 = 10452 bps
+  (~1.05×). Reverse-engineering 39200 bps at edge=200 gives the only
+  matching combination: (safe_reveals=1, mine_count=12). The player
+  actually played a 12-mine game (one of MINE_OPTIONS=[1,3,5,12,15])
+  and won the fair 3.92× for one safe flip. The verifier was lying
+  about which mine_count they chose.
+
+  Root cause: indexer.ts:127-138 GameSettled handler did
+  `.update().eq("game", PDA).is("mine_layout", null)`. When the
+  GameSession PDA gets reused across rounds for the same player and
+  TWO unsettled rows are in flight simultaneously, the UPDATE matches
+  BOTH and writes the same (mine_layout, mine_count, commitment, salt)
+  bundle to both. The bundle is internally self-consistent so the
+  page's SHA-256 verify passes — but it's pointing at the wrong
+  instance. Chain is correct, only the display lies.
+
+  Vault math is sound: total wagered 1.3153 SOL, total paid 0.8712,
+  net house +0.4441 SOL (≈33%, sample variance over 158 wins; 2%
+  edge holds at scale). No payouts disputed.
+
+8 PARALLEL DEEP AUDITS (sub-agents, read-only)
+  After the immediate root cause was clear, the user asked for a
+  full-codebase audit: "every line of code, contracts, APIs, ABIs.
+  check every maths, every piece of data, every algo, every
+  concurrent request, every button". 8 sub-agents spawned in
+  parallel, scoped to distinct domains so no work overlapped.
+
+  Each agent had a strict read-only mandate (no git, no edits, no
+  npm/cargo). All returned tight findings reports in under ~700
+  words. Coverage:
+
+  Agent 1 — Anchor program (lib.rs, 2625 LOC, 28 ixs, 80+ require!s)
+    PASS on obligation accounting, calc_multiplier, referral math,
+    LP unit round-trip, house signer scope, every Accounts struct
+    constraint. One MED-LOW: update_vault accepts Pubkey::default()
+    for new_house_authority / new_treasury (Squads fat-finger bricks
+    the protocol). Fixed in lib.rs require!()s; needs Squads-approved
+    program upgrade to activate on-chain.
+
+  Agent 2 — API routes (29 routes)
+    HIGH: /api/ref/confirm accepted any plausible base58 sig without
+    chain-verifying it's a real set_referrer for the wallet (metric
+    pollution). /api/ref/signup + confirm had no rate limit. /api/
+    verify didn't check `game` PDA equality (bNjim2-class false
+    VERIFIED for same-player same-PDA reuse). LOW: RPC proxy permits
+    unbounded scraping; sendTransaction not pinned to kaboom program.
+
+  Agent 3 — Frontend buttons + state (game-store, modals, hooks)
+    MONEY-RISK: LP modals (Deposit/Withdraw) and the cashout button
+    used useState `busy` (async, lags one render) — fast double-
+    click broadcast two signed txs with different blockhashes; both
+    could land. DATA-LEAK: gameToken (encrypted) in localStorage —
+    XSS-readable mine layout for active session.
+
+  Agent 4 — SDK + shared schemas
+    HIGH: KABOOM_ERROR_NAMES listed only 20 of ~42 on-chain variants;
+    LP/V2/referral/ownership errors surfaced as hex codes. Cross-
+    checked every event decoder, instruction builder, PDA derivation,
+    constant against the on-chain enum — clean otherwise (including
+    today's earlier salt-before-commitment GameSettled fix).
+
+  Agent 5 — Supabase RLS + migrations + functions
+    HIGH (replay-only): 20260509000004_reset_corrupted_mine_counts.sql
+    had NO WHERE guard — `supabase db reset` would wipe every settled
+    game + delete 4 days of processed_events. MED: slot guards
+    missing on idx_apply_referral_accrued tier write + idx_apply_
+    referral_claimed; 8 tables ENABLE but not FORCE row level
+    security; idx_apply_game_settled heuristic could orphan rows;
+    replica identity full on `games` ships fairness fields via
+    realtime even on pre-settle UPDATEs.
+
+  Agent 6 — realtime + cron tickler + Helius webhook
+    HIGH (self-introduced regression): the morning's INSERT-first
+    dedupe + mid-loop throw = silent permanent event drop. processed_
+    events claim held but events lost; cron retry blocked by dedupe.
+    MED: Helius webhook synchronous 10-15s on big batches; hard-
+    coded priority fee (settle drops in congestion); no numReplicas
+    cap on Railway tickler.
+
+  Agent 7 — build / CI / deploy pipeline
+    HIGH: vercel-deploy.yml and ci.yml ran IN PARALLEL on push — red
+    CI did NOT block the production deploy. This is exactly the gap
+    that let the morning's ratelimit fail-closed regression ship to
+    prod. HIGH: no CODEOWNERS, no required-reviewer config. MED:
+    turbo.json globalPassThroughEnv leaked runtime secrets into the
+    build cache key.
+
+  Agent 8 — tests coverage + quality
+    Anchor "integration test" runner was a STUB (every line of real
+    flow commented out). CI didn't even run `anchor test`. The 2625-
+    line program with 80+ require!s had ZERO executed on-chain tests.
+    npm test was 14 vitest cases + typecheck — that was the entire
+    prod gate.
+
+FIXES SHIPPED (commits in chronological order)
+
+  e412f84 — batch 1
+    • indexer.ts ingestTransactions: INSERT-first dedupe (replaces the
+      SELECT-then-INSERT TOCTOU)
+    • /api/verify cross-checks cashout's game PDA against settle's
+      game PDA (closes the bNjim2-class same-player same-PDA reuse
+      false-VERIFIED)
+    • /api/ref/confirm chain-verifies the sig contains a real
+      set_referrer ix for body.wallet before recording the funnel
+      attribution. /api/ref/confirm + /api/ref/signup rate-limited
+      per (ip, wallet).
+    • SDK errors.ts filled in to all ~42 on-chain error variants
+    • Migration 20260511000003: nulled settle_signature on the 17
+      legacy 2026-05-11-corrupted rows so they uniformly show
+      PENDING (per user's "don't backfill, leave for record" call)
+
+  802ed22 — batch 2: sync-ref double-click guards
+    • LP panel run() helper, ModalRoot WithdrawModal submit(), and
+      cashOut() in use-game-actions.ts now flip a useRef BEFORE any
+      await. setState's one-render lag no longer leaves the door
+      open for two SOL txs to land from one fast double-click.
+
+  c2ee6ac — batch 3: CI gate + supply-chain hardening
+    • vercel-deploy.yml now triggers via workflow_run on CI success
+      (NOT push). Red CI = no deploy.
+    • Added .github/CODEOWNERS; user must enable branch-protection
+      rule "Require review from Code Owners" to make it binding.
+    • vercel.json: npm install → npm ci (deterministic builds).
+    • vercel-deploy.yml: vercel@latest → vercel@39 PINNED (turned
+      out broken — see d3e99ed hotfix below).
+    • turbo.json globalPassThroughEnv trimmed to build-time-only
+      vars; runtime secrets removed.
+    • release-stuck-obligations.yml now requires typing
+      'I-CONFIRM-RELEASE' as workflow_dispatch input.
+    • Added root .npmrc with engine-strict + registry pin.
+
+  4a66f18 — batch 4: DB hardening
+    • Migration 20260509000004 retro-wrapped in IDEMPOTENCY GUARD
+      (DO/IF block detects the specific corruption pattern; no-op
+      if absent). `supabase db reset` is now safe.
+    • Migration 20260511000004 adds:
+        – Slot guard on idx_apply_referral_accrued tier write
+        – Slot guard on idx_apply_referral_claimed
+        – FORCE ROW LEVEL SECURITY on 8 tables that had ENABLE only
+        – touch_updated_at: SECURITY DEFINER → INVOKER
+        – uniq_games_unsettled_per_pda partial unique index (forbids
+          two unsettled rows for the same PDA at the SAME slot)
+        – Schema-existence assertion for points_ledger.uniq_points_per_
+          source (fails db-push if dropped)
+
+  15315b2 — batch 5: realtime + program zero-key guard
+    • apps/realtime/railway.json pinned numReplicas: 1
+    • realtime tickler now REFUSES TO START if CRON_TICK_URL is set
+      but CRON_TICK_AUTH is empty (was silent-401 loop)
+    • Helius webhook: 1MB payload cap (Content-Length + post-read);
+      runtime-validates each tx entry shape
+    • solana.ts priority fee: p75 of recent fees on the program,
+      clamped to [5_000, 50_000] µLamports, 15s cache. Was hard-coded
+      5_000 → settle txs dropped in congestion.
+    • programs/kaboom/src/lib.rs update_vault now require!s
+      new_house_authority != Pubkey::default() and
+      new_treasury != Pubkey::default(). SOURCE-ONLY; needs Squads-
+      approved program upgrade to activate on-chain.
+
+  8a8788a — batch 6: TS↔Rust calc_multiplier fixture parity
+    • tests/fixtures/multiplier.json: 675 rows covering mine_count
+      1..15 × safe_reveals 0..(16-mc) × edge_bps {0,100,200,500,1000}.
+      Trusted oracle for both implementations.
+    • tests/sdk/multiplier-fixture.test.ts: vitest reads the fixture
+      and asserts calcMultiplierBps matches every row. SDK tests
+      total 690 cases (15 existing + 675 fixture).
+    • programs/kaboom/src/lib.rs `#[cfg(test)] mod multiplier_tests`:
+      same fixture loaded via include_str!, asserts calc_multiplier
+      matches every row + extra invariants (zero-reveals returns BPS,
+      overfilled grid Err, worst_case_payout linear in bet,
+      mul_div_floor near u64::MAX).
+    • .github/workflows/ci.yml anchor job now also runs
+      `cargo test -p kaboom --lib`. Any future TS or Rust drift
+      breaks CI.
+
+  7221a34 — batch 7: auth 401/429 + safe JSON parsing in api.ts
+    • setAuthFailureHandler / setRateLimitHandler globals on the
+      api.ts side; React boot wires them via Privy login() + toast.
+    • safeJson() handles non-JSON server responses (Vercel HTML 500
+      page) — surfaces real HTTP status instead of "Unexpected
+      token <".
+
+  0a428ad — hotfix: ratelimit fail-open when Upstash env missing
+    Earlier in the day I had shipped "fail-closed if Upstash unset"
+    as a defense-in-depth measure. Turned out Upstash isn't
+    provisioned in Vercel prod env at all — every /api/commit hit
+    returned HTTP 429 and the game's Engage button went dead.
+    Reverted to fail-OPEN with a once-per-process warn. Real fail-
+    closed only activates if Upstash IS configured but the call
+    errors. Saved a feedback memory: env-var names in memory ≠
+    configured; verify with `vercel env ls` + hit the endpoint
+    before pushing fail-closed changes.
+
+  d3e99ed — hotfix: unpin vercel CLI
+    Batch 3's `vercel@39` pin errored "No existing credentials
+    found" despite VERCEL_TOKEN being set in env. The env-var auth
+    contract changed between v39 and v40+. Reverted to @latest with
+    a comment locking the rule: don't pin to a version that hasn't
+    been smoke-tested against the env-var auth path.
+
+  b7761ff — SSG hotfix: useToast out of PrivyAuthBridge
+    Batch 7 added useToast() inside PrivyAuthBridge. The provider
+    tree is <Web3Provider> → <GameProvider> → <ModalProvider> →
+    <ToastProvider>, so PrivyAuthBridge sits ABOVE ToastProvider.
+    Next.js SSG of /_not-found rendered PrivyAuthBridge without
+    ToastProvider in scope; useToast() threw, the static export
+    errored, every deploy after 7221a34 crashed at the build step.
+    Fix: split into PrivyAuthBridge (no toast — just Privy login()
+    for 401) + new AuthToastBridge component mounted INSIDE
+    ToastProvider in layout.tsx (handles 429 → toast).
+
+  89e41e1 / c37c2bd — anchor integration tests workspace
+    Stub runner.ts replaced with five real tests against a local
+    validator started by `anchor test`: smoke (PDAs), happy
+    (full win flow), double_start (init constraint), cashout_
+    no_reveals (NoTilesRevealed), settle_wrong_layout
+    (CommitmentMismatch), refund_too_early (GameNotExpired). Each
+    spins a fresh airdrop-funded player. Helpers are idempotent so
+    re-runs work without resetting the validator.
+
+    Iteration: 89e41e1 added the tests but broke CI because turbo
+    picked up the workspace's `test` script and ts-node failed to
+    require() the SDK (ESM/CJS clash). c37c2bd removed the `test`
+    script from the workspace (so turbo skips it), switched the
+    workspace to "type":"module", and pointed Anchor.toml at
+    `npx tsx tests/anchor/runner.ts` directly.
+
+  c73fdb7 — settle retry on no-match
+    Today's user-reported case: cashout 52mySrDaDM… won 3.92×, chain
+    paid 6,420,960 lamports correctly, but /verify/[sig] showed
+    PENDING for 30+ min. Root cause: Helius delivered the
+    GameSettled event BEFORE the GameWon event reached the DB. The
+    settle handler's UPDATE found no matching cashout row, no-op'd,
+    but processed_events had already claimed the signature. Cron's
+    safety-window retries skipped it as "already processed."
+    Permanent loss.
+
+    Fix:
+      • Migration 20260511000005: idx_apply_game_settled returns
+        INTEGER (rows updated). One-shot backfill of the 52mySrDaDM…
+        row with the chain-truth fairness fields (decoded from the
+        settle tx's GameSettled event, SHA-256 verified).
+      • indexer.ts GameSettled handler captures the row count. If 0,
+        throws — which trips the "DELETE processed_events claim on
+        apply error" path I added earlier today. Cron's next 60s
+        pass retries; by then the cashout row exists, UPDATE
+        succeeds, verifier shows VERIFIED.
+
+  9668104 — chore: strip 13 debug console.log/warn from game flow
+    use-game-actions.ts and lp-panel.tsx had [startGame] / [reveal]
+    / [cashOut] / [mine/bg] / [cashOut/bg] debug lines from testing
+    that real players were seeing in DevTools. Removed; toast +
+    recovery-banner flows still fire.
+
+  8a5965f — realtime: relay UPDATE events too
+    apps/realtime/src/index.ts subscribed to postgres_changes with
+    `event: "INSERT"` only. Lifecycle is:
+      1. Cashout fires GameWon → indexer INSERTs row with sentinel
+         fairness fields → relayed via Layer 1 in ~100ms
+      2. Settle fires GameSettled → indexer UPDATEs same row with
+         chain-truth fairness fields → NOT relayed
+    Fix: relay both INSERT and UPDATE. Frontend use-global-games.ts
+    applyIncoming() now also replaces rows in-place when the
+    signature already exists (was silently no-op'ing).
+
+OPERATIONAL CHRONOLOGY (push gate worked as designed)
+
+  Of 14 pushes today, 4 hit issues, and 0 bad builds reached prod:
+    – batch 5 CI failed (turbo.json `//passthrough-note` key) → no deploy
+    – batch 6 CI cancelled (superseded) → no deploy
+    – batch 7 deploy failed (vercel@39 env-var auth) → handled by hotfix
+    – batch 7 SSG failed (useToast SSG error) → handled by hotfix
+  Three successful deploys (b7761ff, c73fdb7, 9668104, 8a5965f)
+  cumulatively cover every change in the session.
+
+REMAINING PUNCH LIST (not blocking, per session ending)
+  • Turnkey console policy: pin programId + ix discriminator allow-
+    list (belt-and-suspenders; current chain constraints already
+    block non-game ixs)
+  • Anchor program upgrade via Squads to activate the source-only
+    update_vault zero-key guard
+  • GitHub branch protection rule: Settings → Branches → main →
+    "Require status checks to pass" + "Require review from Code
+    Owners" (CODEOWNERS already committed but advisory until toggle)
+  • Provision Upstash Redis (Vercel Marketplace) if HTTP-layer
+    rate limiting is wanted — code activates immediately once
+    UPSTASH_REDIS_REST_URL+TOKEN appear in env
+  • Logger transport: pick Axiom / Better Stack / Logflare, wire
+    pino-*-send. Currently stdout-only (24h Vercel log retention)
+  • Move localStorage gameToken to sessionStorage (XSS-readable
+    mine layout for active session) — defense-in-depth
+  • Backfill any future settle-race rows surfaced by the new self-
+    healing path
+
+FINAL STATE
+  Local HEAD: 8a5965f
+  origin/main: synced
+  Latest successful Vercel deploy: 8a5965f
+  Live /api/health: HTTP 200, vault balance ~11.66 SOL
+  Live /api/verify on 3.92× sig: PENDING (legacy row, settle_
+    signature nulled per "leave as-is" rule)
+  Live /api/verify on 52mySrDaDM…: VERIFIED ✓ (backfilled via
+    migration 20260511000005)
+  CI runs green; nightly invariants workflow (03:00 UTC) ready
+
