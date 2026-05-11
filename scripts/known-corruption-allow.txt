@@ -1,0 +1,31 @@
+# Known DB-corrupted game rows from the 2026-05-11 GameSettled indexer race.
+# These rows have valid on-chain math but the wrong (mine_count, mine_layout,
+# commitment, salt) bundle written by the indexer — a different game's
+# settle event overwrote them due to the PDA-reuse race documented at
+# apps/web/src/server/indexer.ts:111-125.
+#
+# Per the team call on 2026-05-11, these rows are NOT backfilled — kept
+# as-is for record. The nightly invariants check uses this allow-list so
+# they don't trigger a false positive page.
+#
+# Adding a signature here is a deliberate act: it whitelists a row from
+# the invariant check forever. Don't add unless you can prove the chain is
+# correct and only the DB cache disagrees.
+
+bNjim2GobihcW2fCBs1QiiuWKYoAZb8y3kGcDcBbpTjSJPTMpPoZe6fxdMwP6DGBozDYb4o7QF5avhfDq5CmBes
+5gwtS1hXjdcEgfviZnvJ7G2k9r5Z7pPQxxHmjvUjo2TTibiv6ZRkwYouoHweF7GEkReP34vryYndypE3EH2yDRAR
+49dRZgMt6A3wmWCWcuj5BeYMtVfWRT1wkh4P2XBwY6V1NJ4GZ1DVu7YYVffWRS9BG4UudK4gsZvLwoqtCpKeh1Xp
+YyZKftgtbTdZsAK7qKBc4kxeKJ4a5daYzYACxdwZJGNpZzfJx9EnwdqAFRbn5ZrWkpmMng9RaanKCB29paMPhBS
+2aKKXapixZqjUDCxcs6THT2h2oUsc5ZuVDnx64z9ezHuXJvz2gRJhPAfgLo7htinh7GbNdzZaNcwGXKZTxyz8gKQ
+3cpeaYxjR49v2hbHuqLTZnAyucQkgUGwTQZ2HTiEPWoWeoxMChXZar53t94nudvGe75fPf3HpfA3yrV3HdC35g9Z
+2GaVJjfe1s9XekPeQBDiZFLoY9nvcGrsdzU9jD9nh4x2TZeE9FvwD23k7f1m6miqGGxFPZffr8kzZTMZ5nPeCVEU
+eSPy81ZWPMxoC8QjsD9mXC6TQWmurDmvXnXzXDpCi6gM4W57daqfKdyMAZkkvshJ1Tqbcw7VvLdXrG7x8VbYiaC
+2yYceRe6swNRWVcepHyr5wFewk24p3V25cwnWYbDTf6n3HENBf7FVeXTkupzaNkj3uFwXgByjxvzVwbatn1tHim
+2zbxzoWtpj1fLxtYhYog6wduJTSGc2mM39Xaj7AWY7CPtS7wRvzbhS3uyw8gMuW4CEqwDCxxEHv2HQjjpTnWwRUj
+6527biE3XrG1Go8YyPWiQpTkX55kHdMPziqZytH5FpQiBrdjXQgh7wJJMDYt1KubfD1ntS4PaoLJq5QkEYFbiWii
+2wE1v9fmku8bmevqHKHG2LxXqujabWfCrMb1CnUS9eoTsF3B5V7KC3oekjFTKiR39EsM4FNpGtNK7s2LnjVfheCw
+3HEmSFWfkHp1ieHPGNmy8c6Mk6uA8MuUQR9ke1VpcFeZc17UpFTtiLAsmSnXckEzpXuGy1eQwtzkaQaEbtgFBhpz
+JfvMmDgWvBA5hHKrkoSyMABAUWmVE5XLN385o8TWpnYbAbFoK2DKDB6y29gYchgbjkLdEHPyLpL1ayXGE2mmrEt
+2epw7gKccPcBnk35hKcd4PAsKVWzPFaPwTKgHbeaiHAuhrjrhhwkaEtqC8fZepxWnWNzTPqwgqcPpFtmkNudgAhR
+4q4TY4y5NARb7L7gXKNiTFUxdYANQcJ5c7dNoLpRxN1pwJAhTtpgWAm3RerWF7f4P7zjq9JTFPP83a4FyegoGCH9
+4Doe8vfDPcpM4hr9FGTHMcRACAaS91Nvzt6yA1MGitAYnALE34tatqFHJZRLE5DRzFYzwPdQxR7yoz9oMnmhjgh

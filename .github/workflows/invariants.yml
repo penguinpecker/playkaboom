@@ -1,0 +1,33 @@
+name: Indexer invariants
+
+# Nightly check that every settled-game row in the live indexer satisfies the
+# on-chain math invariants. Fails the run if any row's multiplier_bps,
+# popcount(mine_layout), or sha256(layout || mc || salt) disagrees with the
+# chain. The 2026-05-11 audit would have caught the GameSettled race in 30
+# seconds if this had been running.
+#
+# Allow-list at scripts/known-corruption-allow.txt holds the 17 rows from the
+# 2026-05-11 incident, kept as-is per the team's "for record" call. Adding
+# more sigs to that file is a deliberate act — review carefully.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run invariant check
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          HOUSE_EDGE_BPS: "200"
+          ALLOWED_MISMATCH_SIGNATURES_PATH: scripts/known-corruption-allow.txt
+        run: node scripts/check-invariants.mjs
