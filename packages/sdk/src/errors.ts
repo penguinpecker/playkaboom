@@ -2,6 +2,10 @@
  * Anchor's error codes for the kaboom program. The numeric value is
  * `6000 + index` (Anchor's offset for user errors).
  */
+// MUST stay in the EXACT order of `pub enum KaboomError` in
+// programs/kaboom/src/lib.rs (line ~2272). Anchor assigns user error codes
+// as `6000 + index`; an out-of-order entry here decodes the wrong name.
+// Last cross-checked with on-chain enum on 2026-05-11.
 export const KABOOM_ERROR_NAMES = [
   "InvalidMineCount",
   "InvalidTileIndex",
@@ -23,6 +27,28 @@ export const KABOOM_ERROR_NAMES = [
   "GameAlreadySettled",
   "GameNotFinished",
   "NoTilesRevealed",
+  "SelfReferral",
+  "ReferrerAlreadySet",
+  "ReferralMismatch",
+  "NothingToClaim",
+  "DestinationNotAllowlisted",
+  "AllowlistFull",
+  "AlreadyAllowlisted",
+  "AddressNotInAllowlist",
+  "NoPendingOwner",
+  // ─── Phase 2: LP vault ──────────────────────────────────────────────────
+  "V2AlreadyInitialized",
+  "V2NotInitialized",
+  "DepositBelowMin",
+  "UserPositionCapExceeded",
+  "HouseShareFloorBreached",
+  "HealthFloorBreached",
+  "PendingWithdrawAlreadyExists",
+  "NoPendingWithdraw",
+  "CooldownNotElapsed",
+  "InsufficientUnits",
+  "InsufficientLiquidity",
+  "LpPositionNotEmpty",
 ] as const;
 
 export type KaboomErrorName = (typeof KABOOM_ERROR_NAMES)[number];

@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { z } from "zod";
 import { ApiError, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
+import { enforceRateLimit } from "@/server/ratelimit";
 import { recordSignup, REF_SESSION_COOKIE } from "@/server/referral-tracking";
 
 export const runtime = "nodejs";
@@ -35,6 +36,14 @@ export async function POST(req: NextRequest) {
   try {
     const body = await parseBody(req, Body);
     await verifyPlayerAuth(req, body.wallet);
+
+    // Rate-limit per-(ip, wallet). Without this, a single Privy user with
+    // many rotating wallets could inflate signup_count across referral codes.
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+    const rl = await enforceRateLimit(`ref:signup:${ip}:${body.wallet}`);
+    if (!rl.ok) {
+      return NextResponse.json({ error: "Rate limited" }, { status: 429 });
+    }
 
     const sessionId = req.cookies.get(REF_SESSION_COOKIE)?.value;
     if (!sessionId) {
