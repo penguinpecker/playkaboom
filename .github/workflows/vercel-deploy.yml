@@ -16,7 +16,12 @@ name: Vercel Deploy
 # side build to debug if something goes wrong).
 
 on:
-  push:
+  # 2026-05-11 hardening: gate prod deploy on CI green-light. Triggered by
+  # CI's `workflow_run` completion instead of push directly. If CI fails,
+  # this workflow does not fire. The push trigger was removed.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -32,6 +37,13 @@ jobs:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Two safeguards:
+    # 1) workflow_dispatch always allowed (manual re-deploys, hotfixes).
+    # 2) workflow_run only proceeds if the upstream CI run succeeded.
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
     # All three exported here so every CLI step picks them up automatically —
     # avoids passing --token= inline (GitHub Actions masks the substituted
     # value with ***, which Vercel CLI then rejects as a literal arg).
@@ -47,7 +59,9 @@ jobs:
           node-version: 20
 
       - name: Install Vercel CLI
-        run: npm install -g vercel@latest
+        # Pinned major to avoid a compromised "latest" tag shipping straight
+        # to prod. Bump deliberately when migrating to a new Vercel feature.
+        run: npm install -g vercel@39
 
       # Upload source + let Vercel build server-side. Mirrors the
       # working manual `vercel --prod` flow exactly. Tried prebuilt

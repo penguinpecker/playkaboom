@@ -6,18 +6,38 @@ name: Release stuck obligations
 # /api/admin/release-stuck-obligations/route.ts for full logic.
 #
 # Trigger:
-#   gh workflow run release-stuck-obligations.yml --repo penguinpecker/playkaboom --ref main
+#   gh workflow run release-stuck-obligations.yml --repo penguinpecker/playkaboom \
+#     --ref main -f confirm=I-CONFIRM-RELEASE
+#
+# 2026-05-11 hardening: the bare workflow_dispatch was a one-click "send a
+# real on-chain settle_game tx via the house signer" button — any repo
+# admin click triggered it. Now requires an explicit confirm input so the
+# operator has to type the exact phrase before the run can proceed.
 #
 # Requires repo secret CRON_SECRET (must match Vercel env CRON_SECRET).
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type 'I-CONFIRM-RELEASE' to authorize this run"
+        required: true
+        type: string
 
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
+      - name: Verify confirm input
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -eu
+          if [ "${CONFIRM:-}" != "I-CONFIRM-RELEASE" ]; then
+            echo "confirm must be exactly 'I-CONFIRM-RELEASE'" >&2
+            exit 1
+          fi
       - name: Hit release-stuck-obligations
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
