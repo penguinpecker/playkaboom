@@ -43,6 +43,10 @@ const rowToGame = (row: GamesRow): GlobalGame => ({
 /** Idempotent setQueryData that prepends a new game iff its signature
  *  isn't already in the cache. Used by both push paths so they can
  *  fight to be first without ever creating duplicates. */
+/** Insert OR update a game row in the cached list by signature. INSERTs go
+ *  to the head; UPDATEs replace the existing row in-place. Both layers
+ *  (Railway WS + Supabase Realtime) call this for every event so the
+ *  fairness fields populate as soon as the GameSettled UPDATE lands. */
 function applyIncoming(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -51,8 +55,17 @@ function applyIncoming(
 ) {
   queryClient.setQueryData<GlobalGame[]>(queryKey, (prev) => {
     const list = prev ?? [];
-    if (list.some((g) => g.signature === game.signature)) return list;
-    return [game, ...list].slice(0, limit);
+    const idx = list.findIndex((g) => g.signature === game.signature);
+    if (idx === -1) {
+      // New row — prepend, clamp to limit.
+      return [game, ...list].slice(0, limit);
+    }
+    // Existing row — replace in place so fairness fields (mine_layout,
+    // mine_count, commitment, salt, settle_signature) appear live as soon
+    // as the GameSettled UPDATE event arrives.
+    const next = list.slice();
+    next[idx] = game;
+    return next;
   });
 }
 
@@ -185,15 +198,7 @@ export function useGlobalGames(limit = 200) {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "games" },
         (payload) => {
-          const updated = rowToGame(payload.new as GamesRow);
-          queryClient.setQueryData<GlobalGame[]>(queryKey, (prev) => {
-            if (!prev) return prev;
-            const idx = prev.findIndex((g) => g.signature === updated.signature);
-            if (idx === -1) return prev;
-            const next = prev.slice();
-            next[idx] = updated;
-            return next;
-          });
+          applyIncoming(queryClient, queryKey, rowToGame(payload.new as GamesRow), limit);
         },
       )
       .subscribe();
