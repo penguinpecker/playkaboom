@@ -931,9 +931,18 @@ pub mod kaboom {
             vault.paused = p;
         }
         if let Some(auth) = new_house_authority {
+            // Reject zero-key. With the house authority set to the default
+            // pubkey, no signer matches its `key()` check and reveal_tile /
+            // settle_game become uncallable — bricking the protocol with
+            // no recovery besides full ownership rotation. Squads 2/2
+            // approves typed args; a fat-finger typo of a base58 string
+            // into the Tx Builder would otherwise pass.
+            require!(auth != Pubkey::default(), KaboomError::InvalidConfig);
             vault.house_authority = auth;
         }
         if let Some(t) = new_treasury {
+            // Same defense: zeroing the treasury bricks withdraw_to_treasury.
+            require!(t != Pubkey::default(), KaboomError::InvalidConfig);
             vault.treasury = t;
         }
 

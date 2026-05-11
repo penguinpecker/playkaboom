@@ -233,11 +233,23 @@ async function tickCron() {
 }
 
 if (CRON_TICK_URL) {
-  console.log(`[cron] tickling ${CRON_TICK_URL} every ${CRON_TICK_INTERVAL_MS / 1000}s`);
-  // Stagger first tick by 5s so the relay isn't pinging anything before
-  // upstream subscription has a chance to settle.
-  setTimeout(() => void tickCron(), 5_000);
-  cronInterval = setInterval(() => void tickCron(), CRON_TICK_INTERVAL_MS);
+  // 2026-05-11 hardening: refuse to start the tickler if CRON_TICK_URL is
+  // set but CRON_TICK_AUTH is not. Otherwise every tick would be a silent
+  // 401 against the upstream — looks "working" in Railway logs (200 OK
+  // never happens, just warnings) but actually blocks all indexing.
+  if (!CRON_TICK_AUTH) {
+    console.error(
+      "[cron] CRON_TICK_URL is set but CRON_TICK_AUTH is empty — refusing to start tickler. Indexing will fall behind until both are configured.",
+    );
+  } else {
+    console.log(
+      `[cron] tickling ${CRON_TICK_URL} every ${CRON_TICK_INTERVAL_MS / 1000}s`,
+    );
+    // Stagger first tick by 5s so the relay isn't pinging anything before
+    // upstream subscription has a chance to settle.
+    setTimeout(() => void tickCron(), 5_000);
+    cronInterval = setInterval(() => void tickCron(), CRON_TICK_INTERVAL_MS);
+  }
 }
 
 httpServer.listen(PORT, () => {
