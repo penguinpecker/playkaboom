@@ -6,7 +6,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "tests/sdk"
+    "tests/sdk",
+    "tests/anchor"
   ],
   "engines": {
     "node": ">=20.0.0"

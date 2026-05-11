@@ -1,0 +1,21 @@
+{
+  "name": "@playkaboom/anchor-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "ts-node --project tsconfig.json runner.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@playkaboom/sdk": "*",
+    "@playkaboom/shared": "*",
+    "@solana/web3.js": "^1.95.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  }
+}

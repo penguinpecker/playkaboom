@@ -22,7 +22,7 @@ cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "ts-node --project tests/anchor/tsconfig.json tests/anchor/runner.ts"
+test = "npm run --workspace=@playkaboom/anchor-tests test"
 
 [test]
 startup_wait = 5000
