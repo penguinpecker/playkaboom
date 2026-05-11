@@ -14,8 +14,16 @@ import {
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { calcMultiplier } from "@playkaboom/shared";
-import { deriveGamePda, deserializeIx, type SerializedIx } from "@playkaboom/sdk";
+import {
+  buildSetReferrer,
+  decodePlayerStats,
+  deriveGamePda,
+  derivePlayerStatsPda,
+  deserializeIx,
+  type SerializedIx,
+} from "@playkaboom/sdk";
 import { apiCleanup, apiCommit, apiReveal, apiSettle, ApiClientError } from "@/lib/api";
+import { getPendingReferrer, clearPendingReferrer } from "./use-referral";
 import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
 import { PROGRAM_ID } from "@/lib/cluster";
@@ -79,7 +87,9 @@ export function useGameActions(): ActionsResult {
   // lands but never gets a confirm signal still produces correct local
   // state (because we set "playing" the moment we have a sig).
   const signAndBroadcast = useCallback(
-    async (ix: TransactionInstruction): Promise<{ sig: string; confirmation: Promise<string> }> => {
+    async (
+      ixOrList: TransactionInstruction | TransactionInstruction[],
+    ): Promise<{ sig: string; confirmation: Promise<string> }> => {
       if (!wallet) throw new Error("No wallet");
       const payer = new PublicKey(wallet.address);
       const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
@@ -88,7 +98,8 @@ export function useGameActions(): ActionsResult {
       ]);
       const tx = new Transaction();
       for (const pix of priorityIxs) tx.add(pix);
-      tx.add(ix);
+      const ixList = Array.isArray(ixOrList) ? ixOrList : [ixOrList];
+      for (const ix of ixList) tx.add(ix);
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = payer;
@@ -299,6 +310,43 @@ export function useGameActions(): ActionsResult {
     }
 
     store.setGameToken(commit.gameToken);
+
+    // 2026-05-12: bundle set_referrer into the player's first start_game
+    // if they came in via a referral link and don't have a referrer set
+    // on-chain yet. One signature, both ixs execute atomically. Removes
+    // the manual "Confirm referrer" step on /referrals. If anything in
+    // the check fails (RPC blip, decode error), we just skip the bundle
+    // and proceed with start_game alone — the /referrals page button
+    // stays as a fallback.
+    const ixs: TransactionInstruction[] = [];
+    let bundledSetReferrer = false;
+    const pendingRef = getPendingReferrer();
+    if (pendingRef && pendingRef !== walletAddress) {
+      try {
+        const playerPk = new PublicKey(walletAddress);
+        const referrerPk = new PublicKey(pendingRef);
+        const [statsPda] = derivePlayerStatsPda(PROGRAM_ID, playerPk);
+        const info = await connection.getAccountInfo(statsPda, "confirmed");
+        const hasReferrer =
+          info && info.owner.equals(PROGRAM_ID)
+            ? decodePlayerStats(info.data as Buffer).referrer !== null
+            : false;
+        if (!hasReferrer) {
+          ixs.push(
+            buildSetReferrer({
+              ctx: { programId: PROGRAM_ID },
+              player: playerPk,
+              referrer: referrerPk,
+            }),
+          );
+          bundledSetReferrer = true;
+        }
+      } catch {
+        /* skip bundle on any error — start_game still ships */
+      }
+    }
+    ixs.push(deserializeIx(commit.instruction));
+
     try {
       // Optimistic flow: as soon as the RPC ACKs the tx (~200ms), flip
       // the local UI to "playing" with the sig. This is the fix for the
@@ -306,8 +354,32 @@ export function useGameActions(): ActionsResult {
       // game started in the background" report — the OLD code awaited
       // confirmByPolling (1.5-3s) before updating UI, and on confirm
       // timeout it reverted to idle while the tx landed anyway.
-      const { sig, confirmation } = await signAndBroadcast(deserializeIx(commit.instruction));
+      const { sig, confirmation } = await signAndBroadcast(ixs);
       store.beginGame(commit.commitment, sig);
+      // If we bundled set_referrer, clear the pending-referrer state
+      // immediately + fire the analytics endpoint best-effort. The
+      // on-chain ix is what counts; /api/ref/confirm just decorates
+      // the referral_visits row.
+      if (bundledSetReferrer) {
+        clearPendingReferrer();
+        void (async () => {
+          try {
+            const token = await getAccessToken();
+            if (!token) return;
+            await fetch("/api/ref/confirm", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ wallet: walletAddress, signature: sig }),
+              credentials: "include",
+            });
+          } catch {
+            /* analytics — silent */
+          }
+        })();
+      }
       // Background confirm. If it fails after we've optimistically
       // entered "playing", the next /api/session probe will reveal
       // truth (on-chain game exists or not) and the banner will show.
