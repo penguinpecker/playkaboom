@@ -159,6 +159,14 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       // picks the SINGLE most-recent unsettled row at slot <= settle slot.
       // Also records this settle tx's signature so the public verifier
       // page can chain-direct verify from a cashout sig URL.
+      //
+      // 2026-05-11 part 2: the RPC now returns the affected-row count.
+      // If 0, the cashout row hasn't been inserted yet (Helius delivered
+      // events out of order). Throwing here trips the outer try/catch
+      // which DELETEs the processed_events claim, so a future cron pass
+      // re-tries this settle once the cashout row exists. Without this,
+      // the settle was silently lost and the verifier showed PENDING
+      // forever even though the chain settled correctly.
       const game = ev.game.toBase58();
       const rpc = await db.rpc("idx_apply_game_settled", {
         p_game: game,
@@ -170,6 +178,16 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         p_event_slot: slot,
       });
       check("games", "GameSettled.rpc", rpc);
+      const updated = (rpc.data as number | null) ?? 0;
+      if (updated === 0) {
+        // The cashout row doesn't exist yet — likely Helius delivered the
+        // GameSettled event before the GameWon. Throw to release the
+        // processed_events claim; the next cron tick will re-process this
+        // signature, by which point the cashout row will be present.
+        throw new Error(
+          `[GameSettled] no matching unsettled cashout row found for game=${game} at slot<=${slot} — will retry`,
+        );
+      }
       if (ev.verified) {
         logger.info({ sig: tx.signature, game, player: ev.player.toBase58() }, "settle verified");
       }
