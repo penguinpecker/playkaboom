@@ -1,5 +1,5 @@
 "use client";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
 import {
@@ -51,6 +51,12 @@ export function useGameActions(): ActionsResult {
   const { signTransaction } = useSignTransaction();
   const { connection } = useConnection();
   const store = useGameStore();
+  // Sync-ref guards. The store status flips are async; without a sync
+  // mirror, two fast clicks (Grid's EXIT button + BetControls' cash-out
+  // button rendered simultaneously) can both read status="playing" and
+  // both fire apiSettle. Same pattern for revealTile.
+  const cashOutInflightRef = useRef(false);
+  const revealInflightRef = useRef(false);
   const pushHistory = useHistoryStore((s) => s.push);
   const { toast } = useToast();
 
@@ -448,6 +454,12 @@ export function useGameActions(): ActionsResult {
   );
 
   const cashOut = useCallback(async () => {
+    // Sync ref guard FIRST — before any await or state read. Two cash-out
+    // buttons render simultaneously (Grid EXIT + BetControls), both gated
+    // on `state.status === "cashing"`. Status flip is async; without this
+    // ref a pre-flip double-click submits two apiSettle calls.
+    if (cashOutInflightRef.current) return;
+    cashOutInflightRef.current = true;
     const s = useGameStore.getState();
     // Loud guards: previously these returned silently and the click looked
     // dead to the user. Now every blocked path either toasts or attempts
@@ -456,18 +468,21 @@ export function useGameActions(): ActionsResult {
       const msg = "Wallet not connected — reconnect and try again.";
       store.setError(msg);
       toast(msg, "error");
+      cashOutInflightRef.current = false;
       return;
     }
     if (s.status !== "playing") {
       const msg = `Cannot cash out from status "${s.status}" — refresh the page.`;
       store.setError(msg);
       toast(msg, "error");
+      cashOutInflightRef.current = false;
       return;
     }
     if (s.safeTiles.size === 0) {
       const msg = "No safe tiles revealed yet — reveal at least one before cashing out.";
       store.setError(msg);
       toast(msg, "error");
+      cashOutInflightRef.current = false;
       return;
     }
     // Recovery: gameToken missing locally → fetch from server's session
@@ -496,6 +511,7 @@ export function useGameActions(): ActionsResult {
         const msg = "Game session lost — use FORCE CLOSE in the recovery banner above to refund and start a new round.";
         store.setError(msg);
         toast(msg, "error");
+        cashOutInflightRef.current = false;
         return;
       }
     }
@@ -512,6 +528,7 @@ export function useGameActions(): ActionsResult {
         toast(msg, "error");
         // eslint-disable-next-line no-console
         console.warn("[cashOut] unexpected response shape:", cashRes);
+        cashOutInflightRef.current = false;
         return;
       }
       // eslint-disable-next-line no-console
@@ -537,6 +554,10 @@ export function useGameActions(): ActionsResult {
       pushHistory(makeResult(s, walletAddress, true, payout, sig));
       store.setGameToken(null);
       store.setPendingClose(true);
+      // Cash-out main flow is committed (sig broadcast, applyCashOut ran,
+      // status = "won"). The button is now hidden; release the sync guard
+      // so a future game's cash-out isn't blocked by a stale ref.
+      cashOutInflightRef.current = false;
 
       // Confirmation + downstream settle/close all run in background.
       // UI is already at "won" with the WinModal opening; if any of
@@ -673,6 +694,7 @@ export function useGameActions(): ActionsResult {
       store.setStatus("playing");
       store.setError(friendly);
       toast(friendly, "error");
+      cashOutInflightRef.current = false;
     }
   }, [walletAddress, store, signAndBroadcast, signAndSend, pushHistory, toast, getAccessToken]);
 
