@@ -18,9 +18,51 @@ export function setAuthTokenResolver(fn: TokenResolver): void {
   resolveToken = fn;
 }
 
+/** Called when an authed API call returns 401 (Privy token expired or
+ *  revoked). Wire to Privy `login()` in the React boot path so users get
+ *  a re-login prompt instead of cryptic toasts. Set via
+ *  `setAuthFailureHandler`. */
+type AuthFailureHandler = () => void;
+let onAuthFailure: AuthFailureHandler = () => {};
+export function setAuthFailureHandler(fn: AuthFailureHandler): void {
+  onAuthFailure = fn;
+}
+
+/** Called on 429 from any API path. Wire to a toast in the React boot
+ *  path so the user sees "rate limited, try again in a moment" instead
+ *  of a raw error. */
+type RateLimitHandler = (path: string) => void;
+let onRateLimit: RateLimitHandler = () => {};
+export function setRateLimitHandler(fn: RateLimitHandler): void {
+  onRateLimit = fn;
+}
+
 async function authHeaders(): Promise<Record<string, string>> {
   const token = await resolveToken().catch(() => null);
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** Body parser that gracefully handles non-JSON responses (Vercel's HTML
+ *  500 page, gateway timeouts, etc.) so the caller doesn't see
+ *  "Unexpected token <" and have to guess at the actual HTTP status. */
+async function safeJson(res: Response): Promise<Record<string, unknown>> {
+  try {
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    const text = await res.text().catch(() => "");
+    return {
+      error: text.slice(0, 200) || `HTTP ${res.status} (non-JSON response)`,
+      _raw: true,
+    };
+  }
+}
+
+/** Centralised reaction to status codes that have a global handler.
+ *  Fires the side-effect (auth re-prompt / ratelimit toast) but still
+ *  bubbles the ApiClientError so callers can also handle it locally. */
+function reactToStatus(status: number, path: string): void {
+  if (status === 401) onAuthFailure();
+  else if (status === 429) onRateLimit(path);
 }
 
 async function post<TIn extends object, TOut>(path: string, body: TIn): Promise<TOut> {
@@ -30,8 +72,11 @@ async function post<TIn extends object, TOut>(path: string, body: TIn): Promise<
     credentials: "include",
     body: JSON.stringify(body, (_, v) => (typeof v === "bigint" ? v.toString() : v)),
   });
-  const json = (await res.json()) as Record<string, unknown>;
-  if (!res.ok) throw new ApiClientError(res.status, json);
+  const json = await safeJson(res);
+  if (!res.ok) {
+    reactToStatus(res.status, path);
+    throw new ApiClientError(res.status, json);
+  }
   return json as TOut;
 }
 
@@ -128,8 +173,11 @@ export interface VaultStateResponse {
 }
 export async function apiVaultState(): Promise<VaultStateResponse> {
   const res = await fetch("/api/vault/state", { cache: "no-store" });
-  const json = (await res.json()) as Record<string, unknown>;
-  if (!res.ok) throw new ApiClientError(res.status, json);
+  const json = await safeJson(res);
+  if (!res.ok) {
+    reactToStatus(res.status, "/api/vault/state");
+    throw new ApiClientError(res.status, json);
+  }
   return json as unknown as VaultStateResponse;
 }
 
@@ -159,8 +207,11 @@ export interface VaultPositionResponse {
 }
 export async function apiVaultPosition(wallet: string): Promise<VaultPositionResponse> {
   const res = await fetch(`/api/vault/position/${wallet}`, { cache: "no-store" });
-  const json = (await res.json()) as Record<string, unknown>;
-  if (!res.ok) throw new ApiClientError(res.status, json);
+  const json = await safeJson(res);
+  if (!res.ok) {
+    reactToStatus(res.status, `/api/vault/position/${wallet}`);
+    throw new ApiClientError(res.status, json);
+  }
   return json as unknown as VaultPositionResponse;
 }
 
@@ -208,7 +259,10 @@ export async function apiActivity(wallet: string): Promise<{
   events: ActivityEvent[];
 }> {
   const res = await fetch(`/api/activity/${wallet}`, { cache: "no-store" });
-  const json = (await res.json()) as Record<string, unknown>;
-  if (!res.ok) throw new ApiClientError(res.status, json);
+  const json = await safeJson(res);
+  if (!res.ok) {
+    reactToStatus(res.status, `/api/activity/${wallet}`);
+    throw new ApiClientError(res.status, json);
+  }
   return json as unknown as { wallet: string; events: ActivityEvent[] };
 }
