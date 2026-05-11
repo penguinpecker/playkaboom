@@ -6,7 +6,7 @@ import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
 import { loadSession, deleteSession } from "@/server/session-store";
-import { sendHouseTx } from "@/server/solana";
+import { OnChainError, requireActiveGame, sendHouseTx } from "@/server/solana";
 import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
@@ -17,8 +17,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  let bodyPlayer: string | null = null;
   try {
     const body = await parseBody(req, SettleInput);
+    bodyPlayer = body.player;
 
     // Auth + ratelimit + session-load in parallel (see reveal/route.ts).
     const [, rl, session] = await Promise.all([
@@ -34,6 +36,17 @@ export async function POST(req: NextRequest) {
 
     const playerPk = new PublicKey(body.player);
     const ctx = { programId: programId() };
+
+    // On-chain truth gate — same rationale as /api/reveal. Without this,
+    // a stale gameToken + closed GameSession PDA produced an opaque 500
+    // from cash_out / settle_game simulation.
+    const onChainGame = await requireActiveGame(playerPk);
+    if (!onChainGame) {
+      await deleteSession(body.player);
+      throw new ApiError(409, "Game session no longer active — start a new round.", {
+        needsCleanup: true,
+      });
+    }
 
     if (body.phase === "settle") {
       const referrer = await fetchPlayerReferrer(playerPk);
@@ -61,6 +74,14 @@ export async function POST(req: NextRequest) {
     const ix = buildCashOut({ ctx, player: playerPk });
     return NextResponse.json({ phase: "cashout", instruction: serializeIx(ix) });
   } catch (err) {
+    if (err instanceof OnChainError && err.kind === "account_not_initialized") {
+      if (bodyPlayer) await deleteSession(bodyPlayer).catch(() => {});
+      return jsonError(
+        new ApiError(409, "Game session no longer active — start a new round.", {
+          needsCleanup: true,
+        }),
+      );
+    }
     return jsonError(err);
   }
 }

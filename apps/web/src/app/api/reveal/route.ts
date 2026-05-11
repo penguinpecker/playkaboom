@@ -12,7 +12,7 @@ import { verifyPlayerAuth } from "@/server/auth";
 import { checkTile, saltBuffer } from "@/server/game";
 import { encryptSession } from "@/server/session";
 import { loadSession, saveSession, deleteSession } from "@/server/session-store";
-import { sendHouseTx } from "@/server/solana";
+import { OnChainError, requireActiveGame, sendHouseTx } from "@/server/solana";
 import { housePubkey, programId } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
@@ -22,8 +22,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  let bodyPlayer: string | null = null;
   try {
     const body = await parseBody(req, RevealTileInput);
+    bodyPlayer = body.player;
 
     // Auth + ratelimit + session-load are independent → run in parallel.
     // Saves 100-300ms on the hot reveal path. Note: rate limit consumes
@@ -45,6 +47,22 @@ export async function POST(req: NextRequest) {
     const playerPk = new PublicKey(body.player);
     const housePk = housePubkey();
     const ctx = { programId: programId() };
+
+    // On-chain truth wins over the encrypted session token. Two desync paths
+    // produced opaque 500s before this gate landed:
+    //   1) Stale localStorage token from a previously-closed game.
+    //   2) Tile click landing before start_game propagated (optimistic UI).
+    // requireActiveGame retries 3×250ms for (2); a null after retries means
+    // the PDA is truly absent. Returning 409+needsCleanup reuses the
+    // existing /api/commit recovery contract — the client already knows how
+    // to wipe its token and call /api/cleanup.
+    const onChainGame = await requireActiveGame(playerPk);
+    if (!onChainGame) {
+      await deleteSession(body.player);
+      throw new ApiError(409, "Game session no longer active — start a new round.", {
+        needsCleanup: true,
+      });
+    }
 
     const { isMine, updated } = checkTile(session, body.tileIndex);
 
@@ -130,6 +148,18 @@ export async function POST(req: NextRequest) {
       closeInstruction,
     });
   } catch (err) {
+    // TOCTOU defense: if the PDA disappeared between requireActiveGame's
+    // probe and sendHouseTx's broadcast, Anchor sim returns
+    // AccountNotInitialized (3012). Translate to the same 409+needsCleanup
+    // contract so the client still recovers via cleanupStuck.
+    if (err instanceof OnChainError && err.kind === "account_not_initialized") {
+      if (bodyPlayer) await deleteSession(bodyPlayer).catch(() => {});
+      return jsonError(
+        new ApiError(409, "Game session no longer active — start a new round.", {
+          needsCleanup: true,
+        }),
+      );
+    }
     return jsonError(err);
   }
 }

@@ -1,5 +1,6 @@
 import "server-only";
 import {
+  type AccountInfo,
   ComputeBudgetProgram,
   PublicKey,
   Transaction,
@@ -8,8 +9,42 @@ import {
 import { programId } from "./env";
 import { getConnection } from "./connection";
 import { getHouseSigner } from "./turnkey-signer";
-import { deriveGamePda } from "@playkaboom/sdk";
+import {
+  deriveGamePda,
+  extractAnchorFrameworkError,
+  isAccountNotInitializedError,
+} from "@playkaboom/sdk";
 import { logger } from "./logger";
+
+/**
+ * Typed wrapper for SendTransactionError shapes we know how to handle.
+ * Carries the structured Anchor framework error (3xxx range — account
+ * constraints, not the program's custom KaboomError 6xxx codes). Route
+ * handlers translate `account_not_initialized` to a 409+needsCleanup
+ * response that the client already knows how to recover from (mirroring
+ * the existing /api/commit 409 contract). Everything else falls through
+ * to the generic 500.
+ */
+export type OnChainErrorKind = "account_not_initialized" | "anchor_framework_error";
+
+export class OnChainError extends Error {
+  readonly kind: OnChainErrorKind;
+  readonly code?: number;
+  readonly account?: string;
+  readonly logs?: readonly string[];
+
+  constructor(
+    kind: OnChainErrorKind,
+    opts: { message: string; code?: number; account?: string; logs?: readonly string[]; cause?: unknown },
+  ) {
+    super(opts.message, opts.cause !== undefined ? { cause: opts.cause } : undefined);
+    this.name = "OnChainError";
+    this.kind = kind;
+    this.code = opts.code;
+    this.account = opts.account;
+    this.logs = opts.logs;
+  }
+}
 
 // Floor + ceiling for the priority fee. Floor is what we always pay (keeps
 // landing rates predictable on quiet mainnet). Ceiling caps the most we'll
@@ -95,18 +130,84 @@ export async function sendHouseTx(instructions: TransactionInstruction[]): Promi
   tx.feePayer = house.publicKey;
 
   const signed = await house.signTransaction(tx);
-  const sig = await conn.sendRawTransaction(signed.serialize(), {
-    skipPreflight: false,
-    maxRetries: 3,
-    preflightCommitment: "processed",
-  });
-  logger.debug({ sig }, "house tx submitted via RPC");
-  void lastValidBlockHeight; // referenced for clarity; we don't poll-confirm here
-  return sig;
+  try {
+    const sig = await conn.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+      preflightCommitment: "processed",
+    });
+    logger.debug({ sig }, "house tx submitted via RPC");
+    void lastValidBlockHeight; // referenced for clarity; we don't poll-confirm here
+    return sig;
+  } catch (err) {
+    // Classify Anchor framework errors so routes can return a structured
+    // 409 instead of an opaque 500. The most consequential one for game
+    // routes is AccountNotInitialized (3012) — fired when the GameSession
+    // PDA the reveal/settle ix references doesn't exist at simulation
+    // time. Two ways that happens: (a) PDA was closed and the encrypted
+    // session token is stale, (b) start_game tx hasn't propagated yet.
+    // Routes disambiguate via `requireActiveGame` before calling here;
+    // this branch catches the TOCTOU window between probe and send.
+    if (isAccountNotInitializedError(err)) {
+      const fw = extractAnchorFrameworkError(err);
+      throw new OnChainError("account_not_initialized", {
+        message: `On-chain account not initialized${fw?.account ? `: ${fw.account}` : ""}`,
+        code: fw?.code,
+        account: fw?.account,
+        logs: (err as { logs?: string[] } | null)?.logs,
+        cause: err,
+      });
+    }
+    throw err;
+  }
 }
 
 export async function playerHasActiveGame(player: PublicKey): Promise<boolean> {
   const [pda] = deriveGamePda(programId(), player);
   const info = await getConnection().getAccountInfo(pda, "confirmed");
   return info !== null;
+}
+
+/**
+ * Probe the GameSession PDA with bounded retries.
+ *
+ * Returns the account if it exists at "confirmed", or null after retries
+ * if the RPC consistently reports the account is absent. RPC errors are
+ * retried up to `attempts` times and re-thrown if all fail — a clean
+ * `null` is reserved for "RPC confirmed the account does not exist".
+ *
+ * The retry exists for the start_game-propagation race: the client flips
+ * UI to "playing" the instant Alchemy ACKs the start_game send (~200ms),
+ * but a tile click landing in the next ~500-800ms may arrive before the
+ * validator has processed start_game. Three attempts at 250ms gives
+ * ~750ms of headroom — well within typical p99 propagation, well under
+ * the blockhash window.
+ */
+export interface RequireActiveGameOpts {
+  attempts?: number;
+  backoffMs?: number;
+}
+export async function requireActiveGame(
+  player: PublicKey,
+  opts: RequireActiveGameOpts = {},
+): Promise<AccountInfo<Buffer> | null> {
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  const backoffMs = Math.max(0, opts.backoffMs ?? 250);
+  const [pda] = deriveGamePda(programId(), player);
+  const conn = getConnection();
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const info = await conn.getAccountInfo(pda, "confirmed");
+      if (info) return info as AccountInfo<Buffer>;
+      lastErr = undefined;
+    } catch (err) {
+      lastErr = err;
+    }
+    if (i < attempts - 1 && backoffMs > 0) {
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  if (lastErr) throw lastErr;
+  return null;
 }
