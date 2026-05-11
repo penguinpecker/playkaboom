@@ -3493,3 +3493,190 @@ FINAL STATE
     migration 20260511000005)
   CI runs green; nightly invariants workflow (03:00 UTC) ready
 
+══════════════════════════════════════════════════════════════════════════════
+SESSION — 2026-05-12  (chain-truth gate on /api/reveal + /api/settle)
+══════════════════════════════════════════════════════════════════════════════
+
+REPORTED SYMPTOM (live player, mainnet)
+  "Games are failing immediately." Browser DevTools showed:
+    POST https://playkaboom.gg/api/reveal 500 (Internal Server Error)
+  Player wallet 5pc1YbNacyAgofyZy19ppty3iyQJo3xmbRMVeSvQCsD2 — 304 games
+  played, last_played 22:20:08 UTC. The most recent settled game was 6
+  minutes before the report, so the regression was scoped to a specific
+  in-flight state, not a global break.
+
+ROOT-CAUSE TRACE
+  1. Derived GamePda on chain for the affected wallet and probed:
+       GamePda 8bFsb8u4nA277RPPj1UXXGHaJyxACPq513cHXvrg41sP → NULL
+       StatsPda exists; gamesPlayed 312
+     So: NO active on-chain game, but the failing request was
+     /api/reveal with a long, valid-looking encrypted gameToken.
+
+  2. Read apps/web/src/app/api/reveal/route.ts. loadSession() trusts
+     the encrypted client gameToken first (decrypt-then-validate, no
+     chain probe), returns the session payload, and the route builds
+     buildRevealTile → sendHouseTx([revealIx]).
+
+  3. Read apps/web/src/server/solana.ts → sendHouseTx uses
+     skipPreflight:false. With the GameSession PDA absent, the
+     pre-flight simulator rejects with Anchor's framework error
+     AccountNotInitialized (code 3012 / 0xbc4) — Anchor's Account<'info,
+     GameSession> constraint at programs/kaboom/src/lib.rs:1956.
+
+  4. sendHouseTx didn't catch the SendTransactionError → it bubbled
+     into the route's catch → jsonError() → opaque 500.
+
+  Two paths produce the desync:
+    A) Stale localStorage gameToken from a previously-closed game
+       (close_game ran, session row was deleted, but client never
+       cleared its token; next tile-click resurrects the conversation).
+    B) Optimistic-start race: signAndBroadcast resolves on RPC ACK
+       (~200ms). store.beginGame flips UI to "playing" immediately —
+       a tile click in the next 500-800ms can land before the
+       validator has processed start_game; same AccountNotInitialized.
+
+  Sibling routes /api/cleanup and /api/session/[player] already do an
+  on-chain getAccountInfo and short-circuit cleanly; /api/reveal and
+  /api/settle did not.
+
+PARALLEL RESEARCH (sub-agents, two streams)
+  Stream A (external best practices, web research):
+    – SendTransactionError.logs carries the structured AnchorError line
+      "AnchorError caused by account: <name>. Error Code: <Name>.
+       Error Number: <N>. Error Message: …". Framework codes are 3000-
+      3999; user (KaboomError) codes start at 6000. AccountNotInitialized
+      is fixed at 3012.
+    – Disambiguation pattern is probe-then-classify: on a sim failure,
+      probe getAccountInfo immediately. null + recent start_game →
+      propagation race → retry; null otherwise → closed → 410/409 +
+      clear-token; account present → state mismatch → 409.
+    – Helius/Solana docs are unanimous that "sendTransaction returning"
+      is only an RPC ACK and never a state guarantee. Read-after-write
+      should wait for at least the same commitment level as the write.
+    – No published consensus on encrypted-session-mirroring-a-PDA, but
+      JWT-revocation literature maps cleanly: token is a cache hint,
+      chain is source of truth, server returns 410 Gone on divergence.
+
+  Stream B (read-only audit of all on-chain-touching routes):
+    – Vulnerable: /api/reveal (2 sendHouseTx calls), /api/settle (1),
+      /api/admin/release-stuck-obligations (1, but already inside a
+      per-candidate try/catch so the new typed error just adds a clean
+      `errors[]` entry — no extra wiring needed).
+    – Correct: /api/cleanup, /api/session/[player], /api/commit.
+    – `playerHasActiveGame` exists in apps/web/src/server/solana.ts:108
+      but only used by /api/commit.
+    – Anchor not a dependency of apps/web; can't use AnchorError.parse,
+      had to write a small parser. KaboomError customs (6000+) already
+      decoded by `extractKaboomError` in packages/sdk/src/errors.ts.
+    – No prior tests for closed-PDA scenarios; vitest infra lives in
+      tests/sdk (workspace `@playkaboom/sdk-tests`).
+
+FIX (commit 7b02e4c)
+  Four defense layers:
+
+    L1 — Chain truth gate (apps/web/src/server/solana.ts):
+      New requireActiveGame(player, opts?) probes the GamePda at
+      "confirmed" with bounded retry — default 3 attempts × 250ms
+      backoff. Returns AccountInfo or null. Returning null means the
+      RPC consistently reported the account absent (i.e. the PDA is
+      really gone, not a transient network failure — RPC errors are
+      retried then re-thrown).
+
+    L2 — Sim-error classification (apps/web/src/server/solana.ts):
+      sendHouseTx now wraps the sendRawTransaction call in try/catch.
+      Anchor framework codes (3xxx) are extracted from the logs via
+      the new SDK helpers and re-thrown as a typed OnChainError with
+      kind:"account_not_initialized". Anything else falls through
+      unchanged (existing /api/cleanup logger-and-continue path keeps
+      working; jsonError + extractKaboomError continue to handle the
+      6000+ codes; no behavioural change for non-3012 errors).
+
+    L3 — Route wiring (/api/reveal + /api/settle):
+      After loadSession succeeds, call requireActiveGame. On null →
+      deleteSession + ApiError(409, "Game session no longer active —
+      start a new round.", { needsCleanup: true }). Same shape /api/
+      commit already returns on its own 409. Each route also catches
+      OnChainError("account_not_initialized") from sendHouseTx (the
+      TOCTOU window between probe and broadcast) and returns the same
+      409 shape.
+
+    L4 — Client recovery (apps/web/src/hooks/use-game-actions.ts):
+      revealTile and cashOut catch blocks now branch on
+      err.payload.needsCleanup === true before falling through to the
+      generic decodeProgramError path. needsCleanup → wipe local
+      gameToken + invoke cleanupStuck() (which already probes chain
+      and walks the player to the right recovery action — usually a
+      no-op since the PDA is already gone). Mirrors the existing
+      startGame 409 handling.
+
+  Optimistic-start UI flip intentionally retained. The bounded server
+  retry (≤750 ms) absorbs the typical propagation window invisibly,
+  and removing the flip would regress every game's perceived snappiness
+  by 1.5-3s. If players still report the race after this lands, the
+  next step is a client-side signatureSubscribe gate around the
+  setStatus("playing") line.
+
+SDK additions (packages/sdk/src/errors.ts)
+  • extractAnchorFrameworkError(err): AnchorFrameworkError | undefined
+      Handles both the structured "AnchorError caused by account: X.
+      Error Code: Y. Error Number: N." line and the bare "custom
+      program error: 0xNNN" fallback. Static map of Anchor framework
+      enum names (3000-3012). Constrained to 3000-5999 so it never
+      collides with custom KaboomError codes.
+  • isAccountNotInitializedError(err): boolean
+      Thin predicate over the above. Used by sendHouseTx to keep the
+      classification path simple at the call site.
+
+TESTS (tests/sdk/anchor-errors.test.ts, 11 new)
+  Real RPC log shapes pulled from Anchor 0.30 SendTransactionError
+  output. Cases:
+    – Structured Anchor log → decodes (code:3012, account:"game")
+    – Bare hex "0xbc4" → decodes (code:3012)
+    – Kaboom custom (6000+) → NOT classified as framework error
+    – .logs property on Error subclass → decodes
+    – .message-only string carrying the full log → decodes
+    – Negative cases: null/undefined/random strings/non-Anchor errors
+    – Cross-check: extractKaboomError finds 6003 but not 3012;
+      extractAnchorFrameworkError finds 3012 but not 6003.
+
+VERIFICATION DONE LOCALLY
+  • `turbo run typecheck` — 6/6 packages green
+  • `turbo run test` — 701/701 (11 new + 690 existing)
+  • `next build @playkaboom/web` — green, no SSR/edge boundary
+    regressions; route table unchanged
+  • Local dev (next dev -p 3011): /api/reveal, /api/settle, /api/commit
+    still return 400/401 on bad/missing input (no regression on the
+    fast-fail paths). Commit body-validator and auth checks unaffected.
+
+DEPLOY (push 22:46 UTC → green at ~22:53 UTC)
+  Push:   e6cf831..7b02e4c  main → main
+  CI runs (concurrent):
+    – CodeQL — 1m31s SUCCESS
+    – Node typecheck + test — SUCCESS
+    – Anchor build + cargo test + integration — SUCCESS
+  Vercel Deploy (workflow_run trigger, gated on CI green) — fired.
+
+LESSONS / RECORDED FEEDBACK
+  • A passing health endpoint is not proof a game-path route is
+    healthy. /api/health exercises Turnkey housePubkey() and RPC
+    getBalance — both unrelated to the reveal_tile failure mode.
+    Production audits going forward should always include a session-
+    state probe, not just liveness.
+  • Anchor framework errors (3xxx) and program custom errors (6xxx)
+    need separate decoders. Reusing extractKaboomError for framework
+    errors would silently swallow 3012s as "unknown" — and that's
+    exactly what happened pre-fix.
+  • Optimistic UI for state-machine-backed flows requires either an
+    explicit await-confirm gate or a server-side bounded-retry
+    absorber. Without one of those, the propagation race surfaces as
+    a 5xx the user sees the instant they click. Bounded retry was
+    the lower-impact choice here.
+
+FINAL STATE — 2026-05-12 (post-hotfix)
+  Local HEAD: 7b02e4c
+  origin/main: synced
+  Latest CI run: 25701815458 SUCCESS
+  Vercel deploy: triggered via workflow_run 25702086498
+  Live /api/health: HTTP 200, vault balance ~11.91 SOL
+  Vault state /api/vault/state: healthBps 9532, v2Initialized:true
+

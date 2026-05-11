@@ -1,8 +1,8 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-11** (post full-codebase audit + indexer hardening). Full session-by-session log lives in `records.txt`.
+A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-12** (chain-truth gate on reveal/settle, fixes player-reported 500s during play). Full session-by-session log lives in `records.txt`.
 
-## STATUS — 2026-05-11 (mainnet, post-audit hardened)
+## STATUS — 2026-05-12 (mainnet, chain-truth gate live)
 
 **Live on Solana mainnet at https://playkaboom.gg.** All admin/treasury/upgrade authorities on Squads 2/2. Hot game-ix signer on Turnkey HSM. The 2026-05-11 sweep audited every layer (program, SDK, API, frontend, indexer, RLS, build/CI, tests) via 8 parallel sub-agents; every HIGH finding has a fix shipped.
 
@@ -63,12 +63,15 @@ Math is provably correct on both sides: TS `calcMultiplierBps` and Rust `calc_mu
 - `uniq_games_unsettled_per_pda` partial unique index forbids two unsettled rows for the same PDA at the same slot.
 - Slot-monotonic guards on `player_stats`, `referrals`, `lp_positions` (`last_event_slot` column).
 
-## Recent shipped — 2026-05-11
+## Recent shipped — 2026-05-12 / 2026-05-11
 
 (Newest first, all in `origin/main`. The CI/deploy gate landed in batch 3 — every commit after that REQUIRED CI green to deploy.)
 
 | Commit | What |
 |---|---|
+| `7b02e4c` | **chain-truth gate on /api/reveal + /api/settle.** Fixes the 500-on-tile-click report: stale `gameToken` (from a closed PDA, or a tile-click landing before `start_game` propagated) no longer bubbles `AccountNotInitialized` as a 500. New `requireActiveGame()` probes the GameSession PDA at `confirmed` with 3×250 ms retry — absorbs the propagation race, deletes the server-side session and returns `409 { needsCleanup: true }` when the PDA is truly absent. `sendHouseTx` catches `SendTransactionError` and classifies the Anchor framework error (code 3012) as a typed `OnChainError` for TOCTOU safety. Client `revealTile` and `cashOut` now wire 409+`needsCleanup` into the existing `cleanupStuck` flow. SDK: `extractAnchorFrameworkError` + `isAccountNotInitializedError` decode both the structured AnchorError log line and the bare `custom program error: 0xbc4` fallback; 11 new unit tests cover real RPC log shapes. No UI changes. |
+| `f907d93` | auto-bundle `set_referrer` into the player's first `start_game` (single Privy signing prompt, atomic) |
+| `e6cf831` | `/install` route deep-linking to Solana dApp Store |
 | `8a5965f` | realtime relay broadcasts INSERT+UPDATE (was INSERT-only); applyIncoming merges in-place |
 | `9668104` | strip 13 debug console.log/warn from game flow |
 | `c73fdb7` | settle handler retries on no-match (out-of-order Helius delivery); backfill of `52mySrDaDM…` |
