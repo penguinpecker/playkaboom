@@ -9,6 +9,8 @@
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 5
+    "restartPolicyMaxRetries": 5,
+    "// numReplicas": "Pinned to 1 because the in-process cronInflight guard does not coordinate across replicas. Scaling to 2 silently doubles every cron tick (and every Vercel function invocation). If horizontal scale is ever needed, move the inflight guard into Redis/Supabase first.",
+    "numReplicas": 1
   }
 }
