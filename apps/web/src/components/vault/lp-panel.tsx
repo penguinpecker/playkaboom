@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import {
@@ -26,6 +26,12 @@ export function VaultLpPanel() {
   const [amount, setAmount] = useState("0.1");
   const [withdrawSol, setWithdrawSol] = useState("");
   const [busy, setBusy] = useState(false);
+  // 2026-05-11: sync mirror of `busy`. `setBusy` is async (commits on next
+  // render), so a rapid double-click can fire `run()` twice before the
+  // visual disable lands. The ref flips synchronously inside the click
+  // handler. Without this, two signed txs land with different blockhashes
+  // and both deposit/withdraw — real money risk.
+  const busyRef = useRef(false);
   const [currentSlot, setCurrentSlot] = useState<number | null>(null);
 
   // Poll the current slot every 5s so the withdraw cooldown countdown
@@ -88,6 +94,10 @@ export function VaultLpPanel() {
       login();
       return;
     }
+    // Sync-ref guard: prevents fast double-clicks from firing two signed
+    // txs before setBusy(true) takes visual effect.
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     fn()
       .then((res) => {
@@ -99,7 +109,10 @@ export function VaultLpPanel() {
         const msg = err instanceof Error ? err.message : "failed";
         toast(`${label} failed: ${msg}`, "error");
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        busyRef.current = false;
+        setBusy(false);
+      });
   };
 
   return (

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { usePrivy } from "@privy-io/react-auth";
 import {
@@ -234,6 +234,10 @@ function WithdrawModal() {
   const [amount, setAmount] = useState("");
   const [bal, setBal] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // Sync mirror of busy — see lp-panel.tsx for the same pattern. Prevents
+  // a fast double-click on SEND from broadcasting two transfer txs with
+  // different blockhashes (both would land, sending double the SOL).
+  const busyRef = useRef(false);
   const [err, setErr] = useState<string | null>(null);
   // Two-stage modal: form view (default) → success view once a tx confirms.
   // Success view stays open until the user dismisses, so they can copy the
@@ -282,6 +286,7 @@ function WithdrawModal() {
   };
 
   const submit = async () => {
+    if (busyRef.current) return;
     setErr(null);
     if (!wallet || !fromAddr) {
       setErr("Wallet not connected.");
@@ -309,6 +314,7 @@ function WithdrawModal() {
     }
     const lamports = Math.round(sol * LAMPORTS_PER_SOL);
     try {
+      busyRef.current = true;
       setBusy(true);
       const tx = new Transaction().add(
         SystemProgram.transfer({
@@ -353,6 +359,7 @@ function WithdrawModal() {
       const msg = e instanceof Error ? e.message : String(e);
       setErr(msg.length > 200 ? msg.slice(0, 200) + "…" : msg);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
