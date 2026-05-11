@@ -1,0 +1,24 @@
+# Auto-deploy on push to main means a single repo write can ship to prod.
+# Owners listed here are auto-requested on every PR — combined with a GitHub
+# branch protection rule (Settings → Branches → main → "Require review from
+# Code Owners" + "Require status checks to pass") this enforces a review
+# window before anything reaches Vercel.
+#
+# To make this binding: enable branch protection in the repo settings. This
+# file alone is a request hint, not a hard gate.
+
+# Default owner — everything in the repo.
+*       @penguinpecker
+
+# Especially sensitive paths (Anchor program, indexer, RLS migrations,
+# webhook auth, build/deploy workflows). Adding a second owner here would
+# enforce two-party review on the lines that move SOL. Listed singly for
+# now; add a co-maintainer to make it 2-of-1.
+/programs/                                @penguinpecker
+/supabase/migrations/                     @penguinpecker
+/apps/web/src/server/indexer.ts           @penguinpecker
+/apps/web/src/server/webhook-auth.ts      @penguinpecker
+/apps/web/src/app/api/webhook/            @penguinpecker
+/apps/web/src/app/api/cron/               @penguinpecker
+/apps/web/src/app/api/admin/              @penguinpecker
+/.github/workflows/                       @penguinpecker
