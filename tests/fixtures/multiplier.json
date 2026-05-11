@@ -1,0 +1,4057 @@
+{
+  "generated": "2026-05-11 — pin trusted oracle for TS↔Rust drift detection",
+  "generator_formula": "raw = prod_{i=0..s-1}((16-i)/(16-m-i)); final = floor(raw*BPS/1) * (BPS-edge) / BPS",
+  "notes": "Floor at every division. Edges sampled at {0,100,200,500,1000=MAX_HOUSE_EDGE_BPS}. Mine count 1..15 (=MAX_MINES). Safe reveals 0..(16-mc).",
+  "rows": [
+    {
+      "safe_reveals": 0,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 10666
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 10559
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 10452
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 10132
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 9599
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 11428
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 11313
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 11199
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 10856
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 10285
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 12307
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 12183
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 12060
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 11691
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 11076
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 13333
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 13199
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 13066
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 12666
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 11999
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 14545
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 14399
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 14254
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 13817
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 13090
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 16000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 15840
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 15680
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 15200
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 14400
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 17777
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 17599
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 17421
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 16888
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 15999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 20000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 19800
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 19600
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 19000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 18000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 22857
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 22628
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 22399
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 21714
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 20571
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 26666
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 26399
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 26132
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 25332
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 23999
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 32000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 31680
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 31360
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 30400
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 28800
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 40000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 39600
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 39200
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 38000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 36000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 53333
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 52799
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 52266
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 50666
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 47999
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 80000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 79200
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 78400
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 76000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 72000
+    },
+    {
+      "safe_reveals": 15,
+      "mine_count": 1,
+      "edge_bps": 0,
+      "expected_bps": 160000
+    },
+    {
+      "safe_reveals": 15,
+      "mine_count": 1,
+      "edge_bps": 100,
+      "expected_bps": 158400
+    },
+    {
+      "safe_reveals": 15,
+      "mine_count": 1,
+      "edge_bps": 200,
+      "expected_bps": 156800
+    },
+    {
+      "safe_reveals": 15,
+      "mine_count": 1,
+      "edge_bps": 500,
+      "expected_bps": 152000
+    },
+    {
+      "safe_reveals": 15,
+      "mine_count": 1,
+      "edge_bps": 1000,
+      "expected_bps": 144000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 11428
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 11313
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 11199
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 10856
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 10285
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 13186
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 13054
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 12922
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 12526
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 11867
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 15384
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 15230
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 15076
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 14614
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 13845
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 18181
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 17999
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 17817
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 17271
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 16362
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 21818
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 21599
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 21381
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 20727
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 19636
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 26666
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 26399
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 26132
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 25332
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 23999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 33333
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 32999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 32666
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 31666
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 29999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 42857
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 42428
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 41999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 40714
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 38571
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 57142
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 56570
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 55999
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 54284
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 51427
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 80000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 79200
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 78400
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 76000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 72000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 120000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 118800
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 117600
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 114000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 108000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 200000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 198000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 196000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 190000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 180000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 400000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 396000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 392000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 380000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 360000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 2,
+      "edge_bps": 0,
+      "expected_bps": 1200000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 2,
+      "edge_bps": 100,
+      "expected_bps": 1188000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 2,
+      "edge_bps": 200,
+      "expected_bps": 1176000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 2,
+      "edge_bps": 500,
+      "expected_bps": 1140000
+    },
+    {
+      "safe_reveals": 14,
+      "mine_count": 2,
+      "edge_bps": 1000,
+      "expected_bps": 1080000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 12307
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 12183
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 12060
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 11691
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 11076
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 15384
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 15230
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 15076
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 14614
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 13845
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 19580
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 19384
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 19188
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 18601
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 17622
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 25454
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 25199
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 24944
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 24181
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 22908
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 33939
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 33599
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 33260
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 32242
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 30545
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 46666
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 46199
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 45732
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 44332
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 41999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 66666
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 65999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 65332
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 63332
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 59999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 100000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 99000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 98000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 95000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 90000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 160000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 158400
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 156800
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 152000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 144000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 280000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 277200
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 274400
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 266000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 252000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 560000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 554400
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 548800
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 532000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 504000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 1400000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 1386000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 1372000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 1330000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 1260000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 3,
+      "edge_bps": 0,
+      "expected_bps": 5600000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 3,
+      "edge_bps": 100,
+      "expected_bps": 5544000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 3,
+      "edge_bps": 200,
+      "expected_bps": 5488000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 3,
+      "edge_bps": 500,
+      "expected_bps": 5320000
+    },
+    {
+      "safe_reveals": 13,
+      "mine_count": 3,
+      "edge_bps": 1000,
+      "expected_bps": 5040000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 13333
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 13199
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 13066
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 12666
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 11999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 18181
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 17999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 17817
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 17271
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 16362
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 25454
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 25199
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 24944
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 24181
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 22908
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 36767
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 36399
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 36031
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 34928
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 33090
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 55151
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 54599
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 54047
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 52393
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 49635
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 86666
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 85799
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 84932
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 82332
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 77999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 144444
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 142999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 141555
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 137221
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 129999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 260000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 257400
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 254800
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 247000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 234000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 520000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 514800
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 509600
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 494000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 468000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 1213333
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 1201199
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 1189066
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 1152666
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 1091999
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 3640000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 3603600
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 3567200
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 3458000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 3276000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 4,
+      "edge_bps": 0,
+      "expected_bps": 18200000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 4,
+      "edge_bps": 100,
+      "expected_bps": 18018000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 4,
+      "edge_bps": 200,
+      "expected_bps": 17836000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 4,
+      "edge_bps": 500,
+      "expected_bps": 17290000
+    },
+    {
+      "safe_reveals": 12,
+      "mine_count": 4,
+      "edge_bps": 1000,
+      "expected_bps": 16380000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 14545
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 14399
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 14254
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 13817
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 13090
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 21818
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 21599
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 21381
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 20727
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 19636
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 33939
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 33599
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 33260
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 32242
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 30545
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 55151
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 54599
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 54047
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 52393
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 49635
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 94545
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 93599
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 92654
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 89817
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 85090
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 173333
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 171599
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 169866
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 164666
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 155999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 346666
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 343199
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 339732
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 329332
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 311999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 780000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 772200
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 764400
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 741000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 702000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 2080000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 2059200
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 2038400
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 1976000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 1872000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 7280000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 7207200
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 7134400
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 6916000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 6552000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 5,
+      "edge_bps": 0,
+      "expected_bps": 43680000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 5,
+      "edge_bps": 100,
+      "expected_bps": 43243200
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 5,
+      "edge_bps": 200,
+      "expected_bps": 42806400
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 5,
+      "edge_bps": 500,
+      "expected_bps": 41496000
+    },
+    {
+      "safe_reveals": 11,
+      "mine_count": 5,
+      "edge_bps": 1000,
+      "expected_bps": 39312000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 16000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 15840
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 15680
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 15200
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 14400
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 26666
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 26399
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 26132
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 25332
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 23999
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 46666
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 46199
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 45732
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 44332
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 41999
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 86666
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 85799
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 84932
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 82332
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 77999
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 173333
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 171599
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 169866
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 164666
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 155999
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 381333
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 377519
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 373706
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 362266
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 343199
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 953333
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 943799
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 934266
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 905666
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 857999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 2860000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 2831400
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 2802800
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 2717000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 2574000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 11440000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 11325600
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 11211200
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 10868000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 10296000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 6,
+      "edge_bps": 0,
+      "expected_bps": 80080000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 6,
+      "edge_bps": 100,
+      "expected_bps": 79279200
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 6,
+      "edge_bps": 200,
+      "expected_bps": 78478400
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 6,
+      "edge_bps": 500,
+      "expected_bps": 76076000
+    },
+    {
+      "safe_reveals": 10,
+      "mine_count": 6,
+      "edge_bps": 1000,
+      "expected_bps": 72072000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 17777
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 17599
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 17421
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 16888
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 15999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 33333
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 32999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 32666
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 31666
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 29999
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 66666
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 65999
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 65332
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 63332
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 59999
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 144444
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 142999
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 141555
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 137221
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 129999
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 346666
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 343199
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 339732
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 329332
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 311999
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 953333
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 943799
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 934266
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 905666
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 857999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 3177777
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 3145999
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 3114221
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 3018888
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 2859999
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 14300000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 14157000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 14014000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 13585000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 12870000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 7,
+      "edge_bps": 0,
+      "expected_bps": 114400000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 7,
+      "edge_bps": 100,
+      "expected_bps": 113256000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 7,
+      "edge_bps": 200,
+      "expected_bps": 112112000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 7,
+      "edge_bps": 500,
+      "expected_bps": 108680000
+    },
+    {
+      "safe_reveals": 9,
+      "mine_count": 7,
+      "edge_bps": 1000,
+      "expected_bps": 102960000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 20000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 19800
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 19600
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 19000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 18000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 42857
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 42428
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 41999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 40714
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 38571
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 100000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 99000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 98000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 95000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 90000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 260000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 257400
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 254800
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 247000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 234000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 780000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 772200
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 764400
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 741000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 702000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 2860000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 2831400
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 2802800
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 2717000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 2574000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 14300000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 14157000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 14014000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 13585000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 12870000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 8,
+      "edge_bps": 0,
+      "expected_bps": 128700000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 8,
+      "edge_bps": 100,
+      "expected_bps": 127413000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 8,
+      "edge_bps": 200,
+      "expected_bps": 126126000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 8,
+      "edge_bps": 500,
+      "expected_bps": 122265000
+    },
+    {
+      "safe_reveals": 8,
+      "mine_count": 8,
+      "edge_bps": 1000,
+      "expected_bps": 115830000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 22857
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 22628
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 22399
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 21714
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 20571
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 57142
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 56570
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 55999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 54284
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 51427
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 160000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 158400
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 156800
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 152000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 144000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 520000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 514800
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 509600
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 494000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 468000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 2080000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 2059200
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 2038400
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 1976000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 1872000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 11440000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 11325600
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 11211200
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 10868000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 10296000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 9,
+      "edge_bps": 0,
+      "expected_bps": 114400000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 9,
+      "edge_bps": 100,
+      "expected_bps": 113256000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 9,
+      "edge_bps": 200,
+      "expected_bps": 112112000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 9,
+      "edge_bps": 500,
+      "expected_bps": 108680000
+    },
+    {
+      "safe_reveals": 7,
+      "mine_count": 9,
+      "edge_bps": 1000,
+      "expected_bps": 102960000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 26666
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 26399
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 26132
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 25332
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 23999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 80000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 79200
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 78400
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 76000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 72000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 280000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 277200
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 274400
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 266000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 252000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 1213333
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 1201199
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 1189066
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 1152666
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 1091999
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 7280000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 7207200
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 7134400
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 6916000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 6552000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 10,
+      "edge_bps": 0,
+      "expected_bps": 80080000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 10,
+      "edge_bps": 100,
+      "expected_bps": 79279200
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 10,
+      "edge_bps": 200,
+      "expected_bps": 78478400
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 10,
+      "edge_bps": 500,
+      "expected_bps": 76076000
+    },
+    {
+      "safe_reveals": 6,
+      "mine_count": 10,
+      "edge_bps": 1000,
+      "expected_bps": 72072000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 11,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 11,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 11,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 11,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 11,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 11,
+      "edge_bps": 0,
+      "expected_bps": 32000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 11,
+      "edge_bps": 100,
+      "expected_bps": 31680
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 11,
+      "edge_bps": 200,
+      "expected_bps": 31360
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 11,
+      "edge_bps": 500,
+      "expected_bps": 30400
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 11,
+      "edge_bps": 1000,
+      "expected_bps": 28800
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 11,
+      "edge_bps": 0,
+      "expected_bps": 120000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 11,
+      "edge_bps": 100,
+      "expected_bps": 118800
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 11,
+      "edge_bps": 200,
+      "expected_bps": 117600
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 11,
+      "edge_bps": 500,
+      "expected_bps": 114000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 11,
+      "edge_bps": 1000,
+      "expected_bps": 108000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 11,
+      "edge_bps": 0,
+      "expected_bps": 560000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 11,
+      "edge_bps": 100,
+      "expected_bps": 554400
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 11,
+      "edge_bps": 200,
+      "expected_bps": 548800
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 11,
+      "edge_bps": 500,
+      "expected_bps": 532000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 11,
+      "edge_bps": 1000,
+      "expected_bps": 504000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 11,
+      "edge_bps": 0,
+      "expected_bps": 3640000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 11,
+      "edge_bps": 100,
+      "expected_bps": 3603600
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 11,
+      "edge_bps": 200,
+      "expected_bps": 3567200
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 11,
+      "edge_bps": 500,
+      "expected_bps": 3458000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 11,
+      "edge_bps": 1000,
+      "expected_bps": 3276000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 11,
+      "edge_bps": 0,
+      "expected_bps": 43680000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 11,
+      "edge_bps": 100,
+      "expected_bps": 43243200
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 11,
+      "edge_bps": 200,
+      "expected_bps": 42806400
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 11,
+      "edge_bps": 500,
+      "expected_bps": 41496000
+    },
+    {
+      "safe_reveals": 5,
+      "mine_count": 11,
+      "edge_bps": 1000,
+      "expected_bps": 39312000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 12,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 12,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 12,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 12,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 12,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 12,
+      "edge_bps": 0,
+      "expected_bps": 40000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 12,
+      "edge_bps": 100,
+      "expected_bps": 39600
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 12,
+      "edge_bps": 200,
+      "expected_bps": 39200
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 12,
+      "edge_bps": 500,
+      "expected_bps": 38000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 12,
+      "edge_bps": 1000,
+      "expected_bps": 36000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 12,
+      "edge_bps": 0,
+      "expected_bps": 200000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 12,
+      "edge_bps": 100,
+      "expected_bps": 198000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 12,
+      "edge_bps": 200,
+      "expected_bps": 196000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 12,
+      "edge_bps": 500,
+      "expected_bps": 190000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 12,
+      "edge_bps": 1000,
+      "expected_bps": 180000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 12,
+      "edge_bps": 0,
+      "expected_bps": 1400000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 12,
+      "edge_bps": 100,
+      "expected_bps": 1386000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 12,
+      "edge_bps": 200,
+      "expected_bps": 1372000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 12,
+      "edge_bps": 500,
+      "expected_bps": 1330000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 12,
+      "edge_bps": 1000,
+      "expected_bps": 1260000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 12,
+      "edge_bps": 0,
+      "expected_bps": 18200000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 12,
+      "edge_bps": 100,
+      "expected_bps": 18018000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 12,
+      "edge_bps": 200,
+      "expected_bps": 17836000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 12,
+      "edge_bps": 500,
+      "expected_bps": 17290000
+    },
+    {
+      "safe_reveals": 4,
+      "mine_count": 12,
+      "edge_bps": 1000,
+      "expected_bps": 16380000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 13,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 13,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 13,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 13,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 13,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 13,
+      "edge_bps": 0,
+      "expected_bps": 53333
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 13,
+      "edge_bps": 100,
+      "expected_bps": 52799
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 13,
+      "edge_bps": 200,
+      "expected_bps": 52266
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 13,
+      "edge_bps": 500,
+      "expected_bps": 50666
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 13,
+      "edge_bps": 1000,
+      "expected_bps": 47999
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 13,
+      "edge_bps": 0,
+      "expected_bps": 400000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 13,
+      "edge_bps": 100,
+      "expected_bps": 396000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 13,
+      "edge_bps": 200,
+      "expected_bps": 392000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 13,
+      "edge_bps": 500,
+      "expected_bps": 380000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 13,
+      "edge_bps": 1000,
+      "expected_bps": 360000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 13,
+      "edge_bps": 0,
+      "expected_bps": 5600000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 13,
+      "edge_bps": 100,
+      "expected_bps": 5544000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 13,
+      "edge_bps": 200,
+      "expected_bps": 5488000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 13,
+      "edge_bps": 500,
+      "expected_bps": 5320000
+    },
+    {
+      "safe_reveals": 3,
+      "mine_count": 13,
+      "edge_bps": 1000,
+      "expected_bps": 5040000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 14,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 14,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 14,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 14,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 14,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 14,
+      "edge_bps": 0,
+      "expected_bps": 80000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 14,
+      "edge_bps": 100,
+      "expected_bps": 79200
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 14,
+      "edge_bps": 200,
+      "expected_bps": 78400
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 14,
+      "edge_bps": 500,
+      "expected_bps": 76000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 14,
+      "edge_bps": 1000,
+      "expected_bps": 72000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 14,
+      "edge_bps": 0,
+      "expected_bps": 1200000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 14,
+      "edge_bps": 100,
+      "expected_bps": 1188000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 14,
+      "edge_bps": 200,
+      "expected_bps": 1176000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 14,
+      "edge_bps": 500,
+      "expected_bps": 1140000
+    },
+    {
+      "safe_reveals": 2,
+      "mine_count": 14,
+      "edge_bps": 1000,
+      "expected_bps": 1080000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 15,
+      "edge_bps": 0,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 15,
+      "edge_bps": 100,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 15,
+      "edge_bps": 200,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 15,
+      "edge_bps": 500,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 0,
+      "mine_count": 15,
+      "edge_bps": 1000,
+      "expected_bps": 10000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 15,
+      "edge_bps": 0,
+      "expected_bps": 160000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 15,
+      "edge_bps": 100,
+      "expected_bps": 158400
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 15,
+      "edge_bps": 200,
+      "expected_bps": 156800
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 15,
+      "edge_bps": 500,
+      "expected_bps": 152000
+    },
+    {
+      "safe_reveals": 1,
+      "mine_count": 15,
+      "edge_bps": 1000,
+      "expected_bps": 144000
+    }
+  ]
+}

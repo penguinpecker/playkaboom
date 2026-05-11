@@ -12,7 +12,6 @@
     "PROGRAM_ID",
     "NEXT_PUBLIC_SENTRY_DSN"
   ],
-  "//passthrough-note": "Build-time inputs only. Runtime-only secrets (SESSION_ENC_KEY, HOUSE_AUTHORITY_KEY, UPSTASH_REDIS_REST_*, SENTRY_DSN, PRIVY_APP_SECRET, etc.) MUST NOT live here — turbo includes passthrough env in cache keys, so any future enablement of remote cache would persist secret values into cache metadata. They reach the running Vercel function via runtime env, not build env.",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

@@ -787,6 +787,8 @@ name = "kaboom"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
  "solana-security-txt",
 ]
