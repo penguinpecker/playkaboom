@@ -1,51 +1,56 @@
 name: Index program events
 # MIGRATED 2026-05-09: The cron schedule was removed because GH Actions free
 # tier was firing every 1-3h instead of the requested 5min, leaving the
-# indexer up to 3 hours behind on-chain. The Railway relay
-# (apps/realtime/) now polls /api/cron/index-events every 60s as part of
-# its always-on container — see CRON_TICK_URL / CRON_TICK_AUTH env on
-# the playkaboom-realtime service.
+# indexer up to 3 hours behind on-chain. The Railway relay (apps/realtime/)
+# now polls /api/cron/index-events every 60s as part of its always-on
+# container — see CRON_TICK_URL / CRON_TICK_AUTH env on the
+# playkaboom-realtime service.
 #
-# This workflow stays as a manual rescue (workflow_dispatch with
-# `reset=true`) for the rare case where the relay needs a backfill push
-# from a fresh cursor. Run it via:
+# HARDENED 2026-05-11: `reset=true` was the lever behind the 2026-05-09
+# corruption incident. It's no longer a one-click input. To run a reset:
+#   1. Read the current cursor's first 8 chars from Supabase:
+#        select substring(last_signature, 1, 8) from cron_indexer_state;
+#   2. Pass that value as the workflow's `confirm` input. The endpoint
+#      will 400 if the value doesn't match the live cursor — preventing
+#      a stale or accidental dispatch.
+#   3. CRON_SECRET (not HELIUS_WEBHOOK_AUTH) is required for the reset
+#      path — single rotation surface for the destructive operation.
+#
+# Run via:
 #   gh workflow run index-events.yml --repo penguinpecker/playkaboom \
-#     --ref main -f reset=true
-#
-# Requires repo secret CRON_SECRET (must match the value set in Vercel env
-# AND the CRON_TICK_AUTH on Railway).
+#     --ref main -f confirm=<first-8-chars-of-cursor>
 
 on:
   workflow_dispatch:
     inputs:
-      reset:
-        description: "Force a full re-scan ignoring the cursor (one-shot backfill)"
-        required: false
-        default: "false"
-        type: boolean
+      confirm:
+        description: "First 8 chars of the current cron_indexer_state.last_signature (required to authorize a reset)"
+        required: true
+        type: string
 
 jobs:
   poll:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Hit indexer
+      - name: Hit indexer (reset, with confirm)
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -eu
           if [ -z "${CRON_SECRET:-}" ]; then
             echo "CRON_SECRET secret not configured" >&2
             exit 1
           fi
+          if [ -z "${CONFIRM:-}" ] || [ "${#CONFIRM}" -ne 8 ]; then
+            echo "confirm must be exactly the first 8 chars of the current cursor" >&2
+            exit 1
+          fi
           # Hit www directly — playkaboom.gg 307-redirects to www, and following
           # the redirect would strip the Authorization header for cross-host.
-          if [ "${{ inputs.reset }}" = "true" ]; then
-            URL="https://www.playkaboom.gg/api/cron/index-events?reset=1"
-            echo "RESET MODE — full rescan"
-          else
-            URL="https://www.playkaboom.gg/api/cron/index-events"
-          fi
+          URL="https://www.playkaboom.gg/api/cron/index-events?reset=1&confirm=${CONFIRM}"
+          echo "RESET MODE — full rescan (confirm=${CONFIRM})"
           response=$(curl -sS -w "\nHTTP %{http_code}" \
             -H "Authorization: Bearer $CRON_SECRET" \
             "$URL")
