@@ -59,9 +59,16 @@ jobs:
           node-version: 20
 
       - name: Install Vercel CLI
-        # Pinned major to avoid a compromised "latest" tag shipping straight
-        # to prod. Bump deliberately when migrating to a new Vercel feature.
-        run: npm install -g vercel@39
+        # 2026-05-11 unpinned back to @latest. The batch 3 attempt to pin
+        # at vercel@39 broke prod deploys ("No existing credentials found"
+        # despite VERCEL_TOKEN being set in env). The auth-via-env pattern
+        # changed between v39 and v40+, and @latest is what worked before.
+        #
+        # Supply-chain hardening goal still stands — track a known-good
+        # version separately (e.g., subscribe to vercel/vercel release
+        # notes) and pin once verified, but DO NOT pin to a version that
+        # hasn't been smoke-tested against the env-var auth pattern.
+        run: npm install -g vercel@latest
 
       # Upload source + let Vercel build server-side. Mirrors the
       # working manual `vercel --prod` flow exactly. Tried prebuilt
