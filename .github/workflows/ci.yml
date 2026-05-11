@@ -25,10 +25,14 @@ jobs:
       - run: npm run build
 
   anchor:
-    name: Anchor — build + cargo test
+    name: Anchor — build + cargo test + integration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Solana
         run: |
@@ -44,3 +48,13 @@ jobs:
       # rejection, mul_div_floor near u64::MAX.
       - name: Rust unit tests (math invariants)
         run: cargo test -p kaboom --lib
+      # Anchor integration tests — happy path + critical negative cases
+      # against a local validator started by `anchor test`. Tests live at
+      # tests/anchor/runner.ts. Marked continue-on-error until first
+      # successful run validates the validator+toolchain on the GH runner;
+      # the cargo test above is the actual program-correctness gate.
+      - name: npm install (anchor-tests workspace deps)
+        run: npm ci
+      - name: Anchor integration tests
+        continue-on-error: true
+        run: anchor test
