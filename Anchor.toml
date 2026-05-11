@@ -22,7 +22,10 @@ cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "npm run --workspace=@playkaboom/anchor-tests test"
+# tsx handles both CommonJS and ESM transparently. tsx is in root devDeps;
+# anchor-tests is a workspace ("type":"module") that depends on @playkaboom/sdk
+# (also "type":"module"). Running via tsx avoids the ts-node CJS/ESM clash.
+test = "npx tsx tests/anchor/runner.ts"
 
 [test]
 startup_wait = 5000
