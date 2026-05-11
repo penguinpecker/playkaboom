@@ -153,32 +153,46 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 let channel: RealtimeChannel | null = null;
 
 function startUpstream() {
-  // SCOPE: Railway is the live-trade-fees push path ONLY — every settled
-  // game (an INSERT into public.games) gets relayed to /logs viewers in
-  // ~100ms. Everything else (LP deposits/withdrawals, leaderboard,
-  // vault state, player stats) stays on Supabase polling / direct
-  // Realtime per the rest of the architecture. Adding more tables here
-  // would over-cost the relay's upstream subscription without helping
-  // any current consumer in the web client.
+  // SCOPE: Railway is the live-feed push path. Both INSERT (cashout/loss
+  // row created with sentinel fairness fields) and UPDATE (server settle
+  // sets mine_layout / mine_count / commitment / salt / settle_signature)
+  // must be relayed — otherwise clients see a row stuck on "settle
+  // pending" even after settle landed.
+  //
+  // 2026-05-11 fix: original code only listened on INSERT, so post-cashout
+  // UPDATEs from the GameSettled handler never reached the live feed.
+  // Players saw their win but the fairness fields stayed empty in real
+  // time; only a 60s polling refresh eventually filled them.
+  const handler = (eventName: "game_inserted" | "game_updated") =>
+    (payload: { new?: unknown; old?: unknown }) => {
+      broadcast(
+        JSON.stringify({
+          // Legacy clients keyed on type==="game_settled" still receive
+          // both events. Newer code can branch on insert vs update.
+          type: "game_settled",
+          event: eventName,
+          data: payload.new ?? payload.old,
+          ts: Date.now(),
+        }),
+      );
+    };
+
   channel = supabase
     .channel("playkaboom-relay")
     .on(
       "postgres_changes",
       { event: "INSERT", schema: "public", table: "games" },
-      (payload) => {
-        broadcast(
-          JSON.stringify({
-            type: "game_settled",
-            data: payload.new,
-            ts: Date.now(),
-          }),
-        );
-      },
+      handler("game_inserted"),
+    )
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "games" },
+      handler("game_updated"),
     )
     .subscribe((status, err) => {
       if (status === "SUBSCRIBED") {
         upstreamConnected = true;
-        console.log("[upstream] subscribed to postgres_changes");
+        console.log("[upstream] subscribed to postgres_changes (INSERT+UPDATE)");
       } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
         upstreamConnected = false;
         console.warn("[upstream] status:", status, err?.message ?? "");
