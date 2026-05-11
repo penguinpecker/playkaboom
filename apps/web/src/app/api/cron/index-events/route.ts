@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
+import { timingSafeEqual } from "node:crypto";
 import { jsonError } from "@/server/api-helpers";
 import { programId } from "@/server/env";
 import { getConnection } from "@/server/connection";
@@ -42,7 +43,18 @@ const SAFETY_WINDOW_SIGNATURES = 100;
  */
 export async function GET(req: NextRequest) {
   try {
-    if (!authorise(req)) {
+    const url = new URL(req.url);
+    const reset = url.searchParams.get("reset") === "1";
+
+    // Tighter auth on the destructive ?reset=1 path: CRON_SECRET ONLY.
+    // The normal-path (no ?reset) accepts either secret (CRON_SECRET or
+    // HELIUS_WEBHOOK_AUTH) — both are valid operator credentials for a
+    // pure-replay-safe call. The reset path bypasses the cursor and re-feeds
+    // every sig through ingest; even with INSERT-first dedupe it touches
+    // every row's last_event_slot accounting, so it stays gated to a single
+    // secret with its own rotation lifecycle. Also requires explicit
+    // `confirm` param matching the current cursor to prevent fat-finger.
+    if (!authorise(req, reset)) {
       return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
     }
 
@@ -56,12 +68,27 @@ export async function GET(req: NextRequest) {
       .eq("program", program.toBase58())
       .maybeSingle();
 
-    // ?reset=1 forces a full re-scan from the most recent sig back to
-    // MAX_SIGNATURES_PER_RUN. Use this once after the cursor has been
-    // advanced past a failed-ingest sig — `processed_events` dedupe
-    // guarantees no double-write. Behind CRON_SECRET, no public access.
-    const url = new URL(req.url);
-    const reset = url.searchParams.get("reset") === "1";
+    if (reset) {
+      // Belt-and-suspenders: operator must echo back a prefix of the current
+      // cursor, proving they know what state they're resetting from. Stops
+      // an accidental gh-workflow click from re-scanning prod.
+      const confirm = url.searchParams.get("confirm") ?? "";
+      const cursorPrefix = (cursor?.last_signature ?? "").slice(0, 8);
+      if (!cursorPrefix || confirm !== cursorPrefix) {
+        return NextResponse.json(
+          {
+            error: "reset requires ?confirm=<first-8-chars-of-current-last_signature>",
+            hint: `current cursor starts with: ${cursorPrefix || "(none)"}`,
+          },
+          { status: 400 },
+        );
+      }
+      logger.warn(
+        { cursor: cursor?.last_signature },
+        "[index-events] ?reset=1 invoked — full rescan starting",
+      );
+    }
+
     const until = reset ? undefined : (cursor?.last_signature ?? undefined);
 
     // Page through getSignaturesForAddress until we hit `until` or the cap.
@@ -199,10 +226,32 @@ export async function GET(req: NextRequest) {
   }
 }
 
-function authorise(req: NextRequest): boolean {
+function authorise(req: NextRequest, resetPath: boolean): boolean {
   const auth = req.headers.get("authorization");
   if (!auth) return false;
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : auth;
-  const accepted = [process.env.CRON_SECRET, process.env.HELIUS_WEBHOOK_AUTH].filter(Boolean) as string[];
-  return accepted.some((s) => s === token);
+  // ?reset=1 paths are gated to CRON_SECRET only (single rotation surface).
+  // Normal path accepts CRON_SECRET or HELIUS_WEBHOOK_AUTH so the Helius
+  // webhook secret can double as the cron secret when only one is configured.
+  const accepted = (
+    resetPath
+      ? [process.env.CRON_SECRET]
+      : [process.env.CRON_SECRET, process.env.HELIUS_WEBHOOK_AUTH]
+  ).filter((s): s is string => Boolean(s));
+  return accepted.some((s) => safeEqual(s, token));
+}
+
+/** Constant-time string compare. Returns false on length mismatch without
+ * leaking length via early exit. */
+function safeEqual(a: string, b: string): boolean {
+  // timingSafeEqual requires equal-length buffers. Pad to the longer length
+  // with random bytes so a length mismatch is constant-time too.
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) {
+    // Still perform a comparison so timing matches the equal-length path.
+    timingSafeEqual(ab, ab);
+    return false;
+  }
+  return timingSafeEqual(ab, bb);
 }
