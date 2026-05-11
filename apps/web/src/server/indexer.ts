@@ -38,7 +38,14 @@ export interface IndexResult {
 }
 
 /** Process a batch of transactions: dedupe via processed_events, decode each
- * event, and apply to indexer tables. Returns counts for caller logging. */
+ * event, and apply to indexer tables. Returns counts for caller logging.
+ *
+ * Dedupe is INSERT-FIRST (insert into processed_events with the signature PK;
+ * if the row already existed, the insert is a no-op and we skip — closing the
+ * 2026-05-11 TOCTOU where two concurrent Helius deliveries of the same sig
+ * both passed a SELECT check and both applied their events). The atomic
+ * indexer RPCs (idx_apply_*) are the second line of defense: even if dedupe
+ * is bypassed they make handler writes commutative + slot-monotonic. */
 export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResult> {
   const db = supabaseAdmin();
   let processed = 0;
@@ -56,22 +63,32 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
         skipped++;
         continue;
       }
-      const { data: existing } = await db
+      // Attempt to claim this signature. If another concurrent ingest already
+      // inserted it, `inserted` will be empty array — skip without applying.
+      // The `.select()` after `.insert(..., { ignoreDuplicates: true })` returns
+      // the inserted rows (empty on conflict). This is the atomic claim.
+      const { data: inserted, error: insErr } = await db
         .from("processed_events")
-        .select("signature")
-        .eq("signature", tx.signature)
-        .maybeSingle();
-      if (existing) {
+        .insert(
+          { signature: tx.signature, ix_kind: events.map((e) => e.kind).join(",") },
+          { count: "exact" },
+        )
+        .select("signature");
+      if (insErr) {
+        // Unique-violation = already claimed by another ingest, skip silently.
+        if (insErr.code === "23505") {
+          skipped++;
+          continue;
+        }
+        throw new Error(`[processed_events.insert] ${insErr.code ?? ""} ${insErr.message}`);
+      }
+      if (!inserted || inserted.length === 0) {
         skipped++;
         continue;
       }
       for (const ev of events) {
         await applyEvent(ev, tx);
       }
-      await db.from("processed_events").insert({
-        signature: tx.signature,
-        ix_kind: events.map((e) => e.kind).join(","),
-      });
       processed++;
     } catch (err) {
       errors++;
@@ -91,20 +108,24 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
 
   switch (ev.kind) {
     case "StatsUpdated": {
-      await db.from("player_stats").upsert(
-        {
-          player: ev.player.toBase58(),
-          games_played: Number(ev.gamesPlayed),
-          games_won: Number(ev.gamesWon),
-          total_wagered: Number(ev.totalWagered),
-          total_payouts: Number(ev.totalPayouts),
-          biggest_win: Number(ev.biggestWin),
-          current_streak: ev.currentStreak,
-          best_streak: ev.currentStreak,
-          last_played: blockTime,
-        },
-        { onConflict: "player" },
-      );
+      // Slot-monotonic upsert via idx_apply_stats — late-arriving older events
+      // no-op instead of reverting newer counters. biggest_win + best_streak
+      // are GREATEST'd inside the function so they stay monotonic even if a
+      // later event has a smaller absolute value (shouldn't happen on chain
+      // but the function is defensive).
+      const rpc = await db.rpc("idx_apply_stats", {
+        p_player: ev.player.toBase58(),
+        p_games_played: Number(ev.gamesPlayed),
+        p_games_won: Number(ev.gamesWon),
+        p_total_wagered: Number(ev.totalWagered),
+        p_total_payouts: Number(ev.totalPayouts),
+        p_biggest_win: Number(ev.biggestWin),
+        p_current_streak: ev.currentStreak,
+        p_best_streak: ev.currentStreak,
+        p_last_played: blockTime,
+        p_event_slot: slot,
+      });
+      check("player_stats", "StatsUpdated.rpc", rpc);
       break;
     }
     case "GameSettled": {
@@ -203,12 +224,14 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "ReferrerSet": {
-      await db
-        .from("player_stats")
-        .upsert(
-          { player: ev.player.toBase58(), referrer: ev.referrer.toBase58() },
-          { onConflict: "player" },
-        );
+      // On-chain set_referrer can only fire once per player (stats.referrer is
+      // immutable after first set), so the RPC is first-write-wins.
+      const r1 = await db.rpc("idx_apply_referrer_set", {
+        p_player: ev.player.toBase58(),
+        p_referrer: ev.referrer.toBase58(),
+      });
+      check("player_stats", "ReferrerSet.rpc", r1);
+      // Make sure the referrer row exists; ignore conflicts.
       await db
         .from("referrals")
         .upsert(
@@ -218,6 +241,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "ReferralAccrued": {
+      // Event log table — keyed on signature PK, safe to upsert.
       await db.from("referral_events").upsert(
         {
           signature: tx.signature,
@@ -230,37 +254,36 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
-      const { data: row } = await db
-        .from("referrals")
-        .select("accrued_lamports,total_earned,referred_volume,referred_count,tier")
-        .eq("referrer", ev.referrer.toBase58())
-        .maybeSingle();
-      const amount = Number(ev.amount);
-      await db.from("referrals").upsert(
-        {
-          referrer: ev.referrer.toBase58(),
-          accrued_lamports: (row?.accrued_lamports ?? 0) + amount,
-          total_earned: (row?.total_earned ?? 0) + amount,
-          referred_volume: (row?.referred_volume ?? 0) + amount * 200,
-          referred_count: row?.referred_count ?? 0,
-          tier: ev.tier,
-        },
-        { onConflict: "referrer" },
-      );
+      // Atomic SQL increment via RPC — no read-modify-write race. The function
+      // computes referred_volume from the tier bps (50/60/70), replacing the
+      // old hard-coded × 200 (only correct for tier 0).
+      const rpc = await db.rpc("idx_apply_referral_accrued", {
+        p_referrer: ev.referrer.toBase58(),
+        p_amount: Number(ev.amount),
+        p_tier: ev.tier,
+        p_event_slot: slot,
+      });
+      check("referrals", "ReferralAccrued.rpc", rpc);
       break;
     }
     case "ReferralTierChanged": {
-      await db.from("referrals").update({ tier: ev.newTier }).eq("referrer", ev.referrer.toBase58());
+      // Slot-guarded inside the RPC — older deliveries no-op.
+      const rpc = await db.rpc("idx_apply_referral_tier", {
+        p_referrer: ev.referrer.toBase58(),
+        p_new_tier: ev.newTier,
+        p_event_slot: slot,
+      });
+      check("referrals", "ReferralTierChanged.rpc", rpc);
       break;
     }
     case "ReferralClaimed": {
-      const { data: row } = await db
-        .from("referrals")
-        .select("accrued_lamports")
-        .eq("referrer", ev.referrer.toBase58())
-        .maybeSingle();
-      const remaining = Math.max(0, (row?.accrued_lamports ?? 0) - Number(ev.amount));
-      await db.from("referrals").update({ accrued_lamports: remaining }).eq("referrer", ev.referrer.toBase58());
+      // Atomic decrement, clamped at 0 inside the RPC.
+      const rpc = await db.rpc("idx_apply_referral_claimed", {
+        p_referrer: ev.referrer.toBase58(),
+        p_amount: Number(ev.amount),
+        p_event_slot: slot,
+      });
+      check("referrals", "ReferralClaimed.rpc", rpc);
       break;
     }
     // ─── Phase 2: LP vault events ─────────────────────────────────────────
@@ -281,22 +304,15 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
-      const { data: row } = await db
-        .from("lp_positions")
-        .select("units, pending_units, cumulative_deposited, first_action_at")
-        .eq("user_address", userKey)
-        .maybeSingle();
-      await db.from("lp_positions").upsert(
-        {
-          user_address: userKey,
-          units: (BigInt(row?.units ?? "0") + ev.unitsMinted).toString(),
-          pending_units: row?.pending_units ?? "0",
-          cumulative_deposited: (row?.cumulative_deposited ?? 0) + Number(ev.amountLamports),
-          first_action_at: row?.first_action_at ?? blockTime,
-          last_action_at: blockTime,
-        },
-        { onConflict: "user_address" },
-      );
+      // Atomic SQL increment — no RMW race even under concurrent webhook delivery.
+      const rpc = await db.rpc("idx_apply_lp_deposit", {
+        p_user_address: userKey,
+        p_units_delta: ev.unitsMinted.toString(),
+        p_lamports_delta: Number(ev.amountLamports),
+        p_block_time: blockTime,
+        p_event_slot: slot,
+      });
+      check("lp_positions", "LpDeposited.rpc", rpc);
       break;
     }
     case "LpWithdrawRequested": {
@@ -314,22 +330,14 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
-      const { data: row } = await db
-        .from("lp_positions")
-        .select("units, pending_units")
-        .eq("user_address", userKey)
-        .maybeSingle();
-      const oldUnits = BigInt(row?.units ?? "0");
-      const oldPending = BigInt(row?.pending_units ?? "0");
-      await db
-        .from("lp_positions")
-        .update({
-          units: (oldUnits - ev.units).toString(),
-          pending_units: (oldPending + ev.units).toString(),
-          pending_unlock_slot: Number(ev.unlockSlot),
-          last_action_at: blockTime,
-        })
-        .eq("user_address", userKey);
+      const rpc = await db.rpc("idx_apply_lp_request", {
+        p_user_address: userKey,
+        p_units: ev.units.toString(),
+        p_unlock_slot: Number(ev.unlockSlot),
+        p_block_time: blockTime,
+        p_event_slot: slot,
+      });
+      check("lp_positions", "LpWithdrawRequested.rpc", rpc);
       break;
     }
     case "LpWithdrawCancelled": {
@@ -347,22 +355,13 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
-      const { data: row } = await db
-        .from("lp_positions")
-        .select("units, pending_units")
-        .eq("user_address", userKey)
-        .maybeSingle();
-      const oldUnits = BigInt(row?.units ?? "0");
-      const oldPending = BigInt(row?.pending_units ?? "0");
-      await db
-        .from("lp_positions")
-        .update({
-          units: (oldUnits + ev.unitsReturned).toString(),
-          pending_units: (oldPending - ev.unitsReturned).toString(),
-          pending_unlock_slot: 0,
-          last_action_at: blockTime,
-        })
-        .eq("user_address", userKey);
+      const rpc = await db.rpc("idx_apply_lp_cancel", {
+        p_user_address: userKey,
+        p_units_returned: ev.unitsReturned.toString(),
+        p_block_time: blockTime,
+        p_event_slot: slot,
+      });
+      check("lp_positions", "LpWithdrawCancelled.rpc", rpc);
       break;
     }
     case "LpWithdrawCompleted": {
@@ -382,21 +381,14 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         },
         { onConflict: "signature" },
       );
-      const { data: row } = await db
-        .from("lp_positions")
-        .select("pending_units, cumulative_withdrawn")
-        .eq("user_address", userKey)
-        .maybeSingle();
-      const oldPending = BigInt(row?.pending_units ?? "0");
-      await db
-        .from("lp_positions")
-        .update({
-          pending_units: (oldPending - ev.unitsBurned).toString(),
-          pending_unlock_slot: 0,
-          cumulative_withdrawn: (row?.cumulative_withdrawn ?? 0) + Number(ev.amountLamports),
-          last_action_at: blockTime,
-        })
-        .eq("user_address", userKey);
+      const rpc = await db.rpc("idx_apply_lp_complete", {
+        p_user_address: userKey,
+        p_units_burned: ev.unitsBurned.toString(),
+        p_lamports_out: Number(ev.amountLamports),
+        p_block_time: blockTime,
+        p_event_slot: slot,
+      });
+      check("lp_positions", "LpWithdrawCompleted.rpc", rpc);
       break;
     }
     case "VaultUnitValueUpdated": {
