@@ -2,9 +2,9 @@
   "name": "@playkaboom/anchor-tests",
   "version": "0.0.0",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
+  "//note": "No 'test' script — these tests require a running validator and are invoked exclusively via `anchor test` from Anchor.toml. Excluding from turbo's `npm test` pipeline by not defining the script here.",
   "scripts": {
-    "test": "ts-node --project tsconfig.json runner.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -15,7 +15,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "ts-node": "^10.9.2",
     "typescript": "^5.6.3"
   }
 }
