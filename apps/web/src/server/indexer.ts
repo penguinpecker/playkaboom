@@ -43,9 +43,17 @@ export interface IndexResult {
  * Dedupe is INSERT-FIRST (insert into processed_events with the signature PK;
  * if the row already existed, the insert is a no-op and we skip — closing the
  * 2026-05-11 TOCTOU where two concurrent Helius deliveries of the same sig
- * both passed a SELECT check and both applied their events). The atomic
- * indexer RPCs (idx_apply_*) are the second line of defense: even if dedupe
- * is bypassed they make handler writes commutative + slot-monotonic. */
+ * both passed a SELECT check and both applied their events).
+ *
+ * 2026-05-11 hardening: if applyEvent throws mid-loop, we DELETE the
+ * processed_events claim before rethrowing. Without this, a transient DB
+ * error after the claim but before all events applied would leave the sig
+ * marked processed with some of its events permanently dropped (retry from
+ * Helius/cron would be dedup-skipped). The DELETE is best-effort; if it
+ * itself fails, we still report the apply error — the sig stays claimed,
+ * which is the conservative side: at-most-once for the unapplied events
+ * vs at-least-once if we re-applied on retry (the atomic idx_apply_* RPCs
+ * already make every handler commutative, so at-least-once is safe). */
 export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResult> {
   const db = supabaseAdmin();
   let processed = 0;
@@ -86,8 +94,23 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
         skipped++;
         continue;
       }
-      for (const ev of events) {
-        await applyEvent(ev, tx);
+      // Apply events; on ANY throw, release the claim so a retry can re-attempt.
+      try {
+        for (const ev of events) {
+          await applyEvent(ev, tx);
+        }
+      } catch (applyErr) {
+        const del = await db
+          .from("processed_events")
+          .delete()
+          .eq("signature", tx.signature);
+        if (del.error) {
+          logger.error(
+            { sig: tx.signature, err: del.error.message },
+            "[indexer] FAILED to release processed_events claim after apply error — sig will be skipped on retry",
+          );
+        }
+        throw applyErr;
       }
       processed++;
     } catch (err) {

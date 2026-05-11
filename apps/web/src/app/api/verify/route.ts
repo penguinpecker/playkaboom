@@ -79,6 +79,10 @@ export async function GET(req: NextRequest) {
       verifySource: "chain" as "chain" | "pending",
     };
 
+    // Capture the cashout's game PDA for cross-check against the settle event.
+    // Same-player PDA reuse can cause settle_signature to point at a different
+    // game instance whose player matches but whose game PDA doesn't.
+    let cashoutGamePda: string | null = null;
     if (won) {
       game.player = won.player.toBase58();
       game.bet = Number(won.bet);
@@ -86,6 +90,7 @@ export async function GET(req: NextRequest) {
       game.multiplier_bps = Number(won.multiplierBps);
       game.safe_reveals = won.safeReveals;
       game.outcome = "won";
+      cashoutGamePda = won.game.toBase58();
     } else if (lost) {
       game.player = lost.player.toBase58();
       game.bet = Number(lost.bet);
@@ -93,6 +98,7 @@ export async function GET(req: NextRequest) {
       game.multiplier_bps = 0;
       game.safe_reveals = lost.safeReveals;
       game.outcome = "lost";
+      cashoutGamePda = lost.game.toBase58();
     }
 
     // If the input sig is itself a settle, fold in the settle event fields
@@ -138,13 +144,23 @@ export async function GET(req: NextRequest) {
         .digest();
       const verified = computed.equals(settleEv.commitment);
 
-      // If the cashout's player and the settle's player don't match, the
-      // indexer pointer was wrong — surface that explicitly rather than
-      // silently showing a verifying-but-unrelated game.
-      if (game.player && settleEv.player.toBase58() !== game.player) {
+      // Two cross-checks before declaring chain-direct verified:
+      //  1) settle event's player matches cashout's player
+      //  2) settle event's game PDA matches cashout's game PDA
+      // PDA reuse can cause #1 to pass while #2 fails (same player, different
+      // game instance). Both must hold — otherwise the indexer pointer is
+      // pointing at a sibling game's settle, not this one's.
+      const playerMismatch =
+        !!game.player && settleEv.player.toBase58() !== game.player;
+      const pdaMismatch =
+        !!cashoutGamePda && settleEv.game.toBase58() !== cashoutGamePda;
+
+      if (playerMismatch || pdaMismatch) {
         game.verified = false;
         game.verifySource = "pending";
-        out.warning = "Settle event belongs to a different player — verifier link mismatch";
+        out.warning = playerMismatch
+          ? "Settle event belongs to a different player — verifier link mismatch"
+          : "Settle event belongs to a different game instance at this PDA — verifier link mismatch";
       } else {
         game.player = settleEv.player.toBase58();
         game.mine_count = settleEv.mineCount;
