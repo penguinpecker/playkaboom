@@ -2632,3 +2632,88 @@ pub struct ReferralRepaired {
     pub referrer: Pubkey,
     pub slot: u64,
 }
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+//
+// `cargo test -p kaboom` runs these. CI now exercises them via the
+// `cargo test` step in .github/workflows/ci.yml. They cover the pure math
+// helpers (calc_multiplier, worst_case_payout, mul_div_floor) against
+// fixture rows shared with the TypeScript `calcMultiplierBps` test at
+// tests/sdk/multiplier-fixture.test.ts. If either implementation drifts,
+// that side's test breaks — preventing on-chain/off-chain divergence.
+
+#[cfg(test)]
+mod multiplier_tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct FixtureRow {
+        safe_reveals: u8,
+        mine_count: u8,
+        edge_bps: u16,
+        expected_bps: u64,
+    }
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        rows: Vec<FixtureRow>,
+    }
+
+    // Path is relative to this file (programs/kaboom/src/lib.rs). The
+    // fixture lives at the repo root under tests/fixtures/.
+    const FIXTURE_JSON: &str = include_str!("../../../tests/fixtures/multiplier.json");
+
+    #[test]
+    fn calc_multiplier_matches_shared_fixture() {
+        let fixture: Fixture = serde_json::from_str(FIXTURE_JSON)
+            .expect("fixture parse — regenerate tests/fixtures/multiplier.json");
+        assert!(!fixture.rows.is_empty(), "empty fixture");
+        let mut checked = 0usize;
+        for row in &fixture.rows {
+            let got = calc_multiplier(row.safe_reveals, row.mine_count, row.edge_bps)
+                .expect(&format!(
+                    "calc_multiplier({}, {}, {}) returned Err",
+                    row.safe_reveals, row.mine_count, row.edge_bps
+                ));
+            assert_eq!(
+                got, row.expected_bps,
+                "drift at (safe={}, mines={}, edge={}): on-chain={} vs fixture={}",
+                row.safe_reveals, row.mine_count, row.edge_bps, got, row.expected_bps
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, fixture.rows.len());
+    }
+
+    #[test]
+    fn calc_multiplier_zero_reveals_is_unit() {
+        for m in 1..=MAX_MINES {
+            for e in [0u16, 100, 200, 500, MAX_HOUSE_EDGE_BPS] {
+                assert_eq!(calc_multiplier(0, m, e).unwrap(), BPS);
+            }
+        }
+    }
+
+    #[test]
+    fn calc_multiplier_rejects_overfilled_grid() {
+        // safe + mines > 16 — must error.
+        assert!(calc_multiplier(15, 2, 200).is_err());
+        assert!(calc_multiplier(16, 1, 200).is_err());
+        assert!(calc_multiplier(2, 15, 200).is_err());
+    }
+
+    #[test]
+    fn worst_case_payout_monotonic_in_bet() {
+        // Doubling bet doubles worst-case payout (linear in bet).
+        let a = worst_case_payout(1_000_000, 3, 200).unwrap();
+        let b = worst_case_payout(2_000_000, 3, 200).unwrap();
+        assert_eq!(b, a * 2);
+    }
+
+    #[test]
+    fn mul_div_floor_handles_max_bet() {
+        // Sanity at the upper bound. u64::MAX / 2 * 5000 / 10000 = u64::MAX / 4
+        // (within rounding) — exercises the u128 intermediate without overflow.
+        let r = mul_div_floor(u64::MAX / 2, 5000, BPS).unwrap();
+        assert!(r > 0 && r < u64::MAX);
+    }
+}
