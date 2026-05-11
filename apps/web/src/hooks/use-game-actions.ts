@@ -488,6 +488,19 @@ export function useGameActions(): ActionsResult {
           store.applySafeReveal(idx, next, data.signature);
         }
       } catch (err) {
+        // Server confirmed the on-chain GameSession PDA is gone (stale
+        // localStorage token, or a previous game closed without clearing
+        // local state). Wipe the token and run cleanupStuck, which queries
+        // chain truth and walks the player to the right recovery path
+        // (none, in the typical case — PDA is already gone). Mirror of
+        // startGame's existing 409+needsCleanup handling on /api/commit.
+        if (err instanceof ApiClientError && err.payload.needsCleanup === true) {
+          store.setGameToken(null);
+          store.setPendingTile(null);
+          store.setError(null);
+          await cleanupStuck();
+          return;
+        }
         // G1: server refused to fire the FINAL safe reveal because that
         // would auto-flip on-chain status to Won and lock out cash_out.
         // Surface a clear prompt + leave status on "playing" so the Cash
@@ -511,7 +524,7 @@ export function useGameActions(): ActionsResult {
         toast(friendly, "error");
       }
     },
-    [walletAddress, store, signAndSend, pushHistory, toast],
+    [walletAddress, store, signAndSend, cleanupStuck, pushHistory, toast],
   );
 
   const cashOut = useCallback(async () => {
@@ -727,15 +740,24 @@ export function useGameActions(): ActionsResult {
       // Once we have a sig, the optimistic path above runs and the
       // confirmation .catch handles post-broadcast issues without
       // reverting UI. So this path is "true failure, no tx in flight".
+      cashOutInflightRef.current = false;
+      // 409+needsCleanup from /api/settle: the on-chain GameSession is
+      // already gone (PDA closed, stale token). Same recovery as reveal —
+      // wipe local token, run cleanupStuck which probes chain truth.
+      if (err instanceof ApiClientError && err.payload.needsCleanup === true) {
+        store.setGameToken(null);
+        store.setError(null);
+        await cleanupStuck();
+        return;
+      }
       const friendly = decodeProgramError(
         err instanceof Error ? err.message : "Cash out failed",
       );
       store.setStatus("playing");
       store.setError(friendly);
       toast(friendly, "error");
-      cashOutInflightRef.current = false;
     }
-  }, [walletAddress, store, signAndBroadcast, signAndSend, pushHistory, toast, getAccessToken]);
+  }, [walletAddress, store, signAndBroadcast, signAndSend, cleanupStuck, pushHistory, toast, getAccessToken]);
 
   return {
     authenticated,
