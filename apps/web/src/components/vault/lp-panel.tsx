@@ -100,10 +100,8 @@ export function VaultLpPanel() {
     busyRef.current = true;
     setBusy(true);
     fn()
-      .then((res) => {
-        const sig = typeof res === "string" ? res : "";
+      .then(() => {
         toast(`${label} confirmed`, "success");
-        if (sig) console.log(label, "sig:", sig);
       })
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : "failed";
