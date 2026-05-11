@@ -1,32 +1,41 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { verifyGame } from "@playkaboom/sdk";
 import { txExplorer, accountExplorer } from "@/lib/cluster";
-import { shortAddr } from "@/lib/format";
 
 interface GameRow {
   signature: string;
-  player: string;
-  bet: number;
-  mine_count: number;
-  outcome: "won" | "lost" | "expired";
-  payout: number;
-  multiplier_bps: number;
-  safe_reveals: number;
+  player: string | null;
+  bet: number | null;
+  mine_count: number | null;
+  outcome: "won" | "lost" | "expired" | null;
+  payout: number | null;
+  multiplier_bps: number | null;
+  safe_reveals: number | null;
   mine_layout: number | null;
   settled_layout: number | null;
-  commitment: string;
+  commitment: string | null;
   salt: string | null;
   settled_at: string;
   slot: number;
+  /** Chain-direct verification flag. true ONLY when the server re-fetched
+   *  the settle tx from RPC and SHA-256 matched on-chain. */
+  verified: boolean;
+  /** "chain" if a settle event was found+verified, "pending" if still
+   *  waiting for settle (cashout-only). */
+  verifySource: "chain" | "pending";
 }
 
 interface VerifyResponse {
   found: boolean;
   game?: GameRow;
+  /** "input" = caller passed a settle sig directly. "lookup" = caller passed
+   *  a cashout sig and the indexer's settle_signature pointer resolved it.
+   *  "missing" = no settle event observed yet. */
+  settleSource?: "input" | "lookup" | "missing";
+  warning?: string;
 }
 
 export default function VerifyPage() {
@@ -50,18 +59,14 @@ export default function VerifyPage() {
     };
   }, [sig]);
 
-  const verified = useMemo(() => {
-    if (!data?.found || !data.game) return null;
-    const g = data.game;
-    if (g.salt === null || g.settled_layout === null) return null;
-    try {
-      const salt = Buffer.from(g.salt, "hex");
-      const commitment = Buffer.from(g.commitment, "hex");
-      return verifyGame(g.settled_layout, g.mine_count, salt, commitment);
-    } catch {
-      return false;
-    }
-  }, [data]);
+  // Trust the chain-direct flag set by the server (which re-fetched the
+  // settle event from RPC and ran SHA-256 there). No DB-cached recomputation.
+  // verifySource "pending" → settle not yet observed, show pending state.
+  const verified: boolean | null = !data?.found || !data.game
+    ? null
+    : data.game.verifySource === "pending"
+      ? null
+      : data.game.verified;
 
   return (
     <div className="px-6 lg:px-8 pb-16 min-h-screen kinetic-grid">
@@ -148,20 +153,20 @@ function Verified({
           color: "border-emerald bg-emerald/5 text-emerald",
           icon: "verified",
           title: "VERIFIED",
-          body: "SHA-256 of (layout || mine_count || salt) matches the on-chain commitment. House did not cheat.",
+          body: "SHA-256 of (layout || mine_count || salt) matches the on-chain commitment, both fetched directly from Solana RPC. House did not cheat.",
         }
       : status === "mismatch"
         ? {
             color: "border-error bg-error/5 text-error",
             icon: "report",
             title: "MISMATCH",
-            body: "Hash does not match commitment. Report this immediately — the indexed proof is invalid.",
+            body: "Hash does not match commitment. Report this immediately — chain disagrees with the published proof.",
           }
         : {
             color: "border-amber bg-amber/5 text-amber",
             icon: "schedule",
             title: "PENDING",
-            body: "Game is not yet settled — salt has not been published on-chain.",
+            body: "Settle event not observed yet for this game. If you just won/cashed out, give the house signer a few seconds to publish the salt.",
           };
 
   return (
@@ -188,21 +193,28 @@ function Verified({
           <Field
             label="Player"
             mono
-            href={`/profile/${game.player}`}
-            value={game.player}
+            href={game.player ? `/profile/${game.player}` : undefined}
+            value={game.player ?? "—"}
           />
-          <Field label="Mine count" value={game.mine_count.toString()} />
+          <Field
+            label="Mine count"
+            value={game.mine_count !== null ? game.mine_count.toString() : "— (settle pending)"}
+          />
           <Field
             label="Mine layout (u16)"
             mono
             value={
               game.settled_layout !== null
                 ? `0x${game.settled_layout.toString(16).padStart(4, "0")}  (${game.settled_layout.toString(2).padStart(16, "0")})`
-                : "— (game not settled)"
+                : "— (settle pending)"
             }
           />
-          <Field label="Salt (hex)" mono value={game.salt ?? "— (game not settled)"} />
-          <Field label="Commitment (hex)" mono value={game.commitment} />
+          <Field label="Salt (hex)" mono value={game.salt ?? "— (settle pending)"} />
+          <Field
+            label="Commitment (hex)"
+            mono
+            value={game.commitment ?? "— (settle pending)"}
+          />
 
           <h3 className="font-headline text-xs font-bold uppercase tracking-widest text-on-surface mt-8 mb-4">
             Verification
@@ -245,7 +257,7 @@ function Verified({
             </h3>
             <Row
               label="Result"
-              value={game.outcome.toUpperCase()}
+              value={game.outcome?.toUpperCase() ?? "—"}
               color={
                 game.outcome === "won"
                   ? "text-primary"
@@ -256,22 +268,32 @@ function Verified({
             />
             <Row
               label="Bet"
-              value={`${(game.bet / LAMPORTS_PER_SOL).toFixed(4)} SOL`}
+              value={
+                game.bet !== null ? `${(game.bet / LAMPORTS_PER_SOL).toFixed(4)} SOL` : "—"
+              }
               color="text-on-surface"
             />
             <Row
               label="Payout"
-              value={`${(game.payout / LAMPORTS_PER_SOL).toFixed(4)} SOL`}
+              value={
+                game.payout !== null
+                  ? `${(game.payout / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+                  : "—"
+              }
               color="text-primary"
             />
             <Row
               label="Multiplier"
-              value={`${(game.multiplier_bps / 10_000).toFixed(2)}×`}
+              value={
+                game.multiplier_bps !== null
+                  ? `${(game.multiplier_bps / 10_000).toFixed(2)}×`
+                  : "—"
+              }
               color="text-secondary"
             />
             <Row
               label="Safe reveals"
-              value={game.safe_reveals.toString()}
+              value={game.safe_reveals !== null ? game.safe_reveals.toString() : "—"}
               color="text-tertiary"
             />
             <Row
@@ -286,14 +308,16 @@ function Verified({
             />
           </div>
 
-          <a
-            href={accountExplorer(game.player)}
-            target="_blank"
-            rel="noreferrer"
-            className="block text-center py-3 border border-primary/30 font-headline text-[10px] font-bold tracking-widest text-primary hover:bg-primary/10"
-          >
-            VIEW PLAYER ON-CHAIN
-          </a>
+          {game.player && (
+            <a
+              href={accountExplorer(game.player)}
+              target="_blank"
+              rel="noreferrer"
+              className="block text-center py-3 border border-primary/30 font-headline text-[10px] font-bold tracking-widest text-primary hover:bg-primary/10"
+            >
+              VIEW PLAYER ON-CHAIN
+            </a>
+          )}
         </div>
       </div>
     </>
@@ -309,7 +333,7 @@ function Field({
   label: string;
   value: string;
   mono?: boolean;
-  href?: string;
+  href?: string | undefined;
 }) {
   const cls = `${mono ? "font-mono" : "font-body"} text-[11px] text-primary break-all`;
   return (
