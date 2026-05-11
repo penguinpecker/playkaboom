@@ -245,19 +245,13 @@ export function useGameActions(): ActionsResult {
     // guarantees the reactive lock fires; if we bail, we revert.
     store.setStatus("starting");
     store.setError(null);
-    // eslint-disable-next-line no-console
-    console.log("[startGame] click received, status=starting");
 
     if (!authenticated) {
-      // eslint-disable-next-line no-console
-      console.warn("[startGame] not authenticated — redirecting to login");
       store.setStatus("idle");
       login();
       return;
     }
     if (!walletAddress) {
-      // eslint-disable-next-line no-console
-      console.warn("[startGame] no wallet address — Privy hydration race?");
       store.setStatus("idle");
       store.setError("Wallet not ready — try again in a second.");
       toast("Wallet not ready — try again in a second.", "amber");
@@ -319,10 +313,7 @@ export function useGameActions(): ActionsResult {
       // truth (on-chain game exists or not) and the banner will show.
       // We deliberately do NOT setStatus("idle") here — that would
       // recreate the original race the optimistic path is solving.
-      void confirmation.catch((err) => {
-        const msg = err instanceof Error ? err.message : "Confirmation timed out";
-        // eslint-disable-next-line no-console
-        console.warn("[startGame] confirmation problem:", msg);
+      void confirmation.catch(() => {
         toast(`Confirmation slow — your game may take an extra moment to load`, "amber");
       });
     } catch (err) {
@@ -410,11 +401,9 @@ export function useGameActions(): ActionsResult {
                   throw new Error("poll deadline reached");
                 })();
                 await Promise.any([wsClosed, pollClosed]);
-                // eslint-disable-next-line no-console
-                console.log("[mine/bg] on-chain GameSession verified gone");
               } catch {
-                // eslint-disable-next-line no-console
-                console.warn("[mine/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
+                /* PDA still present after 30s — releasing lock anyway;
+                   the recovery banner will pick up. */
               } finally {
                 store.setPendingClose(false);
               }
@@ -518,21 +507,15 @@ export function useGameActions(): ActionsResult {
     store.setStatus("cashing");
 
     try {
-      // eslint-disable-next-line no-console
-      console.log("[cashOut] requesting cashout ix from server");
       const cashRes = await apiSettle({ player: walletAddress, gameToken: token });
       if (!("phase" in cashRes) || cashRes.phase !== "cashout") {
         const msg = "Unexpected cash-out response from server. Try again.";
         store.setStatus("playing");
         store.setError(msg);
         toast(msg, "error");
-        // eslint-disable-next-line no-console
-        console.warn("[cashOut] unexpected response shape:", cashRes);
         cashOutInflightRef.current = false;
         return;
       }
-      // eslint-disable-next-line no-console
-      console.log("[cashOut] signing + broadcasting cash_out ix");
 
       // OPTIMISTIC pattern (same as startGame): broadcast the tx, get
       // the sig back immediately (~200ms after RPC ACK), then update
@@ -546,8 +529,6 @@ export function useGameActions(): ActionsResult {
       const { sig, confirmation } = await signAndBroadcast(
         deserializeIx(cashRes.instruction),
       );
-      // eslint-disable-next-line no-console
-      console.log("[cashOut] tx broadcast, sig:", sig);
 
       const payout = s.bet * s.multiplier;
       store.applyCashOut(payout);
@@ -567,16 +548,9 @@ export function useGameActions(): ActionsResult {
       const settleToken: string = token;
       const player = walletAddress;
 
-      void confirmation
-        .then(() => {
-          // eslint-disable-next-line no-console
-          console.log("[cashOut] cash_out tx confirmed");
-        })
-        .catch((err) => {
-          // eslint-disable-next-line no-console
-          console.warn("[cashOut] confirm failed:", err);
-          toast("Cashout confirmation slow — winnings will arrive momentarily", "amber");
-        });
+      void confirmation.catch(() => {
+        toast("Cashout confirmation slow — winnings will arrive momentarily", "amber");
+      });
 
       void (async () => {
         // Wait for cash_out to confirm on chain before calling /api/settle.
@@ -591,8 +565,6 @@ export function useGameActions(): ActionsResult {
         // throws we still fall through to the PDA-close watch below
         // (which is what the engage-button lock actually waits on).
         try {
-          // eslint-disable-next-line no-console
-          console.log("[cashOut/bg] running server settle + close");
           const settleRes = await apiSettle({ player, gameToken: settleToken, phase: "settle" });
 
           // CRITICAL: await on-chain confirmation of settle_game before
@@ -633,13 +605,12 @@ export function useGameActions(): ActionsResult {
             // actually landed. We poll on-chain below for the PDA's
             // actual deletion, which is the source of truth.
             void signAndSend(deserializeIx(c.instruction)).catch(() => {});
-          } else if (c.active) {
-            // eslint-disable-next-line no-console
-            console.warn("[cashOut/bg] cleanup returned non-actionable:", c.action);
           }
-        } catch (bgErr) {
-          // eslint-disable-next-line no-console
-          console.warn("[cashOut/bg] settle/cleanup non-fatal:", bgErr);
+          /* non-actionable cleanup actions are expected (waiting on close);
+             the on-chain PDA poll below is the source of truth. */
+        } catch {
+          /* settle/cleanup is best-effort. The on-chain PDA-close watch
+             below is what actually gates the engage-button unlock. */
         }
 
         // Engage button stays locked via pendingClose until the on-chain
@@ -671,11 +642,9 @@ export function useGameActions(): ActionsResult {
             throw new Error("poll deadline reached");
           })();
           await Promise.any([wsClosed, pollClosed]);
-          // eslint-disable-next-line no-console
-          console.log("[cashOut/bg] on-chain GameSession verified gone");
         } catch {
-          // eslint-disable-next-line no-console
-          console.warn("[cashOut/bg] PDA still present after 30s — releasing lock anyway; banner will show recovery");
+          /* PDA still present after 30s — releasing lock anyway; the
+             recovery banner takes over. */
         } finally {
           store.setPendingClose(false);
         }
@@ -689,8 +658,6 @@ export function useGameActions(): ActionsResult {
       const friendly = decodeProgramError(
         err instanceof Error ? err.message : "Cash out failed",
       );
-      // eslint-disable-next-line no-console
-      console.error("[cashOut] pre-broadcast failure:", err);
       store.setStatus("playing");
       store.setError(friendly);
       toast(friendly, "error");
