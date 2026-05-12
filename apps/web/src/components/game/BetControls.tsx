@@ -360,7 +360,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
                 the on-chain check is comparing against the vault. */}
             {state.bet > 0 && capacity.worstCasePayoutSol > 0 && !blockReason && (
               <div className="mt-2 text-[10px] font-headline uppercase tracking-widest text-on-surface-variant/50">
-                Worst-case payout if you reveal all{" "}
+                Max payout if you clear all{" "}
                 <span className="text-primary">{GAME_CONFIG.GRID_SIZE - state.mineCount}</span>{" "}
                 safe tiles:{" "}
                 <span className="text-emerald">

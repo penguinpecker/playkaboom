@@ -37,6 +37,14 @@ export default function ReferralsPage() {
   const [refClicks, setRefClicks] = useState<number | null>(null);
   const [refSignups, setRefSignups] = useState<number | null>(null);
   const [refConfirmed, setRefConfirmed] = useState<number | null>(null);
+  type RefereeRow = {
+    player: string;
+    gamesPlayed: string;
+    totalWagered: string;
+    totalPayouts: string;
+    lastPlayedUnix: number;
+  };
+  const [referees, setReferees] = useState<RefereeRow[] | null>(null);
   const { getAccessToken } = usePrivy();
 
   useEffect(() => {
@@ -103,6 +111,35 @@ export default function ReferralsPage() {
       cancelled = true;
     };
   }, [address, getAccessToken, qc]);
+
+  // Fetch the wallet's on-chain referees list. Scans PlayerStats via
+  // getProgramAccounts so the result is ground-truth, not Supabase-funnel
+  // dependent. Auth-gated (only the wallet owner can pull their list).
+  useEffect(() => {
+    if (!address) {
+      setReferees(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+        const res = await fetch(`/api/ref/referees/${address}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`referees ${res.status}`);
+        const data = (await res.json()) as { referees: RefereeRow[] };
+        if (!cancelled) setReferees(data.referees);
+      } catch {
+        if (!cancelled) setReferees([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, getAccessToken]);
 
   // refCodeLoading: while the /api/ref/code/<wallet> call is in flight we
   // render a placeholder rather than the legacy ?ref=<addr> form, which
@@ -267,10 +304,6 @@ export default function ReferralsPage() {
               </h2>
               {refClicks != null && (
                 <div className="flex gap-3 font-headline text-[10px] uppercase tracking-widest">
-                  <span className="text-on-surface-variant">
-                    <span className="text-primary font-bold">{refClicks}</span> visits
-                  </span>
-                  <span className="text-on-surface-variant/60">→</span>
                   <span className="text-on-surface-variant">
                     <span className="text-secondary font-bold">{refSignups ?? 0}</span> signups
                   </span>
@@ -440,10 +473,63 @@ export default function ReferralsPage() {
               </div>
             </div>
           </div>
+
+          {/* Referees list — on-chain ground truth via PlayerStats scan */}
+          <div className="bg-surface-container-low border border-outline-variant/10 stealth-card p-6 mt-6">
+            <h2 className="font-headline text-xs font-bold tracking-widest text-on-surface uppercase mb-4">
+              Your referees{referees ? ` (${referees.length})` : ""}
+            </h2>
+            {referees == null ? (
+              <div className="font-mono text-xs text-on-surface-variant/60">Loading…</div>
+            ) : referees.length === 0 ? (
+              <div className="font-mono text-xs text-on-surface-variant/60">
+                No referees yet. Share your link above — referees show up here as soon as they complete <code>set_referrer</code> on-chain.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/70 border-b border-outline-variant/10">
+                      <th className="py-2 pr-3">Wallet</th>
+                      <th className="py-2 pr-3 text-right">Games</th>
+                      <th className="py-2 pr-3 text-right">Wagered (SOL)</th>
+                      <th className="py-2 pr-3 text-right">Payouts (SOL)</th>
+                      <th className="py-2 text-right">Last played</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {referees.map((r) => {
+                      const wageredSol = Number(BigInt(r.totalWagered)) / LAMPORTS_PER_SOL;
+                      const payoutsSol = Number(BigInt(r.totalPayouts)) / LAMPORTS_PER_SOL;
+                      const last = r.lastPlayedUnix > 0
+                        ? formatRelativeAgo(Date.now() / 1000 - r.lastPlayedUnix)
+                        : "never";
+                      return (
+                        <tr key={r.player} className="border-b border-outline-variant/5 last:border-b-0">
+                          <td className="py-2 pr-3 font-mono text-on-surface">{shortAddr(r.player)}</td>
+                          <td className="py-2 pr-3 font-mono text-right text-on-surface-variant">{r.gamesPlayed}</td>
+                          <td className="py-2 pr-3 font-mono text-right text-primary">{wageredSol.toFixed(4)}</td>
+                          <td className="py-2 pr-3 font-mono text-right text-secondary">{payoutsSol.toFixed(4)}</td>
+                          <td className="py-2 font-mono text-right text-on-surface-variant/70">{last}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </>
       )}
     </div>
   );
+}
+
+function formatRelativeAgo(seconds: number): string {
+  if (seconds < 60) return `${Math.floor(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 function tierColor(tier: number): string {
