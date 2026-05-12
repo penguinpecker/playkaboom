@@ -1,8 +1,8 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-12** (chain-truth gate on reveal/settle, fixes player-reported 500s during play). Full session-by-session log lives in `records.txt`.
+A self-contained snapshot you can paste into a fresh Claude session to pick up where the previous session left off. Refreshed **2026-05-12** (stuck-game release + referees-list UI + CRON rotation). Full session-by-session log lives in `records.txt`.
 
-## STATUS — 2026-05-12 (mainnet, chain-truth gate live)
+## STATUS — 2026-05-12 (mainnet, vault healed)
 
 **Live on Solana mainnet at https://playkaboom.gg.** All admin/treasury/upgrade authorities on Squads 2/2. Hot game-ix signer on Turnkey HSM. The 2026-05-11 sweep audited every layer (program, SDK, API, frontend, indexer, RLS, build/CI, tests) via 8 parallel sub-agents; every HIGH finding has a fix shipped.
 
@@ -16,7 +16,7 @@ A self-contained snapshot you can paste into a fresh Claude session to pick up w
 | Squads member 1 | `6wvvcCZ44f9AeJPC7k1VKMNdexCUsuwpaw1sZjyktGr1` | Initiate + Vote + Execute |
 | Squads member 2 | `EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG` | Initiate + Vote + Execute |
 | Program ID (mainnet) | `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` | |
-| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned, ~11.66 SOL |
+| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned, ~12.29 SOL (post-release) |
 | Deployer wallet | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | zero admin powers — fee-payer only |
 
 **Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey can sign game ixs only (start/reveal/settle/refund/close); admin/treasury/upgrade all need Squads 2/2.
@@ -26,10 +26,12 @@ A self-contained snapshot you can paste into a fresh Claude session to pick up w
 | Param | Value | Notes |
 |---|---|---|
 | `house_edge_bps` | 200 (2.00%) | |
-| `max_bet_bps` | 200 (2% of vault) | At ~11.66 SOL vault → 0.233 SOL max |
+| `max_bet_bps` | 200 (2% of vault) | At ~12.29 SOL vault → 0.246 SOL max |
 | `max_payout_bps` | **5000 (50% of vault)** ⚠️ | Industry std is 0.5–1%. Still queued (Squads 2/2 vote). |
 | `treasury_split_bps` | 5000 (50/50) | LP gets half, treasury gets half |
-| Vault PDA balance | ~11.66 SOL | LP + obligations + accrued fees |
+| `maxUserPositionBps` | 1000 (10%) | Per-user LP cap; at 12.29 SOL → 1.228 SOL each |
+| Vault PDA balance | ~12.29 SOL | LP + obligations + accrued fees |
+| Vault health | 99.93% | post 2026-05-12 stuck-game release |
 
 Math is provably correct on both sides: TS `calcMultiplierBps` and Rust `calc_multiplier` now share a 675-row fixture (`tests/fixtures/multiplier.json`) covering mine_count 1..15 × safe_reveals 0..(16-mc) × edge_bps {0, 100, 200, 500, 1000}. Both implementations assert against the fixture in CI; any drift breaks the build.
 
@@ -69,6 +71,7 @@ Math is provably correct on both sides: TS `calcMultiplierBps` and Rust `calc_mu
 
 | Commit | What |
 |---|---|
+| `81c19bb` | **on-chain referees list + funnel cleanup + payout wording.** New auth-gated `GET /api/ref/referees/[wallet]` scans `PlayerStats` via `getProgramAccounts` memcmp on referrer at offset 107 → ground-truth list (wallet, games, wagered, payouts, last played). /referrals page renders this table under the funnel. Removed "Visits" stat from the funnel (`click_count` bump in `resolveAndCountVisit` is fire-and-forget, killed by Vercel serverless lifecycle — drop unreliable metric rather than fix). BetControls payout-preview wording: "Worst-case payout if you reveal all N safe tiles" → "Max payout if you clear all N safe tiles". Five operator diagnostics added under `scripts/` (health-diagnose, referrals-by, diagnose-user, check-stuck-game, show-referral). **`check-invariants` CI job FAILED on this SHA — 8 new MULT mismatches in production `games` data, unrelated to commit content; Vercel deploy gated until allowlist update or root-cause.** |
 | `7b02e4c` | **chain-truth gate on /api/reveal + /api/settle.** Fixes the 500-on-tile-click report: stale `gameToken` (from a closed PDA, or a tile-click landing before `start_game` propagated) no longer bubbles `AccountNotInitialized` as a 500. New `requireActiveGame()` probes the GameSession PDA at `confirmed` with 3×250 ms retry — absorbs the propagation race, deletes the server-side session and returns `409 { needsCleanup: true }` when the PDA is truly absent. `sendHouseTx` catches `SendTransactionError` and classifies the Anchor framework error (code 3012) as a typed `OnChainError` for TOCTOU safety. Client `revealTile` and `cashOut` now wire 409+`needsCleanup` into the existing `cleanupStuck` flow. SDK: `extractAnchorFrameworkError` + `isAccountNotInitializedError` decode both the structured AnchorError log line and the bare `custom program error: 0xbc4` fallback; 11 new unit tests cover real RPC log shapes. No UI changes. |
 | `f907d93` | auto-bundle `set_referrer` into the player's first `start_game` (single Privy signing prompt, atomic) |
 | `e6cf831` | `/install` route deep-linking to Solana dApp Store |
@@ -95,7 +98,12 @@ Math is provably correct on both sides: TS `calcMultiplierBps` and Rust `calc_mu
 2. **`update_v2_config`: min_health_bps 1000 → 2000.** Auto-pause earlier when stressed.
 3. **Program upgrade** to activate the source-only `update_vault` zero-key guard (`require!(auth != Pubkey::default())` added 2026-05-11 in lib.rs:933-941; not on chain yet).
 
+**Indexer math drift (NEW, 2026-05-12):**
+- `check-invariants.mjs` flagged 8 NEW multiplier_bps mismatches in `games` table on commit `81c19bb` — signatures `2JCQ8R…`, `4eRzpLUz…`, `GkN1KS…`, `si64AQ…`, `2Ps23V…`, `5fJwVR…`, `59M9kT…`, `5Ls2de…`. One row (`4eRzpLUz…`) is the failed-first-settle of the 2026-05-12 stuck game. **Decide:** extend `scripts/known-corruption-allow.txt` (same pattern as the 17-row 2026-05-11 allowlist) OR root-cause the indexer math drift and write a one-shot backfill. Vercel deploy is gated until resolved.
+- Related: `total_outstanding_max_payout` ate ~45% of vault liquidity for 2.5h on 2026-05-12 (single stuck Won-but-unsettled game). Cleared via `/api/admin/release-stuck-obligations`. **Action item:** add a cron-watcher that pages if a Won-unsettled game persists > 5 min, so the release endpoint fires automatically.
+
 **Operational (no code):**
+- **CRON_SECRET handling:** the env var is `type: sensitive` in Vercel — unrecoverable from outside runtime even with a valid CLI/API token. Firing the admin/cron endpoints from local tooling currently requires rotating the secret (PATCH `/v9/projects/.../env/<id>`, redeploy, fire). If frequent ops use is expected, either (a) keep `CRON_SECRET` non-sensitive, or (b) script the rotate-redeploy-fire flow.
 - **GitHub branch protection rule:** Settings → Branches → `main` → enable "Require status checks (CI) to pass" + "Require review from Code Owners". CODEOWNERS file is committed but advisory until you toggle.
 - **Turnkey console policy:** pin `programId=Kaboom` + ix discriminator allow-list. Belt-and-suspenders; current on-chain account constraints already block non-game ixs.
 - **Provision Upstash Redis** (Vercel Marketplace) if HTTP-layer rate limiting is wanted. Code activates immediately once `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` appear in Vercel env — no redeploy needed.

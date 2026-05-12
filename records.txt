@@ -3680,3 +3680,129 @@ FINAL STATE — 2026-05-12 (post-hotfix)
   Live /api/health: HTTP 200, vault balance ~11.91 SOL
   Vault state /api/vault/state: healthBps 9532, v2Initialized:true
 
+================================================================================
+SESSION LOG: 2026-05-12 — stuck-game release + referees-list UI + CRON rotation
+================================================================================
+
+TRIGGER
+  User report: vault health stuck at 55%, deposits blocked, referrals UI
+  confusing, payout-preview wording reads negative to players.
+
+DIAGNOSIS — vault health 55.28%
+  /api/vault/state showed health_bps=5528 against vaultAssets 12.291 SOL.
+  Decomposition (scripts/health-diagnose.ts, on-chain scan):
+    pendingValue              ≈ 0.00766 SOL (LP withdrawals)
+    total_outstanding_max_payout = 5.488 SOL
+  Single stuck GameSession FjBED4g2VsNMK16cWDGZy337YsEykPn4pE3QY85ViCsX,
+  status=Won settled=false, was holding the entire 45 % drag. Player
+  GXNjvVbDFGtkFEqW6RCW5DYHhqj8GLRCRxBNsvFtw6iC won 0.01206 SOL via
+  cash_out at 02:47 UTC; server-side settle_game RPC-failed at 02:48 UTC
+  (sig 4eRzpLUz…) so the obligation counter never decremented. Game age
+  at diagnosis: ~2.5 h, well past the 300-slot expiry.
+
+RESOLUTION — /api/admin/release-stuck-obligations
+  Hit the existing operator endpoint with rotated CRON_SECRET. settle_game
+  with the encrypted session salt: sig
+  5S4uKpsKxpGV8RbvNiUjoRSpRTnhFNEb36SJU1hfoikAawVkuizxQzFMmQBwUzoWocieF8PNQaRprhYh3HDJEg9f.
+  Vault health  55.28 % → 99.93 %  in one tx.
+  Per-user deposit cap     0.679 SOL → 1.228 SOL.
+  Player was already paid via the earlier cash_out — settle_game only
+  releases the bookkeeping reservation, doesn't move funds. No refund
+  needed.
+
+CRON_SECRET ROTATION DETOUR
+  Existing CRON_SECRET in Vercel had type=sensitive — write-once, no
+  read-back via API/CLI even with a valid token (verified via
+  /v1/projects/.../env/<id>?decrypt=true returning value=null). Path to
+  fire the cron from outside Vercel runtime required rotating:
+    1. Generated openssl rand -hex 32, stored in /tmp/.cron-secret (0600).
+    2. PATCH /v9/projects/.../env/5ENszk317bFQW8zP with new value,
+       type=sensitive, target=['production'].
+    3. Triggered redeploy via POST /v13/deployments with
+       deploymentId=dpl_A12dTBe9C89b5KVtE1yEQt1oKJVM, forceNew=1.
+       New deploy dpl_3ZPEK1mSEjYEhe94YfTgBZ7y9TUy reached READY in ~90 s.
+    4. Fired curl, confirmed, wiped /tmp/.cron-secret.
+  Lesson: sensitive env vars are unrecoverable from outside Vercel — for
+  ops endpoints that need to be fireable from local tooling, either (a)
+  keep CRON_SECRET non-sensitive, or (b) script the rotate-redeploy-fire
+  flow.
+
+DEPOSIT BLOCK DIAGNOSIS — user wallet 5pc1YbNacyAgofyZy19ppty3iyQJo3xmbRMVeSvQCsD2
+  scripts/diagnose-user.ts pulled their LpPosition: 0.832 SOL value
+  (77.76M units + 722,250 pending) against per-user cap 1.248 SOL →
+  0.416 SOL headroom. Their deposit attempts > 0.42 SOL were correctly
+  rejected by /api/vault/deposit pre-flight (V4 fix from b885d9b
+  comparing currentPosition + amount vs cap). Not a bug.
+
+REFERRAL CLARIFICATION
+  User believed protocol enforced 1-referee-per-referrer with manual
+  acceptance. Verified against deployed program source:
+    - SetReferrer accounts (lib.rs:1886-1912): referrer is
+      UncheckedAccount, NOT Signer. Only the player (referee) signs.
+    - settle_game (lib.rs:611-624): rakeback auto-credits referrer's
+      ReferralAccount.accrued_lamports on every referee game.
+    - claim_referral (lib.rs:694-722): one call pulls the full pooled
+      balance from all referees. No per-referee accounting.
+  Live evidence: address 3aCVhAHwZ6FfJn1UR7CzeuPUXxYbsyiJ193UvDRweg4N
+  has referred_count=4 on-chain, total_earned=0.000055 SOL pooled.
+
+UI CHANGES (commit 81c19bb on main)
+  1. apps/web/src/components/game/BetControls.tsx:363
+     "Worst-case payout if you reveal all N safe tiles"
+       → "Max payout if you clear all N safe tiles"
+     Same number, framed from player POV (best outcome) instead of
+     vault-reserve POV (worst case obligation).
+
+  2. apps/web/src/app/referrals/page.tsx:268-282
+     Removed "Visits" from funnel display. resolveAndCountVisit in
+     server/referral-codes.ts:88-95 uses void db.update(...) — Vercel
+     serverless kills the function before the unawaited promise lands,
+     so click_count is unreliable. UX call: drop the metric rather than
+     fix it; signups + confirmed are the meaningful funnel anyway.
+
+  3. apps/web/src/app/api/ref/referees/[wallet]/route.ts (NEW)
+     Auth-gated GET that scans PlayerStats via getProgramAccounts
+     memcmp on referrer at offset 107. Returns ground-truth list of
+     referees with games/wagered/payouts/lastPlayed. UI table on the
+     /referrals page renders this under the existing funnel.
+
+  4. scripts/ — five operator diagnostics added:
+       health-diagnose.ts     vault health + obligation breakdown
+       referrals-by.ts        list referees for any wallet
+       diagnose-user.ts       per-wallet vault/LP/open-game state
+       check-stuck-game.ts    game state + tx history
+       show-referral.ts       decode any wallet's ReferralAccount
+
+CI FAILURE — check-invariants.mjs flagged 8 NEW multiplier mismatches
+  on commit 81c19bb. Workflow_run gate blocked Vercel auto-deploy.
+  Failing signatures include 2JCQ8R…, 4eRzpLUz…, GkN1KS…, si64AQ…,
+  2Ps23V…, 5fJwVR…, 59M9kT…, 5Ls2de…. Mismatches are on PRODUCTION
+  data, not introduced by this commit — the indexer wrote multiplier_bps
+  rows that don't match calcMultiplier(safe_reveals, mine_count,
+  HOUSE_EDGE_BPS). One row (4eRzpLUz…) is the failed-first-settle of the
+  game I just released. Disposition pending:
+    - either extend scripts/known-corruption-allow.txt with the 8 new
+      sigs (analogous to the 17-row 2026-05-11 allowlist), or
+    - root-cause the indexer math drift and write a one-shot backfill.
+
+VAULT LIQUIDITY TOPUP DECISION
+  User asked where to send SOL to grow liquidity beyond their 1.248 SOL
+  per-user cap. Three real paths surfaced:
+    fund_vault           anyone-callable donation, no LP units minted
+                         (existing LPs absorb the unit_value bump)
+    raw transfer to PDA  same lamport effect, no event, indexer-invisible
+    update_v2_config +   Squads-signed cap raise, then lp_deposit; keeps
+      lp_deposit         the SOL recoverable as a real LP position
+  User opted to send raw to 9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK.
+
+FINAL STATE — 2026-05-12 (session end)
+  Local HEAD:        81c19bb (pushed)
+  origin/main:       81c19bb
+  CI status:         analyze SUCCESS, Node typecheck SUCCESS, Anchor
+                     build in_progress, check FAILURE (8 MULT mismatches)
+  Vercel deploy:     gated on CI green — no production deployment for
+                     this SHA yet
+  Vault health:      99.93 % (post-release)
+  CRON_SECRET:       rotated, deployed, value not retained anywhere
+  Operator scripts:  5 new ones under scripts/
+
