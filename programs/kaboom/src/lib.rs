@@ -45,17 +45,25 @@ pub const MIN_MINES: u8 = 1;
 pub const MAX_MINES: u8 = 15;
 pub const BPS: u64 = 10_000;
 pub const GAME_EXPIRY_SLOTS: u64 = 300;
-/// Player can self-close a Won/Lost-but-unsettled game immediately.
-/// Was 600 slots (~4 min) to let the server's settle_game win the race
-/// vs. close_unsettled_game. Lowered to 0 per operator decision (2026-05-17)
-/// so stuck-game recovery is instant. Trade-off: if a player closes
-/// immediately after cash_out and beats the server, the on-chain
-/// fairness proof for that game never publishes (mine_layout/salt stay
-/// null on the games row → verifier page shows "PENDING" forever for
-/// that signature). On-chain accounting stays consistent —
+/// Player can self-close a Won/Lost-but-unsettled game after a brief
+/// settlement window. Was 600 slots (~4 min); revised down to 38 slots
+/// (~15s at 400ms/slot) on 2026-05-17 per operator decision.
+///
+/// The 15-second window gives the server's settle_game realistic time
+/// to win the race against the player's close_unsettled_game in the
+/// normal happy-path (server settles within 1-3s of cash_out under
+/// healthy conditions), so on-chain fairness proofs continue to publish.
+/// After 15s, the player can self-recover instantly — handles the
+/// actual stuck-game scenarios (lost game token, server downtime)
+/// without the previous 4-minute wait.
+///
+/// If a player DOES close in the window (e.g. they were quick and the
+/// server was slow), on-chain accounting still stays consistent:
 /// close_unsettled_game decrements total_outstanding_max_payout the
-/// same as settle_game would have.
-pub const CLOSE_UNSETTLED_EXPIRY_SLOTS: u64 = 0;
+/// same as settle_game would. The trade-off is the missing fairness
+/// proof for that one game — verifier shows "PENDING" forever for
+/// that sig. Expected to be rare given the 15s window.
+pub const CLOSE_UNSETTLED_EXPIRY_SLOTS: u64 = 38;
 pub const MIN_BET_LAMPORTS: u64 = 1_000_000;
 
 pub const MAX_HOUSE_EDGE_BPS: u16 = 1_000; // 10%
