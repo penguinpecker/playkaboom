@@ -159,6 +159,9 @@ export interface SettleGameErArgs {
   ctx: ErBuildContext;
   player: PublicKey;
   houseAuthority: PublicKey;
+  /** Treasury account (must match vault.treasury) — receives the
+   *  50/50 split per settle (see settle_game_er in lib.rs). */
+  treasury: PublicKey;
   mineLayout: number;
   salt: Buffer;
   referrer?: PublicKey;
@@ -180,6 +183,7 @@ export function buildSettleGameEr(args: SettleGameErArgs): TransactionInstructio
     writable(gamePda),
     writable(statsPda),
     readonly(args.houseAuthority, true),
+    writable(args.treasury),
   ];
   if (args.referrer) {
     // Referral PDA derivation lives in @playkaboom/sdk but is imported

@@ -7,7 +7,7 @@ import {
 } from "@playkaboom/sdk";
 import { ApiError, jsonError } from "@/server/api-helpers";
 import { getConnection } from "@/server/connection";
-import { housePubkey, programId } from "@/server/env";
+import { housePubkey, programId, treasuryPubkey } from "@/server/env";
 import { supabaseAdmin } from "@/server/db/supabase";
 import { decryptSession } from "@/server/session";
 import { saltBuffer } from "@/server/game";
@@ -180,6 +180,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             ctx,
             player: game.player,
             houseAuthority: housePk,
+            treasury: treasuryPubkey(),
             mineLayout: session.mineLayout,
             salt: saltBuffer(session),
           }),

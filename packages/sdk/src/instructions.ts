@@ -232,6 +232,10 @@ export interface SettleGameArgs {
   ctx: BuildContext;
   player: PublicKey;
   houseAuthority: PublicKey;
+  /** Treasury account (must match vault.treasury). Required since the
+   *  2026-05-16 treasury/LP profit split — receives `bet × house_edge ×
+   *  treasury_split_bps / BPS²` lamports per settle. */
+  treasury: PublicKey;
   mineLayout: number;
   salt: Buffer;
   /** If the player has a referrer, pass it to credit the rakeback in the same tx. */
@@ -254,6 +258,7 @@ export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
     writable(gamePda),
     writable(statsPda),
     readonly(args.houseAuthority, true),
+    writable(args.treasury),
   ];
   if (args.referrer) {
     const [referralPda] = deriveReferralPda(args.ctx.programId, args.referrer);
@@ -263,6 +268,28 @@ export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
     programId: args.ctx.programId,
     keys,
     data,
+  });
+}
+
+// ── unlock_seed ──────────────────────────────────────────────────────────────
+export interface UnlockSeedArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  destination: PublicKey;
+}
+
+export function buildUnlockSeed(args: UnlockSeedArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      readonly(args.owner, true),
+      writable(args.destination),
+    ],
+    data: ixDiscriminator("unlock_seed"),
   });
 }
 
