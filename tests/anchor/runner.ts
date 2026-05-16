@@ -41,6 +41,7 @@ import {
   deriveVaultPda,
   deriveV2StatePda,
   deriveGamePda,
+  deriveGameV2Pda,
   derivePlayerStatsPda,
   computeCommitment,
   type BuildContext,
@@ -219,6 +220,46 @@ test("smoke: PDA derivations deterministic and player-distinct", async () => {
   assert.equal(ga.toBase58(), ga2.toBase58());
   const [sa] = derivePlayerStatsPda(PROGRAM_ID, a.publicKey);
   assert.notEqual(sa.toBase58(), ga.toBase58());
+});
+
+test("er-smoke: GameV2 PDA is distinct from legacy GamePda for the same player", async () => {
+  // Magicblock ER uses a separate `game_v2` seed so the L1 and ER games can
+  // coexist for a single player without colliding. If the seed bytes ever
+  // drift between the SDK's GAME_V2_SEED (shared/constants.ts) and the
+  // Anchor program's `GAME_V2_SEED = b"game_v2"`, every start_game_er would
+  // fail an account constraint with no obvious clue. This test catches that
+  // class of seed-drift bug at the wire-format level.
+  //
+  // Does NOT exercise the live Magicblock ER endpoint — the local validator
+  // has no delegation program. End-to-end V1–V9 verification runs on devnet
+  // per MAGICBLOCK_PLAN.md §4. This is the minimum local guard.
+  const a = Keypair.generate();
+  const [gameV1] = deriveGamePda(PROGRAM_ID, a.publicKey);
+  const [gameV2] = deriveGameV2Pda(PROGRAM_ID, a.publicKey);
+  const [gameV2dup] = deriveGameV2Pda(PROGRAM_ID, a.publicKey);
+  assert.notEqual(
+    gameV1.toBase58(),
+    gameV2.toBase58(),
+    "GameV2 PDA must NOT collide with legacy GamePda for the same player",
+  );
+  assert.equal(
+    gameV2.toBase58(),
+    gameV2dup.toBase58(),
+    "GameV2 PDA must be deterministic",
+  );
+  // Spot-check the seed bytes haven't been silently re-encoded (e.g. utf-8
+  // vs latin-1). The Anchor program literal is `b"game_v2"` = [103, 97, 109,
+  // 101, 95, 118, 50] = 7 bytes.
+  const expectedSeedBytes = Buffer.from([103, 97, 109, 101, 95, 118, 50]);
+  const [manual] = PublicKey.findProgramAddressSync(
+    [expectedSeedBytes, a.publicKey.toBuffer()],
+    PROGRAM_ID,
+  );
+  assert.equal(
+    gameV2.toBase58(),
+    manual.toBase58(),
+    "SDK GAME_V2_SEED bytes drifted from the Anchor program literal b\"game_v2\"",
+  );
 });
 
 test("happy: full win flow init → start → reveal → cashout → settle → close", async () => {

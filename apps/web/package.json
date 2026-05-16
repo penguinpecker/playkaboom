@@ -13,6 +13,7 @@
   "dependencies": {
     "@fontsource/inter": "^5.1.0",
     "@fontsource/space-grotesk": "^5.1.0",
+    "@magicblock-labs/ephemeral-rollups-sdk": "^0.13.0",
     "@playkaboom/sdk": "*",
     "@playkaboom/shared": "*",
     "@privy-io/react-auth": "^2.10.0",
