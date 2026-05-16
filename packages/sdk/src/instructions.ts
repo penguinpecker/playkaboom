@@ -232,6 +232,10 @@ export interface SettleGameArgs {
   ctx: BuildContext;
   player: PublicKey;
   houseAuthority: PublicKey;
+  /** Treasury account (must match vault.treasury). Required since the
+   *  2026-05-16 treasury/LP profit split — receives `bet × house_edge ×
+   *  treasury_split_bps / BPS²` lamports per settle. */
+  treasury: PublicKey;
   mineLayout: number;
   salt: Buffer;
   /** If the player has a referrer, pass it to credit the rakeback in the same tx. */
@@ -254,6 +258,7 @@ export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
     writable(gamePda),
     writable(statsPda),
     readonly(args.houseAuthority, true),
+    writable(args.treasury),
   ];
   if (args.referrer) {
     const [referralPda] = deriveReferralPda(args.ctx.programId, args.referrer);
@@ -263,6 +268,34 @@ export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
     programId: args.ctx.programId,
     keys,
     data,
+  });
+}
+
+// ── unlock_operator_position ─────────────────────────────────────────────────
+// Burns ALL operator-owned LP units (seed + house + house_pending) and
+// transfers the NAV-adjusted lamport equivalent to an allowlisted
+// destination. User-LP positions are NOT touched. One-shot — idempotent
+// after first call (refuses if all three operator-unit fields are zero).
+export interface UnlockOperatorPositionArgs {
+  ctx: BuildContext;
+  owner: PublicKey;
+  destination: PublicKey;
+}
+
+export function buildUnlockOperatorPosition(
+  args: UnlockOperatorPositionArgs,
+): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      readonly(args.owner, true),
+      writable(args.destination),
+    ],
+    data: ixDiscriminator("unlock_operator_position"),
   });
 }
 
@@ -438,10 +471,6 @@ export interface UpdateV2ConfigArgs {
   minHealthBps?: number;
   withdrawCooldownSlots?: bigint;
   minLpDeposit?: bigint;
-  /** Magicblock ER kill-switch. False disables start_game_er; in-flight
-   *  ER games still complete (delegate/reveal/settle don't read the flag).
-   *  See programs/kaboom/src/lib.rs VaultV2State.er_enabled. */
-  erEnabled?: boolean;
 }
 
 export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstruction {
@@ -453,7 +482,6 @@ export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstru
   parts.push(encodeOption(args.minHealthBps, (v) => writeU16(v)));
   parts.push(encodeOption(args.withdrawCooldownSlots, (v) => writeU64(v)));
   parts.push(encodeOption(args.minLpDeposit, (v) => writeU64(v)));
-  parts.push(encodeOption(args.erEnabled, (v) => Buffer.from([v ? 1 : 0])));
   return new TransactionInstruction({
     programId: args.ctx.programId,
     keys: [readonly(vaultPda), writable(v2StatePda), readonly(args.owner, true)],

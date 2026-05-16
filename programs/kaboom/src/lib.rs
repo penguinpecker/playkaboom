@@ -22,13 +22,6 @@ use anchor_lang::system_program;
 use sha2::{Digest, Sha256};
 
 // ─── Magicblock Ephemeral Rollup integration ────────────────────────────────
-// Imports used by the ER-routed game flow (`start_game_er`, `delegate_game`,
-// `reveal_tile_er`, `settle_game_er`). All ER-specific code is additive and
-// lives alongside the existing base-layer flow — none of the legacy
-// instructions are modified.
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
-use ephemeral_rollups_sdk::cpi::DelegateConfig;
-use ephemeral_rollups_sdk::ephem::MagicIntentBundleBuilder;
 
 declare_id!("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 
@@ -52,10 +45,17 @@ pub const MIN_MINES: u8 = 1;
 pub const MAX_MINES: u8 = 15;
 pub const BPS: u64 = 10_000;
 pub const GAME_EXPIRY_SLOTS: u64 = 300;
-/// Player can self-close a Won/Lost-but-unsettled game after this window.
-/// Used for recovery when the server settle ix never ran (e.g. lost game
-/// token, server downtime). 600 slots ≈ 4 minutes at ~400 ms/slot.
-pub const CLOSE_UNSETTLED_EXPIRY_SLOTS: u64 = 600;
+/// Player can self-close a Won/Lost-but-unsettled game immediately.
+/// Was 600 slots (~4 min) to let the server's settle_game win the race
+/// vs. close_unsettled_game. Lowered to 0 per operator decision (2026-05-17)
+/// so stuck-game recovery is instant. Trade-off: if a player closes
+/// immediately after cash_out and beats the server, the on-chain
+/// fairness proof for that game never publishes (mine_layout/salt stay
+/// null on the games row → verifier page shows "PENDING" forever for
+/// that signature). On-chain accounting stays consistent —
+/// close_unsettled_game decrements total_outstanding_max_payout the
+/// same as settle_game would have.
+pub const CLOSE_UNSETTLED_EXPIRY_SLOTS: u64 = 0;
 pub const MIN_BET_LAMPORTS: u64 = 1_000_000;
 
 pub const MAX_HOUSE_EDGE_BPS: u16 = 1_000; // 10%
@@ -118,14 +118,8 @@ pub const GAME_SEED: &[u8] = b"kaboom_game";
 pub const STATS_SEED: &[u8] = b"kaboom_stats";
 pub const REFERRAL_SEED: &[u8] = b"kaboom_referral";
 
-/// PDA seed for ER-routed games (`GameSessionV2`). Distinct from `GAME_SEED`
-/// so that legacy on-chain GameSession accounts remain untouched and the two
-/// flows can coexist on mainnet during rollout.
-pub const GAME_V2_SEED: &[u8] = b"game_v2";
-
 // ─── Program ─────────────────────────────────────────────────────────────────
 
-#[ephemeral]
 #[program]
 pub mod kaboom {
     use super::*;
@@ -666,6 +660,84 @@ pub mod kaboom {
             }
         }
 
+        // ─── Treasury / LP profit split (2026-05-16) ──────────────────────
+        // Per game, send `treasury_split_bps` portion of the house-edge
+        // share of the bet directly to treasury. The remainder stays in
+        // vault → benefits all unit holders (seed + house + user) via NAV
+        // growth. With defaults (200 bps edge, 5000 bps split):
+        //   edge_share    = bet * 200/10000 = 2% of bet
+        //   treasury_cut  = edge_share * 5000/10000 = 1% of bet  → treasury
+        //   kept-in-vault = edge_share - treasury_cut = 1% of bet  → LP NAV
+        // i.e. half of the statistical house edge is realized as treasury
+        // cash per game, the other half compounds into vault NAV which
+        // benefits all unit holders proportionally to their share.
+        //
+        // Notes:
+        //   - Applied uniformly on Win and Lost games. Statistical EV of
+        //     vault is `bet * house_edge_bps / BPS`, so the treasury cut
+        //     is `treasury_split_bps / BPS` of the expected edge. On a
+        //     player-win game the vault temporarily pays out more than
+        //     it took in for that game, but the treasury cut still fires
+        //     — the cut is an expectation-based operator-revenue accrual,
+        //     not a realised-PnL share.
+        //   - Capped to remaining vault liquidity after rent +
+        //     outstanding obligations. If a freak game-loss leaves vault
+        //     too thin to fund the cut, we skip (the same defensive
+        //     pattern referral payout uses above).
+        //   - Skipped if treasury_split_bps == 0 (operator can disable
+        //     via update_vault).
+        let treasury_split_bps = ctx.accounts.vault.treasury_split_bps;
+        let house_edge_bps = ctx.accounts.vault.house_edge_bps;
+        if treasury_split_bps > 0 {
+            let edge_share = mul_div_floor(
+                game.bet,
+                house_edge_bps as u64,
+                BPS,
+            )?;
+            let treasury_cut = mul_div_floor(
+                edge_share,
+                treasury_split_bps as u64,
+                BPS,
+            )?;
+
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+            let v2_ref = &ctx.accounts.v2_state;
+            let assets_now = vault_info.lamports().saturating_sub(rent);
+            // Reserve outstanding obligations + pending LP withdrawal
+            // value so the cut never undermines redeemability.
+            let pending_value = units_to_assets(
+                v2_ref.total_pending_units,
+                assets_now,
+                v2_ref.total_units,
+            )?;
+            let liquidity = assets_now
+                .saturating_sub(v2_ref.total_outstanding_max_payout)
+                .saturating_sub(pending_value);
+            let actual_treasury_cut = treasury_cut.min(liquidity);
+
+            if actual_treasury_cut > 0 {
+                **vault_info.try_borrow_mut_lamports()? = vault_info
+                    .lamports()
+                    .checked_sub(actual_treasury_cut)
+                    .ok_or(KaboomError::MathOverflow)?;
+                let treasury_info = ctx.accounts.treasury.to_account_info();
+                **treasury_info.try_borrow_mut_lamports()? = treasury_info
+                    .lamports()
+                    .checked_add(actual_treasury_cut)
+                    .ok_or(KaboomError::MathOverflow)?;
+
+                emit!(TreasuryAccrued {
+                    vault: ctx.accounts.vault.key(),
+                    treasury: ctx.accounts.treasury.key(),
+                    from_game: game.key(),
+                    bet: game.bet,
+                    amount: actual_treasury_cut,
+                    slot: Clock::get()?.slot,
+                });
+            }
+        }
+
         emit!(GameSettled {
             player: game.player,
             game: game.key(),
@@ -913,6 +985,132 @@ pub mod kaboom {
         Ok(())
     }
 
+    /// Unlock the entire OPERATOR-OWNED LP position (seed + house +
+    /// any pending house-withdraw units) and transfer the NAV-adjusted
+    /// lamport equivalent to an allowlisted destination. One-shot:
+    /// zeroes seed_units, house_units, and house_pending_units.
+    ///
+    /// User LP positions (deposited by non-operator wallets) are NOT
+    /// touched. Their unit count is unchanged, NAV per unit is preserved
+    /// (because we burn operator units at NAV, vault and units decrease
+    /// proportionally). They keep their position and can lp_withdraw
+    /// whenever per the normal cooldown.
+    ///
+    /// Originally seed_units was set at initialize_v2 to lock 1 SOL
+    /// permanently (anti-first-deposit-inflation defense). After Phase 2
+    /// rollout the lock turned out to be unnecessary — vault is now
+    /// large enough that the inflation attack surface is non-material.
+    /// Bundled with house_units here so the operator can fully exit
+    /// their position in one Squads vote rather than two.
+    ///
+    /// Mechanics:
+    ///   1. burn_units = seed_units + house_units + house_pending_units
+    ///   2. payout_lamports = units_to_assets(burn_units, vault_assets,
+    ///      total_units) — the NAV-adjusted value
+    ///   3. Burn (zero) seed_units, house_units, house_pending_units;
+    ///      reduce total_units by burn_units.
+    ///   4. Transfer payout_lamports from vault → destination.
+    ///   5. Re-check min_health_bps floor on the post-transfer state.
+    ///
+    /// Owner-signed (Squads 2/2). Destination must be on
+    /// vault.withdraw_allowlist — same security envelope as
+    /// withdraw_to_treasury. Refuses if all three operator-unit fields
+    /// are already zero. The enforce_house_floor check is INTENTIONALLY
+    /// bypassed here because this ix IS the operator removing their LP
+    /// position with sign-off from their own multisig — the floor
+    /// exists to protect against operator-mistakes in routine
+    /// burn_house_units calls, not against a deliberate Squads-signed
+    /// exit.
+    pub fn unlock_operator_position(ctx: Context<UnlockOperatorPosition>) -> Result<()> {
+        let v2 = &mut ctx.accounts.v2_state;
+        let burn_units = v2
+            .seed_units
+            .checked_add(v2.house_units)
+            .and_then(|s| s.checked_add(v2.house_pending_units))
+            .ok_or(KaboomError::MathOverflow)?;
+        require!(burn_units > 0, KaboomError::NoOperatorUnitsToUnlock);
+
+        let vault = &ctx.accounts.vault;
+        let dest_key = ctx.accounts.destination.key();
+        // Same defense-in-depth as withdraw_to_treasury (C2 + M5):
+        require!(
+            !ctx.accounts.destination.executable,
+            KaboomError::InvalidAmount
+        );
+        require!(
+            dest_key != ctx.accounts.vault.key(),
+            KaboomError::InvalidConfig
+        );
+        let allowed = vault
+            .withdraw_allowlist
+            .iter()
+            .take(vault.allowlist_count as usize)
+            .any(|k| *k == dest_key);
+        require!(allowed, KaboomError::DestinationNotAllowlisted);
+
+        // Compute lamports the operator units are worth at current NAV.
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+        let assets = vault_info.lamports().saturating_sub(rent);
+        let payout_lamports = units_to_assets(burn_units, assets, v2.total_units)?;
+
+        // Cap to what's actually available after outstanding game
+        // obligations and the lamports value of any user-LP-pending
+        // withdrawals (those need to stay reserved for the user).
+        let user_pending_value =
+            units_to_assets(v2.total_pending_units, assets, v2.total_units)?;
+        let withdrawable = assets
+            .saturating_sub(v2.total_outstanding_max_payout)
+            .saturating_sub(user_pending_value);
+        let actual = payout_lamports.min(withdrawable);
+        require!(actual > 0, KaboomError::InsufficientLiquidity);
+
+        // Burn operator units BEFORE the transfer.
+        let burned_seed = v2.seed_units;
+        let burned_house = v2.house_units;
+        let burned_pending = v2.house_pending_units;
+        v2.total_units = v2
+            .total_units
+            .checked_sub(burn_units)
+            .ok_or(KaboomError::MathOverflow)?;
+        v2.seed_units = 0;
+        v2.house_units = 0;
+        v2.house_pending_units = 0;
+        v2.house_pending_unlock_slot = 0;
+
+        // Transfer lamports out of vault.
+        **vault_info.try_borrow_mut_lamports()? = vault_info
+            .lamports()
+            .checked_sub(actual)
+            .ok_or(KaboomError::MathOverflow)?;
+        let dest_info = ctx.accounts.destination.to_account_info();
+        **dest_info.try_borrow_mut_lamports()? = dest_info
+            .lamports()
+            .checked_add(actual)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        // Post-transfer health floor check. Recompute assets from the
+        // post-transfer state by re-reading the vault's lamports.
+        let assets_after = ctx
+            .accounts
+            .vault
+            .to_account_info()
+            .lamports()
+            .saturating_sub(rent);
+        enforce_min_health(v2, assets_after)?;
+
+        emit!(OperatorUnitsUnlocked {
+            vault: ctx.accounts.vault.key(),
+            destination: dest_key,
+            lamports: actual,
+            burned_seed,
+            burned_house,
+            burned_pending,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
     /// Owner-only config update. Cannot move funds, cannot change owner.
     pub fn update_vault(
         ctx: Context<UpdateVault>,
@@ -1138,7 +1336,6 @@ pub mod kaboom {
         min_health_bps: Option<u16>,
         withdraw_cooldown_slots: Option<u64>,
         min_lp_deposit: Option<u64>,
-        er_enabled: Option<bool>,
     ) -> Result<()> {
         let v2 = &mut ctx.accounts.v2_state;
         if let Some(v) = min_house_share_bps {
@@ -1171,9 +1368,6 @@ pub mod kaboom {
         }
         if let Some(v) = min_lp_deposit {
             v2.min_lp_deposit = v;
-        }
-        if let Some(v) = er_enabled {
-            v2.er_enabled = v;
         }
         emit!(V2ConfigUpdated {
             vault: ctx.accounts.vault.key(),
@@ -1498,444 +1692,6 @@ pub mod kaboom {
         Ok(())
     }
 
-    // ─── Magicblock Ephemeral Rollup flow ──────────────────────────────────
-    // Four additive instructions that mirror the legacy `start_game`,
-    // `reveal_tile`, and `settle_game` flow, plus a `delegate_game` step
-    // that hands the GameSessionV2 PDA to the Magicblock delegation
-    // program. The Turnkey HSM signs only twice per game (delegate +
-    // settle); reveals are signed by a per-game ephemeral key carried in
-    // `GameSessionV2.session_key`.
-
-    /// Player begins an ER-routed game. Mirrors `start_game` exactly,
-    /// but writes to `GameSessionV2` and records the per-game session key.
-    pub fn start_game_er(
-        ctx: Context<StartGameEr>,
-        mine_count: u8,
-        bet: u64,
-        commitment: [u8; 32],
-        session_key: Pubkey,
-    ) -> Result<()> {
-        let vault = &ctx.accounts.vault;
-        require!(!vault.paused, KaboomError::VaultPaused);
-        // Magicblock ER kill-switch. Defaults false on init (existing
-        // _reserved bytes are zero). Owner flips via update_v2_config when
-        // ER is ready for production traffic; can also flip back to false
-        // in an emergency without redeploying the program. Only blocks NEW
-        // games — in-flight ER games still settle.
-        require!(
-            ctx.accounts.v2_state.er_enabled,
-            KaboomError::ErRoutingDisabled
-        );
-        require!(
-            (MIN_MINES..=MAX_MINES).contains(&mine_count),
-            KaboomError::InvalidMineCount
-        );
-        require!(bet >= MIN_BET_LAMPORTS, KaboomError::BetTooLow);
-        require!(commitment != [0u8; 32], KaboomError::InvalidCommitment);
-        require!(session_key != Pubkey::default(), KaboomError::Unauthorized);
-
-        let vault_lamports = ctx.accounts.vault.to_account_info().lamports();
-        let rent = Rent::get()?.minimum_balance(Vault::SPACE);
-        let available = vault_lamports.saturating_sub(rent);
-
-        let v2 = &ctx.accounts.v2_state;
-        let pre_health = calc_health_bps(v2, available)?;
-        let effective_max_bet_bps = (vault.max_bet_bps as u64)
-            .checked_mul(pre_health as u64)
-            .ok_or(KaboomError::MathOverflow)?
-            / BPS;
-        let effective_max_payout_bps = (vault.max_payout_bps as u64)
-            .checked_mul(pre_health as u64)
-            .ok_or(KaboomError::MathOverflow)?
-            / BPS;
-        let max_bet = mul_div_floor(available, effective_max_bet_bps, BPS)?;
-        require!(bet <= max_bet, KaboomError::BetExceedsMax);
-
-        let worst_payout_u64 = worst_case_payout(bet, mine_count, vault.house_edge_bps)?;
-        let worst_payout = worst_payout_u64 as u128;
-        let max_payout = mul_div_floor(available, effective_max_payout_bps, BPS)? as u128;
-        require!(
-            worst_payout <= max_payout,
-            KaboomError::VaultInsufficientFunds
-        );
-
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                system_program::Transfer {
-                    from: ctx.accounts.player.to_account_info(),
-                    to: ctx.accounts.vault.to_account_info(),
-                },
-            ),
-            bet,
-        )?;
-
-        let clock = Clock::get()?;
-
-        let stats = &mut ctx.accounts.player_stats;
-        if stats.player == Pubkey::default() {
-            stats.player = ctx.accounts.player.key();
-            stats.bump = ctx.bumps.player_stats;
-            stats.version = 1;
-        }
-
-        let game = &mut ctx.accounts.game;
-        game.player = ctx.accounts.player.key();
-        game.bump = ctx.bumps.game;
-        game.status = GameStatus::Playing;
-        game.bet = bet;
-        game.mine_count = mine_count;
-        game.commitment = commitment;
-        game.revealed_mask = 0;
-        game.revealed_safe_mask = 0;
-        game.safe_reveals = 0;
-        game.multiplier_bps = BPS;
-        game.start_slot = clock.slot;
-        game.created_at = clock.unix_timestamp;
-        game.settled = false;
-        game.mine_layout = 0;
-        game.salt = [0u8; 32];
-        game.version = 2;
-        game.max_payout = worst_payout_u64;
-        game.session_key = Some(session_key);
-
-        let vault_mut = &mut ctx.accounts.vault;
-        vault_mut.total_games = vault_mut.total_games.saturating_add(1);
-        vault_mut.total_wagered = vault_mut.total_wagered.saturating_add(bet);
-
-        let v2_mut = &mut ctx.accounts.v2_state;
-        v2_mut.total_outstanding_max_payout = v2_mut
-            .total_outstanding_max_payout
-            .checked_add(worst_payout_u64)
-            .ok_or(KaboomError::MathOverflow)?;
-        let new_assets = available.saturating_add(bet);
-        enforce_min_health(v2_mut, new_assets)?;
-
-        emit!(GameStarted {
-            player: game.player,
-            game: game.key(),
-            bet,
-            mine_count,
-            commitment,
-            slot: clock.slot,
-        });
-        Ok(())
-    }
-
-    /// House signs once to hand the GameSessionV2 PDA over to the delegation
-    /// program. `remaining_accounts[0]`, if present, pins the ER validator.
-    pub fn delegate_game(ctx: Context<DelegateGame>) -> Result<()> {
-        // Snapshot the player key before delegation zeroes the PDA data.
-        let player_key = ctx.accounts.game.player;
-
-        let pda_seeds: &[&[u8]] = &[GAME_V2_SEED, player_key.as_ref()];
-        let validator = ctx.remaining_accounts.first().map(|a| a.key());
-        ctx.accounts.delegate_game(
-            &ctx.accounts.payer,
-            pda_seeds,
-            DelegateConfig {
-                commit_frequency_ms: 0,
-                validator,
-            },
-        )?;
-        Ok(())
-    }
-
-    /// Ephemeral-session reveal. Signer constraint on the accounts struct
-    /// (`session_signer.key == game.session_key.unwrap()`) means Turnkey is
-    /// NOT involved. Body mirrors legacy `reveal_tile` for state mutation.
-    pub fn reveal_tile_er(
-        ctx: Context<RevealTileEr>,
-        tile_index: u8,
-        is_mine: bool,
-    ) -> Result<()> {
-        require!(tile_index < GRID_SIZE, KaboomError::InvalidTileIndex);
-
-        let game = &mut ctx.accounts.game;
-        require!(
-            game.status == GameStatus::Playing,
-            KaboomError::GameNotPlaying
-        );
-
-        let clock = Clock::get()?;
-        require!(
-            clock.slot <= game.start_slot.saturating_add(GAME_EXPIRY_SLOTS),
-            KaboomError::GameExpired
-        );
-
-        let tile_bit: u16 = 1u16 << tile_index;
-        require!(
-            game.revealed_mask & tile_bit == 0,
-            KaboomError::TileAlreadyRevealed
-        );
-
-        game.revealed_mask |= tile_bit;
-
-        if is_mine {
-            game.status = GameStatus::Lost;
-            emit!(TileRevealed {
-                player: game.player,
-                game: game.key(),
-                tile_index,
-                is_mine: true,
-                multiplier_bps: game.multiplier_bps,
-                safe_reveals: game.safe_reveals,
-                slot: clock.slot,
-            });
-            emit!(GameLost {
-                player: game.player,
-                game: game.key(),
-                bet: game.bet,
-                tile_index,
-                safe_reveals: game.safe_reveals,
-                slot: clock.slot,
-            });
-        } else {
-            game.revealed_safe_mask |= tile_bit;
-            game.safe_reveals = game.safe_reveals.saturating_add(1);
-
-            let vault = &ctx.accounts.vault;
-            game.multiplier_bps =
-                calc_multiplier(game.safe_reveals, game.mine_count, vault.house_edge_bps)?;
-
-            let total_safe = GRID_SIZE - game.mine_count;
-            if game.safe_reveals >= total_safe {
-                game.status = GameStatus::Won;
-            }
-
-            emit!(TileRevealed {
-                player: game.player,
-                game: game.key(),
-                tile_index,
-                is_mine: false,
-                multiplier_bps: game.multiplier_bps,
-                safe_reveals: game.safe_reveals,
-                slot: clock.slot,
-            });
-        }
-
-        Ok(())
-    }
-
-    /// House publishes the proof, mirrors legacy `settle_game` payout/stats
-    /// logic, then schedules commit-and-undelegate via the Magic program so
-    /// the GameSessionV2 PDA returns to base-layer ownership.
-    pub fn settle_game_er<'info>(
-        ctx: Context<'_, '_, 'info, 'info, SettleGameEr<'info>>,
-        mine_layout: u16,
-        salt: [u8; 32],
-    ) -> Result<()> {
-        let game = &mut ctx.accounts.game;
-        require!(
-            game.status == GameStatus::Won || game.status == GameStatus::Lost,
-            KaboomError::GameNotPlaying
-        );
-        require!(!game.settled, KaboomError::GameAlreadySettled);
-
-        // Commitment verification: sha256(mine_layout_le || salt) == game.commitment.
-        // Identical wire format to legacy settle_game so the same preimage
-        // round-trips through either path.
-        let layout_bytes = mine_layout.to_le_bytes();
-        let mut hasher = Sha256::new();
-        hasher.update(layout_bytes);
-        hasher.update(salt);
-        let computed = hasher.finalize();
-        require!(
-            computed.as_slice() == game.commitment,
-            KaboomError::CommitmentMismatch
-        );
-
-        let actual_mine_count = mine_layout.count_ones() as u8;
-        require!(
-            actual_mine_count == game.mine_count,
-            KaboomError::CommitmentMismatch
-        );
-        require!(
-            game.revealed_safe_mask & mine_layout == 0,
-            KaboomError::RevealMismatch
-        );
-        let revealed_mine_mask = game.revealed_mask & !game.revealed_safe_mask;
-        require!(
-            revealed_mine_mask & mine_layout == revealed_mine_mask,
-            KaboomError::RevealMismatch
-        );
-        if game.status == GameStatus::Lost {
-            require!(revealed_mine_mask != 0, KaboomError::RevealMismatch);
-        }
-
-        game.mine_layout = mine_layout;
-        game.salt = salt;
-        game.settled = true;
-        // Session key is retired once we settle.
-        game.session_key = None;
-        let max_payout_release = game.max_payout;
-
-        {
-            let v2 = &mut ctx.accounts.v2_state;
-            v2.total_outstanding_max_payout = v2
-                .total_outstanding_max_payout
-                .saturating_sub(max_payout_release);
-        }
-
-        let stats = &mut ctx.accounts.player_stats;
-        if stats.player == Pubkey::default() {
-            stats.player = game.player;
-            stats.bump = ctx.bumps.player_stats;
-            stats.version = 1;
-        }
-        stats.games_played = stats.games_played.saturating_add(1);
-        stats.total_wagered = stats.total_wagered.saturating_add(game.bet);
-        stats.last_played = Clock::get()?.unix_timestamp;
-
-        let payout: u64 = if game.status == GameStatus::Won {
-            (game.bet as u128)
-                .checked_mul(game.multiplier_bps as u128)
-                .ok_or(KaboomError::MathOverflow)?
-                .checked_div(BPS as u128)
-                .ok_or(KaboomError::MathOverflow)?
-                .try_into()
-                .map_err(|_| KaboomError::MathOverflow)?
-        } else {
-            0
-        };
-
-        if game.status == GameStatus::Won {
-            stats.games_won = stats.games_won.saturating_add(1);
-            stats.total_payouts = stats.total_payouts.saturating_add(payout);
-            let net_win = payout.saturating_sub(game.bet);
-            if net_win > stats.biggest_win {
-                stats.biggest_win = net_win;
-            }
-            if game.multiplier_bps > stats.biggest_multiplier_bps {
-                stats.biggest_multiplier_bps = game.multiplier_bps;
-            }
-            stats.current_streak = stats.current_streak.saturating_add(1);
-            if stats.current_streak > stats.best_streak {
-                stats.best_streak = stats.current_streak;
-            }
-        } else {
-            stats.current_streak = 0;
-        }
-
-        // Referral credit — same convention as legacy settle_game.
-        if let Some(referrer_key) = stats.referrer {
-            if let Some(referral_info) = ctx.remaining_accounts.first() {
-                let (expected_referral_pda, _) = Pubkey::find_program_address(
-                    &[REFERRAL_SEED, referrer_key.as_ref()],
-                    &crate::ID,
-                );
-                require!(
-                    referral_info.key() == expected_referral_pda,
-                    KaboomError::ReferralMismatch
-                );
-                let mut ra: Account<ReferralAccount> = Account::try_from(referral_info)?;
-                require!(ra.referrer == referrer_key, KaboomError::ReferralMismatch);
-
-                let cut_bps = match ra.tier {
-                    0 => REFERRAL_BRONZE_BPS,
-                    1 => REFERRAL_SILVER_BPS,
-                    _ => REFERRAL_GOLD_BPS,
-                };
-                let cut = mul_div_floor(game.bet, cut_bps as u64, BPS)?;
-
-                let vault_info = ctx.accounts.vault.to_account_info();
-                let rent = Rent::get()?.minimum_balance(Vault::SPACE);
-                let vault_available = vault_info.lamports().saturating_sub(rent);
-                let actual_cut = cut.min(vault_available);
-
-                if actual_cut > 0 {
-                    **vault_info.try_borrow_mut_lamports()? = vault_info
-                        .lamports()
-                        .checked_sub(actual_cut)
-                        .ok_or(KaboomError::MathOverflow)?;
-                    **referral_info.try_borrow_mut_lamports()? = referral_info
-                        .lamports()
-                        .checked_add(actual_cut)
-                        .ok_or(KaboomError::MathOverflow)?;
-                }
-
-                ra.accrued_lamports = ra.accrued_lamports.saturating_add(actual_cut);
-                ra.total_earned = ra.total_earned.saturating_add(actual_cut);
-                ra.referred_volume = ra.referred_volume.saturating_add(game.bet);
-
-                let new_tier = if ra.referred_volume >= GOLD_VOLUME_LAMPORTS {
-                    2
-                } else if ra.referred_volume >= SILVER_VOLUME_LAMPORTS {
-                    1
-                } else {
-                    0
-                };
-                if new_tier != ra.tier {
-                    ra.tier = new_tier;
-                    emit!(ReferralTierChanged {
-                        referrer: ra.referrer,
-                        new_tier,
-                        slot: Clock::get()?.slot,
-                    });
-                }
-
-                ra.exit(&crate::ID)?;
-
-                emit!(ReferralAccrued {
-                    referrer: referrer_key,
-                    player: game.player,
-                    amount: actual_cut,
-                    tier: ra.tier,
-                    slot: Clock::get()?.slot,
-                });
-            }
-        }
-
-        emit!(GameSettled {
-            player: game.player,
-            game: game.key(),
-            mine_count: game.mine_count,
-            mine_layout,
-            salt,
-            commitment: game.commitment,
-            verified: true,
-            slot: Clock::get()?.slot,
-        });
-
-        {
-            let vault_info = ctx.accounts.vault.to_account_info();
-            let assets_now = vault_assets(&vault_info)?;
-            let v2 = &ctx.accounts.v2_state;
-            let h = calc_health_bps(v2, assets_now)?;
-            emit!(VaultUnitValueUpdated {
-                vault: ctx.accounts.vault.key(),
-                vault_assets: assets_now,
-                total_units: v2.total_units,
-                health_bps: h,
-                slot: Clock::get()?.slot,
-            });
-        }
-
-        emit!(StatsUpdated {
-            player: stats.player,
-            games_played: stats.games_played,
-            games_won: stats.games_won,
-            total_wagered: stats.total_wagered,
-            total_payouts: stats.total_payouts,
-            biggest_win: stats.biggest_win,
-            current_streak: stats.current_streak,
-            slot: Clock::get()?.slot,
-        });
-
-        // Schedule commit-and-undelegate of the GameSessionV2 PDA back to
-        // base layer. Magic program + magic context are auto-injected by
-        // the `#[commit]` macro.
-        let game_ai = ctx.accounts.game.to_account_info();
-        MagicIntentBundleBuilder::new(
-            ctx.accounts.house_authority.to_account_info(),
-            ctx.accounts.magic_context.to_account_info(),
-            ctx.accounts.magic_program.to_account_info(),
-        )
-        .commit_and_undelegate(&[game_ai])
-        .build_and_invoke()?;
-
-        Ok(())
-    }
 }
 
 // ─── Multiplier ──────────────────────────────────────────────────────────────
@@ -2183,15 +1939,7 @@ pub struct VaultV2State {
     pub withdraw_cooldown_slots: u64,
     pub min_lp_deposit: u64,
 
-    /// Magicblock ER kill-switch. When false, `start_game_er` errors with
-    /// `ErRoutingDisabled` — no new players enter the ER flow. In-flight
-    /// games can still complete (delegate/reveal/settle paths don't read
-    /// this flag) so emergency-flipping this doesn't strand running games.
-    /// Default false on init (existing on-chain _reserved bytes are zero =
-    /// disabled). Settable via `update_v2_config(er_enabled = Some(...))`.
-    pub er_enabled: bool,
-
-    pub _reserved: [u8; 63],
+    pub _reserved: [u8; 64],
 }
 
 impl VaultV2State {
@@ -2201,8 +1949,7 @@ impl VaultV2State {
         + 16 + 16 + 16 + 8 + 16 + 16 // 5 u128 + 1 u64 in LP block
         + 2 + 2 + 2               // 3 u16 bps
         + 8 + 8                   // withdraw_cooldown_slots + min_lp_deposit
-        + 1                       // er_enabled
-        + 63;                     // reserved
+        + 64;                     // reserved
 }
 
 /// Per-user LP position. PDA seeds: [LP_SEED, user.key()].
@@ -2262,52 +2009,6 @@ impl GameSession {
         + 8 + 8 + 8
         + 1 + 2 + 32
         + 1 + 8 + 24;
-}
-
-// ─── Magicblock ER session account ──────────────────────────────────────────
-// `GameSession._reserved` is only 24 bytes, while `Option<Pubkey>` needs 33
-// (1 tag + 32). We therefore add a NEW account variant rather than overload
-// the existing reserved space — this preserves byte-for-byte backward
-// compatibility with all in-flight legacy GameSession accounts on mainnet.
-// Decision: new account, new PDA seed (`GAME_V2_SEED`). The old `GameSession`
-// continues to power the existing instruction flow untouched.
-#[account]
-pub struct GameSessionV2 {
-    pub player: Pubkey,
-    pub bump: u8,
-    pub status: GameStatus,
-    pub bet: u64,
-    pub mine_count: u8,
-    pub commitment: [u8; 32],
-    pub revealed_mask: u16,
-    pub revealed_safe_mask: u16,
-    pub safe_reveals: u8,
-    pub multiplier_bps: u64,
-    pub start_slot: u64,
-    pub created_at: i64,
-    pub settled: bool,
-    pub mine_layout: u16,
-    pub salt: [u8; 32],
-    pub version: u8,
-    pub max_payout: u64,
-    /// The ephemeral session key authorized to sign `reveal_tile_er` during
-    /// the delegated phase. Set by `start_game_er`. Once `settle_game_er`
-    /// runs and the account is committed-and-undelegated, this field is
-    /// effectively retired for that session.
-    pub session_key: Option<Pubkey>,
-    pub _reserved: [u8; 32],
-}
-
-impl GameSessionV2 {
-    pub const SPACE: usize = 8
-        + 32 + 1 + 1
-        + 8 + 1 + 32
-        + 2 + 2 + 1
-        + 8 + 8 + 8
-        + 1 + 2 + 32
-        + 1 + 8
-        + 1 + 32 // session_key: Option<Pubkey>
-        + 32;
 }
 
 /// Per-player lifetime stats. Source of truth for leaderboards.
@@ -2516,6 +2217,15 @@ pub struct SettleGame<'info> {
 
     #[account(constraint = house_authority.key() == vault.house_authority @ KaboomError::Unauthorized)]
     pub house_authority: Signer<'info>,
+
+    /// Treasury destination for the per-game house-edge cut. Must match
+    /// `vault.treasury`. Receives `bet * house_edge_bps * treasury_split_bps
+    /// / BPS^2` lamports per settle (the operator's share of expected
+    /// house edge). Remainder of the edge stays in vault and benefits all
+    /// LP unit holders via NAV growth.
+    /// CHECK: address constraint above gates this.
+    #[account(mut, constraint = treasury.key() == vault.treasury @ KaboomError::Unauthorized)]
+    pub treasury: UncheckedAccount<'info>,
     // Optional: remaining_accounts[0] = ReferralAccount of stats.referrer (mut)
 }
 
@@ -2623,6 +2333,29 @@ pub struct WithdrawToTreasury<'info> {
     pub treasury: Signer<'info>,
 
     /// CHECK: must match an entry in `vault.withdraw_allowlist`.
+    #[account(mut)]
+    pub destination: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UnlockOperatorPosition<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    pub owner: Signer<'info>,
+
+    /// CHECK: must match an entry in `vault.withdraw_allowlist`. Same
+    /// security envelope as withdraw_to_treasury — destination cannot be
+    /// arbitrary, must be allowlisted by a prior owner-signed config
+    /// update.
     #[account(mut)]
     pub destination: UncheckedAccount<'info>,
 }
@@ -2791,118 +2524,6 @@ pub struct HouseLpAction<'info> {
 // ─── Magicblock ER Accounts ─────────────────────────────────────────────────
 // Additive — none of the legacy account structs above are modified.
 
-#[derive(Accounts)]
-pub struct StartGameEr<'info> {
-    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
-
-    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
-    pub v2_state: Account<'info, VaultV2State>,
-
-    #[account(
-        init,
-        payer = player,
-        space = GameSessionV2::SPACE,
-        seeds = [GAME_V2_SEED, player.key().as_ref()],
-        bump,
-    )]
-    pub game: Account<'info, GameSessionV2>,
-
-    #[account(
-        init_if_needed,
-        payer = player,
-        space = PlayerStats::SPACE,
-        seeds = [STATS_SEED, player.key().as_ref()],
-        bump,
-    )]
-    pub player_stats: Account<'info, PlayerStats>,
-
-    #[account(mut)]
-    pub player: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-/// Delegate the ER GameSessionV2 PDA to the Magicblock delegation program.
-/// The `#[delegate]` macro auto-injects sibling `buffer_game`,
-/// `delegation_record_game`, `delegation_metadata_game`, plus the
-/// `owner_program`, `delegation_program`, and `system_program` accounts
-/// (see the SDK's attribute-delegate crate).
-#[delegate]
-#[derive(Accounts)]
-pub struct DelegateGame<'info> {
-    #[account(mut)]
-    pub payer: Signer<'info>,
-
-    #[account(
-        mut,
-        del,
-        seeds = [GAME_V2_SEED, game.player.as_ref()],
-        bump = game.bump,
-    )]
-    pub game: Account<'info, GameSessionV2>,
-}
-
-/// Reveal-tile while delegated to the ER. The session key is the only signer
-/// — the Turnkey HSM is NOT touched. `session_key.unwrap()` triggers an
-/// error variant if the session was never initialised.
-#[derive(Accounts)]
-pub struct RevealTileEr<'info> {
-    #[account(seeds = [VAULT_SEED], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
-
-    #[account(
-        mut,
-        seeds = [GAME_V2_SEED, game.player.as_ref()],
-        bump = game.bump,
-        constraint = game.session_key.is_some() @ KaboomError::SessionKeyMissing,
-        constraint = game.session_key == Some(session_signer.key())
-            @ KaboomError::Unauthorized,
-    )]
-    pub game: Account<'info, GameSessionV2>,
-
-    /// The per-game ephemeral key. Burnt after `settle_game_er`.
-    pub session_signer: Signer<'info>,
-}
-
-/// Settle-and-undelegate. The Turnkey HSM (vault.house_authority) signs, the
-/// commitment is verified, the same payout/stats logic as legacy
-/// `settle_game` runs, then `MagicIntentBundleBuilder::commit_and_undelegate`
-/// schedules the game account back to base layer.
-///
-/// The `#[commit]` macro auto-injects `magic_program` + `magic_context`
-/// fields, removing the need to spell them out here.
-#[commit]
-#[derive(Accounts)]
-pub struct SettleGameEr<'info> {
-    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
-    pub vault: Account<'info, Vault>,
-
-    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
-    pub v2_state: Account<'info, VaultV2State>,
-
-    #[account(
-        mut,
-        seeds = [GAME_V2_SEED, game.player.as_ref()],
-        bump = game.bump,
-    )]
-    pub game: Account<'info, GameSessionV2>,
-
-    #[account(
-        mut,
-        seeds = [STATS_SEED, game.player.as_ref()],
-        bump,
-    )]
-    pub player_stats: Account<'info, PlayerStats>,
-
-    /// Turnkey HSM. Same key as the legacy flow's `house_authority`.
-    #[account(mut, constraint = house_authority.key() == vault.house_authority
-        @ KaboomError::Unauthorized)]
-    pub house_authority: Signer<'info>,
-    // Optional remaining_accounts[0]: ReferralAccount (mut) — same convention
-    // as legacy `settle_game`.
-}
-
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 #[error_code]
@@ -2990,11 +2611,8 @@ pub enum KaboomError {
     InsufficientLiquidity,
     #[msg("LP position still has units; cannot close.")]
     LpPositionNotEmpty,
-    // ─── Magicblock ER additions ────────────────────────────────────────────
-    #[msg("Game has no session key set; cannot reveal in ER mode.")]
-    SessionKeyMissing,
-    #[msg("Magicblock ER routing is disabled; the kill-switch is off (vault.er_enabled=false).")]
-    ErRoutingDisabled,
+    #[msg("Operator units (seed + house + house_pending) are already zero; nothing to unlock.")]
+    NoOperatorUnitsToUnlock,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -3151,6 +2769,27 @@ pub struct AllowlistChanged {
 pub struct TreasuryWithdrawal {
     pub treasury: Pubkey,
     pub destination: Pubkey,
+    pub amount: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct OperatorUnitsUnlocked {
+    pub vault: Pubkey,
+    pub destination: Pubkey,
+    pub lamports: u64,
+    pub burned_seed: u128,
+    pub burned_house: u128,
+    pub burned_pending: u128,
+    pub slot: u64,
+}
+
+#[event]
+pub struct TreasuryAccrued {
+    pub vault: Pubkey,
+    pub treasury: Pubkey,
+    pub from_game: Pubkey,
+    pub bet: u64,
     pub amount: u64,
     pub slot: u64,
 }

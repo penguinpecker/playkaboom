@@ -14,7 +14,7 @@ import { checkTile, saltBuffer } from "@/server/game";
 import { encryptSession } from "@/server/session";
 import { loadSession, saveSession, deleteSession } from "@/server/session-store";
 import { OnChainError, requireActiveGame, sendErTx, sendHouseTx } from "@/server/solana";
-import { housePubkey, programId, useMagicblock } from "@/server/env";
+import { housePubkey, programId, treasuryPubkey, useMagicblock } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 import { indexFreshSignature } from "@/server/inline-ingest";
@@ -169,6 +169,7 @@ export async function POST(req: NextRequest) {
           ctx,
           player: playerPk,
           houseAuthority: housePk,
+          treasury: treasuryPubkey(),
           mineLayout: updated.mineLayout,
           salt: saltBuffer(updated),
         });
