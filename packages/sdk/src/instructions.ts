@@ -271,14 +271,20 @@ export function buildSettleGame(args: SettleGameArgs): TransactionInstruction {
   });
 }
 
-// ── unlock_seed ──────────────────────────────────────────────────────────────
-export interface UnlockSeedArgs {
+// ── unlock_operator_position ─────────────────────────────────────────────────
+// Burns ALL operator-owned LP units (seed + house + house_pending) and
+// transfers the NAV-adjusted lamport equivalent to an allowlisted
+// destination. User-LP positions are NOT touched. One-shot — idempotent
+// after first call (refuses if all three operator-unit fields are zero).
+export interface UnlockOperatorPositionArgs {
   ctx: BuildContext;
   owner: PublicKey;
   destination: PublicKey;
 }
 
-export function buildUnlockSeed(args: UnlockSeedArgs): TransactionInstruction {
+export function buildUnlockOperatorPosition(
+  args: UnlockOperatorPositionArgs,
+): TransactionInstruction {
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
   const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
   return new TransactionInstruction({
@@ -289,7 +295,7 @@ export function buildUnlockSeed(args: UnlockSeedArgs): TransactionInstruction {
       readonly(args.owner, true),
       writable(args.destination),
     ],
-    data: ixDiscriminator("unlock_seed"),
+    data: ixDiscriminator("unlock_operator_position"),
   });
 }
 

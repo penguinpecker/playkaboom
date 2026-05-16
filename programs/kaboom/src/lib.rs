@@ -670,8 +670,13 @@ pub mod kaboom {
         // Per game, send `treasury_split_bps` portion of the house-edge
         // share of the bet directly to treasury. The remainder stays in
         // vault → benefits all unit holders (seed + house + user) via NAV
-        // growth. With defaults (200 bps edge, 5000 bps split), this is
-        // 200 * 5000 / 10000^2 = 0.5% of bet per game to treasury.
+        // growth. With defaults (200 bps edge, 5000 bps split):
+        //   edge_share    = bet * 200/10000 = 2% of bet
+        //   treasury_cut  = edge_share * 5000/10000 = 1% of bet  → treasury
+        //   kept-in-vault = edge_share - treasury_cut = 1% of bet  → LP NAV
+        // i.e. half of the statistical house edge is realized as treasury
+        // cash per game, the other half compounds into vault NAV which
+        // benefits all unit holders proportionally to their share.
         //
         // Notes:
         //   - Applied uniformly on Win and Lost games. Statistical EV of
@@ -986,32 +991,50 @@ pub mod kaboom {
         Ok(())
     }
 
-    /// Unlock the anti-inflation seed and transfer its lamport equivalent
-    /// to an allowlisted destination. One-shot: zeroes `seed_units`.
+    /// Unlock the entire OPERATOR-OWNED LP position (seed + house +
+    /// any pending house-withdraw units) and transfer the NAV-adjusted
+    /// lamport equivalent to an allowlisted destination. One-shot:
+    /// zeroes seed_units, house_units, and house_pending_units.
     ///
-    /// Originally `seed_units` was set at `initialize_v2` to lock 1 SOL
+    /// User LP positions (deposited by non-operator wallets) are NOT
+    /// touched. Their unit count is unchanged, NAV per unit is preserved
+    /// (because we burn operator units at NAV, vault and units decrease
+    /// proportionally). They keep their position and can lp_withdraw
+    /// whenever per the normal cooldown.
+    ///
+    /// Originally seed_units was set at initialize_v2 to lock 1 SOL
     /// permanently (anti-first-deposit-inflation defense). After Phase 2
     /// rollout the lock turned out to be unnecessary — vault is now
-    /// large enough that the inflation attack surface from seed-relative
-    /// donations is non-material. This ix recovers the seed back to
-    /// treasury/operator without unmounting the LP system.
+    /// large enough that the inflation attack surface is non-material.
+    /// Bundled with house_units here so the operator can fully exit
+    /// their position in one Squads vote rather than two.
     ///
     /// Mechanics:
-    ///   1. Compute lamports the current `seed_units` are worth at NAV
-    ///      (`units_to_assets(seed_units, vault_assets, total_units)`).
-    ///   2. Burn `seed_units` — subtract from `total_units`, zero
-    ///      `seed_units`.
-    ///   3. Transfer the computed lamports from vault → destination.
-    ///   4. Re-check `min_health_bps` floor post-transfer. The vault
-    ///      should still be above the operator's health threshold.
+    ///   1. burn_units = seed_units + house_units + house_pending_units
+    ///   2. payout_lamports = units_to_assets(burn_units, vault_assets,
+    ///      total_units) — the NAV-adjusted value
+    ///   3. Burn (zero) seed_units, house_units, house_pending_units;
+    ///      reduce total_units by burn_units.
+    ///   4. Transfer payout_lamports from vault → destination.
+    ///   5. Re-check min_health_bps floor on the post-transfer state.
     ///
     /// Owner-signed (Squads 2/2). Destination must be on
-    /// `vault.withdraw_allowlist` — same security envelope as
-    /// `withdraw_to_treasury`. Refuses if `seed_units == 0` so the ix
-    /// can be safely re-fired without further effect.
-    pub fn unlock_seed(ctx: Context<UnlockSeed>) -> Result<()> {
+    /// vault.withdraw_allowlist — same security envelope as
+    /// withdraw_to_treasury. Refuses if all three operator-unit fields
+    /// are already zero. The enforce_house_floor check is INTENTIONALLY
+    /// bypassed here because this ix IS the operator removing their LP
+    /// position with sign-off from their own multisig — the floor
+    /// exists to protect against operator-mistakes in routine
+    /// burn_house_units calls, not against a deliberate Squads-signed
+    /// exit.
+    pub fn unlock_operator_position(ctx: Context<UnlockOperatorPosition>) -> Result<()> {
         let v2 = &mut ctx.accounts.v2_state;
-        require!(v2.seed_units > 0, KaboomError::NoSeedToUnlock);
+        let burn_units = v2
+            .seed_units
+            .checked_add(v2.house_units)
+            .and_then(|s| s.checked_add(v2.house_pending_units))
+            .ok_or(KaboomError::MathOverflow)?;
+        require!(burn_units > 0, KaboomError::NoOperatorUnitsToUnlock);
 
         let vault = &ctx.accounts.vault;
         let dest_key = ctx.accounts.destination.key();
@@ -1031,37 +1054,35 @@ pub mod kaboom {
             .any(|k| *k == dest_key);
         require!(allowed, KaboomError::DestinationNotAllowlisted);
 
-        // Compute lamports the seed is worth at current NAV.
+        // Compute lamports the operator units are worth at current NAV.
         let vault_info = ctx.accounts.vault.to_account_info();
         let rent = Rent::get()?.minimum_balance(Vault::SPACE);
         let assets = vault_info.lamports().saturating_sub(rent);
-        let seed_lamports =
-            units_to_assets(v2.seed_units, assets, v2.total_units)?;
+        let payout_lamports = units_to_assets(burn_units, assets, v2.total_units)?;
 
-        // Cap to what's actually available after outstanding obligations.
-        // If the vault is under-capitalised (impossible by design but
-        // defensive), unlock what we can — owner can re-fire later if
-        // partial.
-        let pending_value = units_to_assets(
-            v2.total_pending_units,
-            assets,
-            v2.total_units,
-        )?;
+        // Cap to what's actually available after outstanding game
+        // obligations and the lamports value of any user-LP-pending
+        // withdrawals (those need to stay reserved for the user).
+        let user_pending_value =
+            units_to_assets(v2.total_pending_units, assets, v2.total_units)?;
         let withdrawable = assets
             .saturating_sub(v2.total_outstanding_max_payout)
-            .saturating_sub(pending_value);
-        let actual = seed_lamports.min(withdrawable);
+            .saturating_sub(user_pending_value);
+        let actual = payout_lamports.min(withdrawable);
         require!(actual > 0, KaboomError::InsufficientLiquidity);
 
-        // Burn seed_units BEFORE the transfer so a partial recovery
-        // can be re-fired against the remaining seed_units. We zero
-        // them in one shot here.
-        let burned_units = v2.seed_units;
+        // Burn operator units BEFORE the transfer.
+        let burned_seed = v2.seed_units;
+        let burned_house = v2.house_units;
+        let burned_pending = v2.house_pending_units;
         v2.total_units = v2
             .total_units
-            .checked_sub(burned_units)
+            .checked_sub(burn_units)
             .ok_or(KaboomError::MathOverflow)?;
         v2.seed_units = 0;
+        v2.house_units = 0;
+        v2.house_pending_units = 0;
+        v2.house_pending_unlock_slot = 0;
 
         // Transfer lamports out of vault.
         **vault_info.try_borrow_mut_lamports()? = vault_info
@@ -1074,7 +1095,7 @@ pub mod kaboom {
             .checked_add(actual)
             .ok_or(KaboomError::MathOverflow)?;
 
-        // Post-transfer health floor check. Recompute `assets` from the
+        // Post-transfer health floor check. Recompute assets from the
         // post-transfer state by re-reading the vault's lamports.
         let assets_after = ctx
             .accounts
@@ -1084,11 +1105,13 @@ pub mod kaboom {
             .saturating_sub(rent);
         enforce_min_health(v2, assets_after)?;
 
-        emit!(SeedUnlocked {
+        emit!(OperatorUnitsUnlocked {
             vault: ctx.accounts.vault.key(),
             destination: dest_key,
             lamports: actual,
-            burned_units,
+            burned_seed,
+            burned_house,
+            burned_pending,
             slot: Clock::get()?.slot,
         });
         Ok(())
@@ -2071,8 +2094,13 @@ pub mod kaboom {
         // Per game, send `treasury_split_bps` portion of the house-edge
         // share of the bet directly to treasury. The remainder stays in
         // vault → benefits all unit holders (seed + house + user) via NAV
-        // growth. With defaults (200 bps edge, 5000 bps split), this is
-        // 200 * 5000 / 10000^2 = 0.5% of bet per game to treasury.
+        // growth. With defaults (200 bps edge, 5000 bps split):
+        //   edge_share    = bet * 200/10000 = 2% of bet
+        //   treasury_cut  = edge_share * 5000/10000 = 1% of bet  → treasury
+        //   kept-in-vault = edge_share - treasury_cut = 1% of bet  → LP NAV
+        // i.e. half of the statistical house edge is realized as treasury
+        // cash per game, the other half compounds into vault NAV which
+        // benefits all unit holders proportionally to their share.
         //
         // Notes:
         //   - Applied uniformly on Win and Lost games. Statistical EV of
@@ -2891,7 +2919,7 @@ pub struct WithdrawToTreasury<'info> {
 }
 
 #[derive(Accounts)]
-pub struct UnlockSeed<'info> {
+pub struct UnlockOperatorPosition<'info> {
     #[account(
         mut,
         seeds = [VAULT_SEED],
@@ -3286,8 +3314,8 @@ pub enum KaboomError {
     SessionKeyMissing,
     #[msg("Magicblock ER routing is disabled; the kill-switch is off (vault.er_enabled=false).")]
     ErRoutingDisabled,
-    #[msg("Seed liquidity is already zero; nothing to unlock.")]
-    NoSeedToUnlock,
+    #[msg("Operator units (seed + house + house_pending) are already zero; nothing to unlock.")]
+    NoOperatorUnitsToUnlock,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -3449,11 +3477,13 @@ pub struct TreasuryWithdrawal {
 }
 
 #[event]
-pub struct SeedUnlocked {
+pub struct OperatorUnitsUnlocked {
     pub vault: Pubkey,
     pub destination: Pubkey,
     pub lamports: u64,
-    pub burned_units: u128,
+    pub burned_seed: u128,
+    pub burned_house: u128,
+    pub burned_pending: u128,
     pub slot: u64,
 }
 
