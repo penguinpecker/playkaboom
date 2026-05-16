@@ -4,6 +4,7 @@ import {
   buildCloseGame,
   buildRevealTile,
   buildSettleGame,
+  deriveGamePda,
   serializeIx,
 } from "@playkaboom/sdk";
 import { GRID_SIZE, RevealTileInput } from "@playkaboom/shared";
@@ -12,11 +13,19 @@ import { verifyPlayerAuth } from "@/server/auth";
 import { checkTile, saltBuffer } from "@/server/game";
 import { encryptSession } from "@/server/session";
 import { loadSession, saveSession, deleteSession } from "@/server/session-store";
-import { OnChainError, requireActiveGame, sendHouseTx } from "@/server/solana";
-import { housePubkey, programId } from "@/server/env";
+import { OnChainError, requireActiveGame, sendErTx, sendHouseTx } from "@/server/solana";
+import { housePubkey, programId, useMagicblock } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 import { indexFreshSignature } from "@/server/inline-ingest";
+import { buildDelegateGame, buildRevealTileEr, deriveGameV2Pda } from "@/server/er-instructions";
+import {
+  claimDelegationSlot,
+  isDelegated,
+  loadSessionKeypair,
+  releaseDelegationSlot,
+} from "@/server/session-keys";
+import { getValidatorPubkey } from "@/server/magicblock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,36 +96,93 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const revealIx = buildRevealTile({
-      ctx,
-      player: playerPk,
-      houseAuthority: housePk,
-      tileIndex: body.tileIndex,
-      isMine,
-    });
-
     let signature: string;
     let closeInstruction: ReturnType<typeof serializeIx> | undefined;
 
-    if (isMine) {
-      // Atomic reveal + settle so the player can never see "lost but unsettled".
-      const settleIx = buildSettleGame({
+    if (useMagicblock()) {
+      // Magicblock ER hot path: session-key signs reveal_tile_er, sent
+      // directly to the ER endpoint. No Turnkey involvement per-tile.
+      //
+      // First reveal lazily runs delegate_game (Turnkey-signed, L1) so the
+      // GameSessionV2 PDA flips into ER ownership before the reveal_tile_er
+      // hits the validator. Subsequent reveals on the same game skip the
+      // delegate. claimDelegationSlot is the atomic write that prevents two
+      // concurrent first-reveals from both firing delegate_game.
+      //
+      // On mine: settle no longer rides in the same tx (commit_and_undelegate
+      // is its own ix issued via /api/settle). The reveal tx alone records
+      // the mine inside the ER; the client should follow up with a settle
+      // call. closeInstruction is not emitted on the ER path because the
+      // GameSession PDA undelegates + settles atomically server-side later.
+      const [gamePda] = deriveGameV2Pda(programId(), playerPk);
+      const sessionKp = await loadSessionKeypair(gamePda);
+
+      const needsDelegation = !(await isDelegated(gamePda));
+      if (needsDelegation && (await claimDelegationSlot(gamePda))) {
+        try {
+          const delegateIx = buildDelegateGame({
+            ctx,
+            player: playerPk,
+            houseAuthority: housePk,
+            validator: getValidatorPubkey(),
+          });
+          const delegateSig = await sendHouseTx([delegateIx]);
+          logger.info(
+            { gamePda: gamePda.toBase58(), sig: delegateSig },
+            "delegate_game landed",
+          );
+        } catch (delegateErr) {
+          // Release the slot so the next reveal can retry. Don't swallow —
+          // the player needs to know this reveal didn't land.
+          await releaseDelegationSlot(gamePda);
+          throw delegateErr;
+        }
+      }
+
+      const revealErIx = buildRevealTileEr({
+        ctx,
+        player: playerPk,
+        sessionKey: sessionKp.publicKey,
+        tileIndex: body.tileIndex,
+        isMine,
+      });
+      signature = await sendErTx([revealErIx], [sessionKp]);
+      logger.debug(
+        { tile: body.tileIndex, isMine, sig: signature, mode: "er" },
+        "reveal via ER",
+      );
+      // ER signatures are not L1 sigs — don't push them to the inline
+      // indexer (which expects L1 sigs). The eventual L1 commit-back from
+      // settle_game_er surfaces a real L1 sig that does get indexed.
+    } else {
+      const revealIx = buildRevealTile({
         ctx,
         player: playerPk,
         houseAuthority: housePk,
-        mineLayout: updated.mineLayout,
-        salt: saltBuffer(updated),
+        tileIndex: body.tileIndex,
+        isMine,
       });
-      signature = await sendHouseTx([revealIx, settleIx]);
-      closeInstruction = serializeIx(buildCloseGame({ ctx, player: playerPk }));
-      // Auto-settle on mine — push to indexer in the background. Don't
-      // await: the cron tickler + (when configured) the Helius webhook
-      // both pick up the same sig within seconds, and `processed_events`
-      // dedups any double-apply. Awaiting was costing the response 1.3s
-      // p50 / 5.2s p99 on every mine reveal.
-      void indexFreshSignature(signature);
-    } else {
-      signature = await sendHouseTx([revealIx]);
+
+      if (isMine) {
+        // Atomic reveal + settle so the player can never see "lost but unsettled".
+        const settleIx = buildSettleGame({
+          ctx,
+          player: playerPk,
+          houseAuthority: housePk,
+          mineLayout: updated.mineLayout,
+          salt: saltBuffer(updated),
+        });
+        signature = await sendHouseTx([revealIx, settleIx]);
+        closeInstruction = serializeIx(buildCloseGame({ ctx, player: playerPk }));
+        // Auto-settle on mine — push to indexer in the background. Don't
+        // await: the cron tickler + (when configured) the Helius webhook
+        // both pick up the same sig within seconds, and `processed_events`
+        // dedups any double-apply. Awaiting was costing the response 1.3s
+        // p50 / 5.2s p99 on every mine reveal.
+        void indexFreshSignature(signature);
+      } else {
+        signature = await sendHouseTx([revealIx]);
+      }
     }
 
     const safeReveals = updated.reveals.filter((t) => (updated.mineLayout & (1 << t)) === 0).length;
@@ -126,13 +192,21 @@ export async function POST(req: NextRequest) {
       "reveal",
     );
 
-    // G4: on mine the game is Lost+settled on-chain; delete the server-side
-    // session so the next /api/session probe returns gameToken=null and the
-    // recovery banner shows the FORCE-CLOSE path (not RESUME with a stale
-    // token that points at a Lost game and would error on every reveal).
-    // Return an empty token so the client clears localStorage too.
+    // G4: on mine in L1 mode the game is Lost+settled on-chain in the same
+    // tx; delete the server-side session so the next /api/session probe
+    // returns gameToken=null and the recovery banner shows the FORCE-CLOSE
+    // path (not RESUME with a stale token). Return an empty token so the
+    // client clears localStorage too.
+    //
+    // In ER mode the mine-tile reveal does NOT also settle (settle is a
+    // separate commit_and_undelegate ix issued via /api/settle), so we keep
+    // the session row around until settle runs.
     let newToken = "";
     if (!isMine) {
+      newToken = await saveSession(body.player, updated, session.createdAt);
+    } else if (useMagicblock()) {
+      // ER mine: persist updated reveals so /api/settle can read mineLayout
+      // + salt; deletion happens at settle.
       newToken = await saveSession(body.player, updated, session.createdAt);
     } else {
       await deleteSession(body.player);
