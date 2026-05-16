@@ -35,6 +35,7 @@ export interface IndexResult {
   processed: number;
   skipped: number;
   errors: number;
+  errorDetails: { sig: string; message: string }[];
 }
 
 /** Process a batch of transactions: dedupe via processed_events, decode each
@@ -59,6 +60,7 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
   let processed = 0;
   let skipped = 0;
   let errors = 0;
+  const errorDetails: { sig: string; message: string }[] = [];
 
   for (const tx of txs) {
     try {
@@ -115,13 +117,15 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
       processed++;
     } catch (err) {
       errors++;
-      logger.error(
-        { err: err instanceof Error ? err.message : err, sig: tx.signature },
-        "indexer apply error",
-      );
+      const message = err instanceof Error ? err.message : String(err);
+      // Cap to first 5 to keep response body bounded under burst conditions.
+      if (errorDetails.length < 5) {
+        errorDetails.push({ sig: tx.signature, message: message.slice(0, 300) });
+      }
+      logger.error({ err: message, sig: tx.signature }, "indexer apply error");
     }
   }
-  return { processed, skipped, errors };
+  return { processed, skipped, errors, errorDetails };
 }
 
 async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {

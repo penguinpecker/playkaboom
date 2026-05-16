@@ -218,6 +218,7 @@ export async function GET(req: NextRequest) {
       processed: result.processed,
       skipped: result.skipped,
       errors: result.errors,
+      errorDetails: result.errorDetails,
       newestSignature: newest.signature,
       newestSlot: newest.slot,
     });
