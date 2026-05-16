@@ -97,6 +97,77 @@ export async function loadSessionKey(gamePda: PublicKey): Promise<Uint8Array> {
   return decryptSecret(blob);
 }
 
+/**
+ * Returns true if delegate_game has landed for this game (server-side
+ * cache; the on-chain owner of the GameSessionV2 PDA is the source of
+ * truth but we avoid that extra RPC on every reveal).
+ *
+ * Returns false if either the row is missing OR delegated_at is NULL.
+ * Missing-row is treated as not-delegated rather than an error because
+ * the caller will fail on the subsequent storeSessionKey/loadSessionKey
+ * call anyway, with a clearer error.
+ */
+export async function isDelegated(gamePda: PublicKey): Promise<boolean> {
+  const { data, error } = await supabaseAdmin()
+    .from("game_session_keys")
+    .select("delegated_at")
+    .eq("game_pda", gamePda.toBase58())
+    .maybeSingle();
+  if (error) {
+    logger.warn(
+      { err: error.message, gamePda: gamePda.toBase58() },
+      "isDelegated read failed — treating as not-delegated",
+    );
+    return false;
+  }
+  return data?.delegated_at != null;
+}
+
+/**
+ * Atomically claim the delegation slot. Returns true iff this caller
+ * was the one to flip delegated_at from NULL to now(). Concurrent
+ * /api/reveal calls for the same game can race; the loser sees false
+ * and should skip the on-chain delegate_game tx (the winner's tx
+ * handles it).
+ */
+export async function claimDelegationSlot(gamePda: PublicKey): Promise<boolean> {
+  // UPDATE ... WHERE delegated_at IS NULL is the atomic claim: Postgres
+  // serializes the row write, only one concurrent claim wins.
+  const { data, error } = await supabaseAdmin()
+    .from("game_session_keys")
+    .update({ delegated_at: new Date().toISOString() })
+    .eq("game_pda", gamePda.toBase58())
+    .is("delegated_at", null)
+    .select("game_pda");
+  if (error) {
+    logger.error(
+      { err: error.message, gamePda: gamePda.toBase58() },
+      "claimDelegationSlot failed",
+    );
+    throw new Error(`claimDelegationSlot: ${error.message}`);
+  }
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
+ * Release the delegation claim if the on-chain delegate_game tx failed
+ * after we wrote delegated_at. Keeps the next /api/reveal attempt able
+ * to retry instead of silently reading delegated=true for a game that
+ * never made it to ER.
+ */
+export async function releaseDelegationSlot(gamePda: PublicKey): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .from("game_session_keys")
+    .update({ delegated_at: null })
+    .eq("game_pda", gamePda.toBase58());
+  if (error) {
+    logger.warn(
+      { err: error.message, gamePda: gamePda.toBase58() },
+      "releaseDelegationSlot failed (non-fatal) — manual recovery may be needed",
+    );
+  }
+}
+
 /** Best-effort delete; runs on settle or on explicit cleanup. Idempotent. */
 export async function deleteSessionKey(gamePda: PublicKey): Promise<void> {
   const { error } = await supabaseAdmin()

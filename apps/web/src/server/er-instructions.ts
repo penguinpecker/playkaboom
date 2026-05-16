@@ -6,23 +6,17 @@ import {
   type AccountMeta,
 } from "@solana/web3.js";
 import {
+  deriveGameV2Pda,
   derivePlayerStatsPda,
   deriveV2StatePda,
   deriveVaultPda,
   ixDiscriminator,
 } from "@playkaboom/sdk";
 
-// V2 game PDA seed — ER variants live under a fresh account namespace so the
-// existing GameSession layout (used by the legacy L1 path) stays untouched.
-// Mirrors `GAME_V2_SEED` in programs/kaboom/src/lib.rs.
-const GAME_V2_SEED_BYTES = Buffer.from("game_v2", "utf8");
-
-export function deriveGameV2Pda(programId: PublicKey, player: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [GAME_V2_SEED_BYTES, player.toBuffer()],
-    programId,
-  );
-}
+// Re-export so reveal/route.ts + commit/route.ts callers don't have to
+// switch their import. The canonical implementation lives in the SDK
+// (packages/sdk/src/pdas.ts) using the GAME_V2_SEED shared constant.
+export { deriveGameV2Pda };
 
 /**
  * Instruction builders for the new Magicblock-ER variants:
