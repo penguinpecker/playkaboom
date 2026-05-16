@@ -7,7 +7,7 @@ import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
 import { loadSession, deleteSession } from "@/server/session-store";
 import { OnChainError, requireActiveGame, sendHouseTx } from "@/server/solana";
-import { housePubkey, programId, useMagicblock } from "@/server/env";
+import { housePubkey, programId, treasuryPubkey, useMagicblock } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 import { fetchPlayerReferrer } from "@/server/player";
@@ -70,6 +70,7 @@ export async function POST(req: NextRequest) {
           ctx,
           player: playerPk,
           houseAuthority: housePubkey(),
+          treasury: treasuryPubkey(),
           mineLayout: session.mineLayout,
           salt: saltBuffer(session),
           referrer: referrer ?? undefined,
@@ -94,6 +95,7 @@ export async function POST(req: NextRequest) {
           ctx,
           player: playerPk,
           houseAuthority: housePubkey(),
+          treasury: treasuryPubkey(),
           mineLayout: session.mineLayout,
           salt: saltBuffer(session),
           referrer: referrer ?? undefined,
