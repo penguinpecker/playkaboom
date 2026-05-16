@@ -438,6 +438,10 @@ export interface UpdateV2ConfigArgs {
   minHealthBps?: number;
   withdrawCooldownSlots?: bigint;
   minLpDeposit?: bigint;
+  /** Magicblock ER kill-switch. False disables start_game_er; in-flight
+   *  ER games still complete (delegate/reveal/settle don't read the flag).
+   *  See programs/kaboom/src/lib.rs VaultV2State.er_enabled. */
+  erEnabled?: boolean;
 }
 
 export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstruction {
@@ -449,6 +453,7 @@ export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstru
   parts.push(encodeOption(args.minHealthBps, (v) => writeU16(v)));
   parts.push(encodeOption(args.withdrawCooldownSlots, (v) => writeU64(v)));
   parts.push(encodeOption(args.minLpDeposit, (v) => writeU64(v)));
+  parts.push(encodeOption(args.erEnabled, (v) => Buffer.from([v ? 1 : 0])));
   return new TransactionInstruction({
     programId: args.ctx.programId,
     keys: [readonly(vaultPda), writable(v2StatePda), readonly(args.owner, true)],

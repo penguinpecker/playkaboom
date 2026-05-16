@@ -1138,6 +1138,7 @@ pub mod kaboom {
         min_health_bps: Option<u16>,
         withdraw_cooldown_slots: Option<u64>,
         min_lp_deposit: Option<u64>,
+        er_enabled: Option<bool>,
     ) -> Result<()> {
         let v2 = &mut ctx.accounts.v2_state;
         if let Some(v) = min_house_share_bps {
@@ -1170,6 +1171,9 @@ pub mod kaboom {
         }
         if let Some(v) = min_lp_deposit {
             v2.min_lp_deposit = v;
+        }
+        if let Some(v) = er_enabled {
+            v2.er_enabled = v;
         }
         emit!(V2ConfigUpdated {
             vault: ctx.accounts.vault.key(),
@@ -1513,6 +1517,15 @@ pub mod kaboom {
     ) -> Result<()> {
         let vault = &ctx.accounts.vault;
         require!(!vault.paused, KaboomError::VaultPaused);
+        // Magicblock ER kill-switch. Defaults false on init (existing
+        // _reserved bytes are zero). Owner flips via update_v2_config when
+        // ER is ready for production traffic; can also flip back to false
+        // in an emergency without redeploying the program. Only blocks NEW
+        // games — in-flight ER games still settle.
+        require!(
+            ctx.accounts.v2_state.er_enabled,
+            KaboomError::ErRoutingDisabled
+        );
         require!(
             (MIN_MINES..=MAX_MINES).contains(&mine_count),
             KaboomError::InvalidMineCount
@@ -2170,7 +2183,15 @@ pub struct VaultV2State {
     pub withdraw_cooldown_slots: u64,
     pub min_lp_deposit: u64,
 
-    pub _reserved: [u8; 64],
+    /// Magicblock ER kill-switch. When false, `start_game_er` errors with
+    /// `ErRoutingDisabled` — no new players enter the ER flow. In-flight
+    /// games can still complete (delegate/reveal/settle paths don't read
+    /// this flag) so emergency-flipping this doesn't strand running games.
+    /// Default false on init (existing on-chain _reserved bytes are zero =
+    /// disabled). Settable via `update_v2_config(er_enabled = Some(...))`.
+    pub er_enabled: bool,
+
+    pub _reserved: [u8; 63],
 }
 
 impl VaultV2State {
@@ -2180,7 +2201,8 @@ impl VaultV2State {
         + 16 + 16 + 16 + 8 + 16 + 16 // 5 u128 + 1 u64 in LP block
         + 2 + 2 + 2               // 3 u16 bps
         + 8 + 8                   // withdraw_cooldown_slots + min_lp_deposit
-        + 64;                     // reserved
+        + 1                       // er_enabled
+        + 63;                     // reserved
 }
 
 /// Per-user LP position. PDA seeds: [LP_SEED, user.key()].
@@ -2971,6 +2993,8 @@ pub enum KaboomError {
     // ─── Magicblock ER additions ────────────────────────────────────────────
     #[msg("Game has no session key set; cannot reveal in ER mode.")]
     SessionKeyMissing,
+    #[msg("Magicblock ER routing is disabled; the kill-switch is off (vault.er_enabled=false).")]
+    ErRoutingDisabled,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
