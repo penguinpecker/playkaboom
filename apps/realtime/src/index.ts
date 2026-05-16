@@ -245,12 +245,22 @@ async function tickCron() {
       console.warn(`[cron] tick failed: HTTP ${res.status}`);
     } else {
       const body = (await res.json().catch(() => null)) as
-        | { processed?: number; skipped?: number; errors?: number }
+        | {
+            processed?: number;
+            skipped?: number;
+            errors?: number;
+            errorDetails?: { sig: string; message: string }[];
+          }
         | null;
       if (body && (body.processed || body.errors)) {
         console.log(
           `[cron] processed=${body.processed ?? 0} skipped=${body.skipped ?? 0} errors=${body.errors ?? 0}`,
         );
+      }
+      if (body?.errorDetails?.length) {
+        for (const d of body.errorDetails) {
+          console.warn(`[cron] error sig=${d.sig.slice(0, 16)}… msg=${d.message}`);
+        }
       }
     }
   } catch (e) {
