@@ -184,12 +184,23 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       check("games", "GameSettled.rpc", rpc);
       const updated = (rpc.data as number | null) ?? 0;
       if (updated === 0) {
-        // The cashout row doesn't exist yet — likely Helius delivered the
-        // GameSettled event before the GameWon. Throw to release the
-        // processed_events claim; the next cron tick will re-process this
-        // signature, by which point the cashout row will be present.
+        // The cashout row doesn't exist yet — usually because the GameWon/
+        // GameLost event in a SEPARATE earlier tx hasn't been ingested yet.
+        // Retry is correct in that window. But if the settle event is more
+        // than RETRY_WINDOW_MS old, the row will never appear (either it was
+        // settled and is now a redelivery, or the win/loss row was lost),
+        // and we'd retry every 60s forever. After the window, log + skip.
+        const RETRY_WINDOW_MS = 5 * 60_000;
+        const ageMs = tx.blockTime ? Date.now() - tx.blockTime * 1000 : 0;
+        if (ageMs > RETRY_WINDOW_MS) {
+          logger.warn(
+            { sig: tx.signature, game, slot, ageSec: Math.round(ageMs / 1000) },
+            "[GameSettled] no matching unsettled row + outside retry window — skipping",
+          );
+          break;
+        }
         throw new Error(
-          `[GameSettled] no matching unsettled cashout row found for game=${game} at slot<=${slot} — will retry`,
+          `[GameSettled] no matching unsettled cashout row found for game=${game} at slot<=${slot} — will retry (age=${Math.round(ageMs / 1000)}s)`,
         );
       }
       if (ev.verified) {
