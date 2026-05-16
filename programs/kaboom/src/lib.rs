@@ -666,6 +666,79 @@ pub mod kaboom {
             }
         }
 
+        // ─── Treasury / LP profit split (2026-05-16) ──────────────────────
+        // Per game, send `treasury_split_bps` portion of the house-edge
+        // share of the bet directly to treasury. The remainder stays in
+        // vault → benefits all unit holders (seed + house + user) via NAV
+        // growth. With defaults (200 bps edge, 5000 bps split), this is
+        // 200 * 5000 / 10000^2 = 0.5% of bet per game to treasury.
+        //
+        // Notes:
+        //   - Applied uniformly on Win and Lost games. Statistical EV of
+        //     vault is `bet * house_edge_bps / BPS`, so the treasury cut
+        //     is `treasury_split_bps / BPS` of the expected edge. On a
+        //     player-win game the vault temporarily pays out more than
+        //     it took in for that game, but the treasury cut still fires
+        //     — the cut is an expectation-based operator-revenue accrual,
+        //     not a realised-PnL share.
+        //   - Capped to remaining vault liquidity after rent +
+        //     outstanding obligations. If a freak game-loss leaves vault
+        //     too thin to fund the cut, we skip (the same defensive
+        //     pattern referral payout uses above).
+        //   - Skipped if treasury_split_bps == 0 (operator can disable
+        //     via update_vault).
+        let treasury_split_bps = ctx.accounts.vault.treasury_split_bps;
+        let house_edge_bps = ctx.accounts.vault.house_edge_bps;
+        if treasury_split_bps > 0 {
+            let edge_share = mul_div_floor(
+                game.bet,
+                house_edge_bps as u64,
+                BPS,
+            )?;
+            let treasury_cut = mul_div_floor(
+                edge_share,
+                treasury_split_bps as u64,
+                BPS,
+            )?;
+
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+            let v2_ref = &ctx.accounts.v2_state;
+            let assets_now = vault_info.lamports().saturating_sub(rent);
+            // Reserve outstanding obligations + pending LP withdrawal
+            // value so the cut never undermines redeemability.
+            let pending_value = units_to_assets(
+                v2_ref.total_pending_units,
+                assets_now,
+                v2_ref.total_units,
+            )?;
+            let liquidity = assets_now
+                .saturating_sub(v2_ref.total_outstanding_max_payout)
+                .saturating_sub(pending_value);
+            let actual_treasury_cut = treasury_cut.min(liquidity);
+
+            if actual_treasury_cut > 0 {
+                **vault_info.try_borrow_mut_lamports()? = vault_info
+                    .lamports()
+                    .checked_sub(actual_treasury_cut)
+                    .ok_or(KaboomError::MathOverflow)?;
+                let treasury_info = ctx.accounts.treasury.to_account_info();
+                **treasury_info.try_borrow_mut_lamports()? = treasury_info
+                    .lamports()
+                    .checked_add(actual_treasury_cut)
+                    .ok_or(KaboomError::MathOverflow)?;
+
+                emit!(TreasuryAccrued {
+                    vault: ctx.accounts.vault.key(),
+                    treasury: ctx.accounts.treasury.key(),
+                    from_game: game.key(),
+                    bet: game.bet,
+                    amount: actual_treasury_cut,
+                    slot: Clock::get()?.slot,
+                });
+            }
+        }
+
         emit!(GameSettled {
             player: game.player,
             game: game.key(),
@@ -908,6 +981,114 @@ pub mod kaboom {
             treasury: ctx.accounts.treasury.key(),
             destination: dest_key,
             amount: withdraw,
+            slot: Clock::get()?.slot,
+        });
+        Ok(())
+    }
+
+    /// Unlock the anti-inflation seed and transfer its lamport equivalent
+    /// to an allowlisted destination. One-shot: zeroes `seed_units`.
+    ///
+    /// Originally `seed_units` was set at `initialize_v2` to lock 1 SOL
+    /// permanently (anti-first-deposit-inflation defense). After Phase 2
+    /// rollout the lock turned out to be unnecessary — vault is now
+    /// large enough that the inflation attack surface from seed-relative
+    /// donations is non-material. This ix recovers the seed back to
+    /// treasury/operator without unmounting the LP system.
+    ///
+    /// Mechanics:
+    ///   1. Compute lamports the current `seed_units` are worth at NAV
+    ///      (`units_to_assets(seed_units, vault_assets, total_units)`).
+    ///   2. Burn `seed_units` — subtract from `total_units`, zero
+    ///      `seed_units`.
+    ///   3. Transfer the computed lamports from vault → destination.
+    ///   4. Re-check `min_health_bps` floor post-transfer. The vault
+    ///      should still be above the operator's health threshold.
+    ///
+    /// Owner-signed (Squads 2/2). Destination must be on
+    /// `vault.withdraw_allowlist` — same security envelope as
+    /// `withdraw_to_treasury`. Refuses if `seed_units == 0` so the ix
+    /// can be safely re-fired without further effect.
+    pub fn unlock_seed(ctx: Context<UnlockSeed>) -> Result<()> {
+        let v2 = &mut ctx.accounts.v2_state;
+        require!(v2.seed_units > 0, KaboomError::NoSeedToUnlock);
+
+        let vault = &ctx.accounts.vault;
+        let dest_key = ctx.accounts.destination.key();
+        // Same defense-in-depth as withdraw_to_treasury (C2 + M5):
+        require!(
+            !ctx.accounts.destination.executable,
+            KaboomError::InvalidAmount
+        );
+        require!(
+            dest_key != ctx.accounts.vault.key(),
+            KaboomError::InvalidConfig
+        );
+        let allowed = vault
+            .withdraw_allowlist
+            .iter()
+            .take(vault.allowlist_count as usize)
+            .any(|k| *k == dest_key);
+        require!(allowed, KaboomError::DestinationNotAllowlisted);
+
+        // Compute lamports the seed is worth at current NAV.
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+        let assets = vault_info.lamports().saturating_sub(rent);
+        let seed_lamports =
+            units_to_assets(v2.seed_units, assets, v2.total_units)?;
+
+        // Cap to what's actually available after outstanding obligations.
+        // If the vault is under-capitalised (impossible by design but
+        // defensive), unlock what we can — owner can re-fire later if
+        // partial.
+        let pending_value = units_to_assets(
+            v2.total_pending_units,
+            assets,
+            v2.total_units,
+        )?;
+        let withdrawable = assets
+            .saturating_sub(v2.total_outstanding_max_payout)
+            .saturating_sub(pending_value);
+        let actual = seed_lamports.min(withdrawable);
+        require!(actual > 0, KaboomError::InsufficientLiquidity);
+
+        // Burn seed_units BEFORE the transfer so a partial recovery
+        // can be re-fired against the remaining seed_units. We zero
+        // them in one shot here.
+        let burned_units = v2.seed_units;
+        v2.total_units = v2
+            .total_units
+            .checked_sub(burned_units)
+            .ok_or(KaboomError::MathOverflow)?;
+        v2.seed_units = 0;
+
+        // Transfer lamports out of vault.
+        **vault_info.try_borrow_mut_lamports()? = vault_info
+            .lamports()
+            .checked_sub(actual)
+            .ok_or(KaboomError::MathOverflow)?;
+        let dest_info = ctx.accounts.destination.to_account_info();
+        **dest_info.try_borrow_mut_lamports()? = dest_info
+            .lamports()
+            .checked_add(actual)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        // Post-transfer health floor check. Recompute `assets` from the
+        // post-transfer state by re-reading the vault's lamports.
+        let assets_after = ctx
+            .accounts
+            .vault
+            .to_account_info()
+            .lamports()
+            .saturating_sub(rent);
+        enforce_min_health(v2, assets_after)?;
+
+        emit!(SeedUnlocked {
+            vault: ctx.accounts.vault.key(),
+            destination: dest_key,
+            lamports: actual,
+            burned_units,
             slot: Clock::get()?.slot,
         });
         Ok(())
@@ -1886,6 +2067,79 @@ pub mod kaboom {
             }
         }
 
+        // ─── Treasury / LP profit split (2026-05-16) ──────────────────────
+        // Per game, send `treasury_split_bps` portion of the house-edge
+        // share of the bet directly to treasury. The remainder stays in
+        // vault → benefits all unit holders (seed + house + user) via NAV
+        // growth. With defaults (200 bps edge, 5000 bps split), this is
+        // 200 * 5000 / 10000^2 = 0.5% of bet per game to treasury.
+        //
+        // Notes:
+        //   - Applied uniformly on Win and Lost games. Statistical EV of
+        //     vault is `bet * house_edge_bps / BPS`, so the treasury cut
+        //     is `treasury_split_bps / BPS` of the expected edge. On a
+        //     player-win game the vault temporarily pays out more than
+        //     it took in for that game, but the treasury cut still fires
+        //     — the cut is an expectation-based operator-revenue accrual,
+        //     not a realised-PnL share.
+        //   - Capped to remaining vault liquidity after rent +
+        //     outstanding obligations. If a freak game-loss leaves vault
+        //     too thin to fund the cut, we skip (the same defensive
+        //     pattern referral payout uses above).
+        //   - Skipped if treasury_split_bps == 0 (operator can disable
+        //     via update_vault).
+        let treasury_split_bps = ctx.accounts.vault.treasury_split_bps;
+        let house_edge_bps = ctx.accounts.vault.house_edge_bps;
+        if treasury_split_bps > 0 {
+            let edge_share = mul_div_floor(
+                game.bet,
+                house_edge_bps as u64,
+                BPS,
+            )?;
+            let treasury_cut = mul_div_floor(
+                edge_share,
+                treasury_split_bps as u64,
+                BPS,
+            )?;
+
+            let vault_info = ctx.accounts.vault.to_account_info();
+            let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+            let v2_ref = &ctx.accounts.v2_state;
+            let assets_now = vault_info.lamports().saturating_sub(rent);
+            // Reserve outstanding obligations + pending LP withdrawal
+            // value so the cut never undermines redeemability.
+            let pending_value = units_to_assets(
+                v2_ref.total_pending_units,
+                assets_now,
+                v2_ref.total_units,
+            )?;
+            let liquidity = assets_now
+                .saturating_sub(v2_ref.total_outstanding_max_payout)
+                .saturating_sub(pending_value);
+            let actual_treasury_cut = treasury_cut.min(liquidity);
+
+            if actual_treasury_cut > 0 {
+                **vault_info.try_borrow_mut_lamports()? = vault_info
+                    .lamports()
+                    .checked_sub(actual_treasury_cut)
+                    .ok_or(KaboomError::MathOverflow)?;
+                let treasury_info = ctx.accounts.treasury.to_account_info();
+                **treasury_info.try_borrow_mut_lamports()? = treasury_info
+                    .lamports()
+                    .checked_add(actual_treasury_cut)
+                    .ok_or(KaboomError::MathOverflow)?;
+
+                emit!(TreasuryAccrued {
+                    vault: ctx.accounts.vault.key(),
+                    treasury: ctx.accounts.treasury.key(),
+                    from_game: game.key(),
+                    bet: game.bet,
+                    amount: actual_treasury_cut,
+                    slot: Clock::get()?.slot,
+                });
+            }
+        }
+
         emit!(GameSettled {
             player: game.player,
             game: game.key(),
@@ -2516,6 +2770,15 @@ pub struct SettleGame<'info> {
 
     #[account(constraint = house_authority.key() == vault.house_authority @ KaboomError::Unauthorized)]
     pub house_authority: Signer<'info>,
+
+    /// Treasury destination for the per-game house-edge cut. Must match
+    /// `vault.treasury`. Receives `bet * house_edge_bps * treasury_split_bps
+    /// / BPS^2` lamports per settle (the operator's share of expected
+    /// house edge). Remainder of the edge stays in vault and benefits all
+    /// LP unit holders via NAV growth.
+    /// CHECK: address constraint above gates this.
+    #[account(mut, constraint = treasury.key() == vault.treasury @ KaboomError::Unauthorized)]
+    pub treasury: UncheckedAccount<'info>,
     // Optional: remaining_accounts[0] = ReferralAccount of stats.referrer (mut)
 }
 
@@ -2623,6 +2886,29 @@ pub struct WithdrawToTreasury<'info> {
     pub treasury: Signer<'info>,
 
     /// CHECK: must match an entry in `vault.withdraw_allowlist`.
+    #[account(mut)]
+    pub destination: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UnlockSeed<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump = vault.bump,
+        constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
+    )]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    pub owner: Signer<'info>,
+
+    /// CHECK: must match an entry in `vault.withdraw_allowlist`. Same
+    /// security envelope as withdraw_to_treasury — destination cannot be
+    /// arbitrary, must be allowlisted by a prior owner-signed config
+    /// update.
     #[account(mut)]
     pub destination: UncheckedAccount<'info>,
 }
@@ -2899,6 +3185,11 @@ pub struct SettleGameEr<'info> {
     #[account(mut, constraint = house_authority.key() == vault.house_authority
         @ KaboomError::Unauthorized)]
     pub house_authority: Signer<'info>,
+
+    /// Treasury destination for the 50/50 split (see SettleGame).
+    /// CHECK: address constraint matches vault.treasury.
+    #[account(mut, constraint = treasury.key() == vault.treasury @ KaboomError::Unauthorized)]
+    pub treasury: UncheckedAccount<'info>,
     // Optional remaining_accounts[0]: ReferralAccount (mut) — same convention
     // as legacy `settle_game`.
 }
@@ -2995,6 +3286,8 @@ pub enum KaboomError {
     SessionKeyMissing,
     #[msg("Magicblock ER routing is disabled; the kill-switch is off (vault.er_enabled=false).")]
     ErRoutingDisabled,
+    #[msg("Seed liquidity is already zero; nothing to unlock.")]
+    NoSeedToUnlock,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -3151,6 +3444,25 @@ pub struct AllowlistChanged {
 pub struct TreasuryWithdrawal {
     pub treasury: Pubkey,
     pub destination: Pubkey,
+    pub amount: u64,
+    pub slot: u64,
+}
+
+#[event]
+pub struct SeedUnlocked {
+    pub vault: Pubkey,
+    pub destination: Pubkey,
+    pub lamports: u64,
+    pub burned_units: u128,
+    pub slot: u64,
+}
+
+#[event]
+pub struct TreasuryAccrued {
+    pub vault: Pubkey,
+    pub treasury: Pubkey,
+    pub from_game: Pubkey,
+    pub bet: u64,
     pub amount: u64,
     pub slot: u64,
 }

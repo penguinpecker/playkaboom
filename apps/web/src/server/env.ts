@@ -41,6 +41,20 @@ export function housePubkey(): PublicKey {
   return cachedHousePubkey;
 }
 
+let cachedTreasuryPubkey: PublicKey | null = null;
+/**
+ * Treasury account that receives the 50/50 profit-split lamports per
+ * settle_game. Must equal the `vault.treasury` field on-chain (program
+ * constraint enforces it). Set via TREASURY_PUBKEY env var.
+ */
+export function treasuryPubkey(): PublicKey {
+  if (cachedTreasuryPubkey) return cachedTreasuryPubkey;
+  const raw = process.env.TREASURY_PUBKEY;
+  if (!raw) throw new Error("TREASURY_PUBKEY is not set");
+  cachedTreasuryPubkey = new PublicKey(raw);
+  return cachedTreasuryPubkey;
+}
+
 export interface TurnkeyConfig {
   organizationId: string;
   apiPublicKey: string;
