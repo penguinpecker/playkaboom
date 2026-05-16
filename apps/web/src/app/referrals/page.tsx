@@ -26,7 +26,7 @@ export default function ReferralsPage() {
   const { address, isConnected } = useAccount();
   const captured = useReferralCapture();
   const { toast } = useToast();
-  const { setReferrer, claim } = useReferralActions();
+  const { claim } = useReferralActions();
 
   const { data: myReferral } = useReferralAccount(address);
   const { data: stats } = usePlayerStats(address);
@@ -188,20 +188,6 @@ export default function ReferralsPage() {
     toast("Referral link copied!", "emerald");
   };
 
-  const handleSetReferrer = async () => {
-    if (!pendingRef) return;
-    setSubmitting("set");
-    try {
-      await setReferrer(pendingRef);
-      toast("Referrer locked in. Welcome aboard!", "emerald");
-      setPendingRef(null);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "Failed to set referrer", "error");
-    } finally {
-      setSubmitting(null);
-    }
-  };
-
   const handleClaim = async () => {
     if (accrued <= 0) return;
     setSubmitting("claim");
@@ -249,52 +235,13 @@ export default function ReferralsPage() {
         </div>
       ) : (
         <>
-          {/* Referrer prompt — pending from URL.
-              `!stats?.referrer` covers BOTH (a) no PlayerStats PDA yet
-              (brand-new player who hasn't bet — usePlayerStats returns
-              null) AND (b) PDA exists with referrer field unset.
-              Previously this was `=== null` which is false when the
-              whole stats object is null, hiding the prompt for every
-              first-time player — i.e. exactly the audience that came
-              in via /r/CODE. */}
-          {pendingRef && !stats?.referrer && (
-            <div className="bg-gradient-to-br from-primary/10 to-secondary-container/10 border border-primary/20 p-6 mb-6">
-              <div className="flex items-center gap-3 mb-3">
-                <span
-                  className="material-symbols-outlined text-primary mi"
-                  style={{ fontSize: 24 }}
-                >
-                  link
-                </span>
-                <h3 className="font-headline text-sm font-bold uppercase tracking-widest text-primary">
-                  You were invited
-                </h3>
-              </div>
-              <p className="text-xs text-on-surface-variant mb-4">
-                Confirm <span className="font-mono text-primary">{shortAddr(pendingRef, 6, 6)}</span> as your referrer (one-time, immutable on-chain).
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSetReferrer}
-                  disabled={submitting === "set"}
-                  className="bg-gradient-to-r from-primary to-primary-container text-on-primary px-5 py-2.5 font-headline text-xs font-bold tracking-widest hover:brightness-110 active:scale-95 disabled:opacity-50"
-                >
-                  {submitting === "set" ? "CONFIRMING..." : "ACCEPT REFERRER"}
-                </button>
-                <button
-                  onClick={() => {
-                    if (typeof window !== "undefined")
-                      localStorage.removeItem("playkaboom.referrer.v1");
-                    setPendingRef(null);
-                    toast("Pending referrer cleared", "amber");
-                  }}
-                  className="border border-outline-variant/15 px-5 py-2.5 font-headline text-xs font-bold tracking-widest text-on-surface-variant hover:bg-surface-container-highest"
-                >
-                  DECLINE
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Referrer prompt removed 2026-05-16 — set_referrer is now
+              auto-bundled into the player's first start_game (see
+              apps/web/src/hooks/use-game-actions.ts:336). No confirm
+              step is required; the referrer is locked in atomically
+              with the first game on chain. The legacy "Accept Referrer"
+              button + handleSetReferrer handler were removed in the
+              same commit. */}
 
           {/* My referral link */}
           <div className="bg-surface-container-low border border-outline-variant/10 stealth-card p-6 mb-6">
@@ -333,7 +280,7 @@ export default function ReferralsPage() {
               </button>
             </div>
             <p className="text-[10px] text-on-surface-variant/60">
-              Share this link. When friends play their first game and accept you as referrer, you start accruing rakeback.
+              Share this link. The referrer is set automatically when your invitee plays their first game — no confirmation step. Rakeback starts accruing immediately.
               {refCode && (
                 <>
                   {" "}Code <span className="text-primary font-mono">{refCode}</span> — only you can claim it (signed wallet bearer required).
