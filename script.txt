@@ -1,0 +1,312 @@
+SESSION LOG — 2026-05-16 → 2026-05-17 (IST)
+============================================
+
+What this session shipped, end-to-end. Everything on mainnet, no devnet
+detours. Source for the per-rule "review before action" check: see
+HANDOFF.md and this file together.
+
+Starting state (2026-05-16, morning IST):
+  main HEAD:               7d37d52 (already had today's earlier indexer
+                           fixes + Helius removal + Alchemy WS subscriber
+                           from the same day's first sub-session)
+  on-chain program:        9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh
+                           pre-bundle binary, no unlock_operator_position,
+                           no treasury split, no ER ixs
+  vault.owner / treasury:  464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5
+                           (Squads 2/2 multisig)
+  Vault balance:           18.48 SOL
+  seed_units locked:       1,000,000,000 (~15.69 SOL at NAV)
+  house_units:             100,000,000 (~1.57 SOL at NAV)
+  user LP units:           77,757,304 (~1.22 SOL at NAV)
+
+
+─── Part 1 ─ Code on main (Vercel auto-deployed) ────────────────────────
+
+77b5980  docs:                    session log (2026-05-12 pre-bundle)
+9bae751  chore(env):              remove unused Helius RPC + Jito tip env
+15887b0  chore(invariants):       allowlist 6 indexer-race rows
+21d9946  chore(indexer):          drop Helius webhook ingestion
+41f3903  feat(realtime,ingest):   Alchemy logsSubscribe push path replaces
+                                  Helius enhanced-webhook. New apps/realtime
+                                  WS subscriber + apps/web /api/ingest
+                                  endpoint. Lag drops 60s cron-only → ~1-2s.
+16efcba  chore(web):              next 15.1.0 → 15.1.11 (4 CVEs incl.
+                                  CVE-2025-66478 CRITICAL), tsconfig
+                                  exclude **/*.local.ts.
+e91b0dc  chore(indexer):          surface failing-sig errorDetails on every
+                                  cron tick. Caught the deterministic
+                                  errors=1 loop noise (a 4-hour-old
+                                  GameSettled stuck in unbounded retry).
+7d37d52  fix(indexer):            bound GameSettled retry to 5min. Stops
+                                  the infinite retry loop on stale events.
+8669845  Merge PR #2:             magicblock-spike → main, full Magicblock
+                                  ER scaffolding shipped (flag-gated OFF).
+aeabfc8  fix(migrations):         rename game_session_keys migration to
+                                  20260516000000 to dodge timestamp
+                                  collision with indexer_atomic_ops.
+7a316d2  feat(referrals):         remove accept/decline confirm UI from
+                                  /referrals — set_referrer auto-bundled
+                                  into first start_game (existing logic
+                                  from f907d93). No more "ACCEPT REFERRER"
+                                  button anywhere.
+[d69b02c] Merge PR #4:            slim-bundle-2 → main. Carries the new
+                                  unlock_operator_position ix + 50/50
+                                  treasury split + matching web changes
+                                  (settle_game now requires the treasury
+                                  account). Stripped Magicblock to keep
+                                  binary small (~679KB vs ~917KB full).
+074fe89  fix(vault):              client cap helper treats
+                                  max_user_position_bps=0 as disabled
+                                  (sentinel 2^60). Fixes the deposit
+                                  pre-flight rejection.
+d1c6872  fix(close-unsettled):    timer 0 → 38 slots (~15s). Gives server
+                                  settle a window to win the race vs
+                                  player close_unsettled_game. Source
+                                  only — deployed to chain via the
+                                  second Squads program upgrade below.
+
+
+─── Part 2 ─ Magicblock spike branch (preserved, not in production) ─────
+
+origin/magicblock-bundle-2 = b64d838
+  Full Magicblock ER integration on top of the slim bundle:
+    + 4 new ixs: start_game_er, delegate_game, reveal_tile_er, settle_game_er
+    + GameSessionV2 account (game_v2 PDA seed)
+    + ephemeral-rollups-sdk = "0.13.0" dep
+    + on-chain er_enabled kill-switch in VaultV2State
+    + web: er-instructions.ts, magicblock.ts, session-keys.ts (web has
+      these on main already from PR #2 merge; the corresponding program
+      ixs are NOT on main since slim merge stripped them)
+  Status:                          drafted, NOT merged to main, NOT shipped
+  Why deferred:                    Magicblock issue #182 (force-undelegate
+                                   path for stalled validators) has 0
+                                   responses from Magicblock team.
+                                   Real-money mainnet ER traffic not safe
+                                   to enable without that documented.
+  See docs/magicblock-handoff.md   for full resumption plan.
+
+
+─── Part 3 ─ Infrastructure side effects (no git) ────────────────────────
+
+Vercel env (production scope, sensitive):
+  VERCEL_TOKEN              rotated mid-session (CI's old token had been
+                            revoked; we provisioned a fresh team-scoped
+                            one and updated both .env.local + GH secret)
+  CRON_SECRET               rotated mid-session (the vault-health probe
+                            workflow was 401-ing; rotated, redeployed,
+                            verified probe green)
+  HELIUS_WEBHOOK_AUTH       PATCH'd to match Railway's CRON_TICK_AUTH so
+                            the cron tickler stopped 401-ing
+  TREASURY_PUBKEY           set to 464Fe… (the Squads vault). New env;
+                            settle_game requires it after the program
+                            upgrade.
+
+Railway service playkaboom-realtime:
+  ALCHEMY_WS_URL            wss://solana-mainnet.g.alchemy.com/v2/<KEY>
+                            (sourced from public bundle, not stored
+                            elsewhere)
+  KABOOM_PROGRAM_ID         9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh
+  INGEST_URL                https://www.playkaboom.gg/api/ingest
+  INGEST_AUTH               same value as CRON_TICK_AUTH (the
+                            dual-auth route /api/ingest accepts it)
+  service.rootDirectory     set to "apps/realtime" via Railway GraphQL
+                            API. Without this Railpack misdetects the
+                            monorepo as Rust because of root Cargo.toml.
+
+Supabase (production DB):
+  Migrations applied via `supabase db push --linked`:
+    20260516000000_game_session_keys.sql            (table for ER session
+                                                    keypair storage —
+                                                    dormant until ER
+                                                    ships)
+    20260516000001_game_session_keys_delegated_at.sql (column for the
+                                                    delegate_game state
+                                                    flag)
+
+GitHub:
+  Issue filed:                magicblock-labs/delegation-program#182
+                              ("Documenting force-undelegate / validator-
+                              stall recovery path for the program owner")
+  As of session end:          OPEN, 0 comments, no response from
+                              Magicblock team.
+
+
+─── Part 4 ─ On-chain Squads activity ───────────────────────────────────
+
+Squads multisig:                 464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5
+Threshold:                       2/2
+Member 1 (signer):               operator's wallet (the one running Squads)
+Member 2 (signer):               EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG
+
+Votes executed this session (in order):
+  1. allowlist_add(EchyZ)                       slot 420183621 ish
+                                                tx 5m1xLBVQZzy6BWG3H34CPF5
+                                                Adds EchyZ to the
+                                                vault.withdraw_allowlist
+                                                so unlock_operator_position
+                                                can target it as
+                                                destination.
+
+  2. Change Authority program-upgrade           ProgramData upgrade
+                                                authority transferred to
+                                                DbR1a1Cu (CLI wallet) for
+                                                a brief window so the CLI
+                                                could extend the
+                                                ProgramData account by
+                                                25000 bytes.
+
+  3. (CLI, not Squads) extend program           +25,000 bytes capacity
+                                                (was 659,261, became
+                                                684,216). One-time
+                                                permanent rent cost
+                                                ~0.17 SOL.
+
+  4. (CLI, not Squads) set-upgrade-authority    DbR1a1Cu → Squads vault
+                                                (handed back).
+
+  5. Program Upgrade — slim binary              slot 420194786
+                                                sha256
+                                                4ac71fae0044f256452a6ead
+                                                c7f6f0f4971e6ad4c0a971f5
+                                                12de2d851a72f2c9
+                                                Buffer:
+                                                7sd4gqC5XTFQDindbKB3859W
+                                                ReN536xixcv2qDdaxGmU
+                                                (consumed in upgrade)
+                                                What landed: unlock_
+                                                operator_position ix,
+                                                50/50 treasury split in
+                                                settle_game, fixes from
+                                                slim bundle.
+
+  6. unlock_operator_position                   Burns seed + house +
+                                                house_pending units;
+                                                transferred NAV-adjusted
+                                                lamports to EchyZ.
+                                                Result: 17.26 SOL out,
+                                                vault drained to 1.22
+                                                SOL (user LP NAV
+                                                preserved).
+
+  7. update_v2_config(                          Disables per-user
+       max_user_position_bps = 0)               position cap. Enables
+                                                large redeposits.
+
+  8. update_v2_config(                          Disables house-share
+       min_house_share_bps = 0)                 floor. After the unlock,
+                                                house_units = 0, so any
+                                                user LP deposit would
+                                                otherwise hit the 50%
+                                                floor and revert.
+
+  9. Program Upgrade — timer binary             slot 420205429 ish
+                                                sha256
+                                                450d4b9cc127b796cbedaf
+                                                61dc88d923ce30a1c2c182
+                                                a4762333d1cbd3378540
+                                                Buffer:
+                                                DfjoGWCD3XMVUXMG7k6zU7s
+                                                3bvcHEZSSSAd4QursjFMH
+                                                (consumed in upgrade)
+                                                What landed: CLOSE_
+                                                UNSETTLED_EXPIRY_SLOTS
+                                                lowered from 600 to 38
+                                                (~15s instead of ~4
+                                                min).
+
+
+─── Part 5 ─ Funds flow this session ─────────────────────────────────────
+
+EchyZ wallet (operator):
+  Start:                7.29 SOL
+  Sent to CLI:          −6 SOL → DbR1a1Cu for first buffer upload
+  Received from unlock: +17.26 SOL (operator share extracted from vault)
+  Final transfer back:  +5.82 SOL (post-upgrade CLI dust return)
+  Mid-session sent to:  −5 SOL → DbR1a1Cu for second buffer upload
+  Second return:        +4.996 SOL (post-second-upgrade dust return)
+  Deposit into vault:   −X SOL → vault (user-direction redeposit)
+  End:                  ~14.33 SOL (before redeposit) →
+                        post-redeposit balance depends on the deposit
+                        amount you chose
+
+DbR1a1Cu (CLI wallet, ephemeral throughout):
+  Net spent on:         ~0.17 SOL — extend rent (PERMANENT)
+                        ~0.003 SOL — tx fees (PERMANENT)
+                        ~0.001 SOL — small dust kept for rent-exempt
+                        floor between rounds
+  End:                  ~0.002 SOL dust
+
+Vault:
+  Start:                18.48 SOL, total_units 1,177,757,304
+                        (seed 1B + house 100M + user 77.76M)
+  After unlock:         1.22 SOL, total_units 77,757,304
+                        (only user LP units left, NAV preserved at
+                        ~15.74 lamports/unit)
+  After redeposit:      ~11+ SOL (current /api/health snapshot)
+
+Treasury (Squads vault, separately):
+  Receives 1% of every settle's bet from the new program. Builds slowly
+  per game; not a single round-trip event.
+
+
+─── Part 6 ─ Configuration state on chain ────────────────────────────────
+
+vault.house_edge_bps:          200       (2%, unchanged)
+vault.max_bet_bps:             1000      (10%, unchanged)
+vault.max_payout_bps:          5000      (50%, unchanged)
+vault.treasury_split_bps:      5000      (NOW ENFORCED: 50% of edge →
+                                          treasury, 50% → LP NAV)
+vault.paused:                  false
+vault.owner:                   464Fe… (Squads vault)
+vault.treasury:                464Fe… (same — Squads vault is both)
+vault.house_authority:         7exwT… (Turnkey HSM)
+
+v2_state.min_house_share_bps:  0          (DISABLED — was 5000)
+v2_state.max_user_position_bps:0          (DISABLED — was 1000)
+v2_state.min_health_bps:       1000       (10% — unchanged)
+v2_state.withdraw_cooldown_slots: 648000  (~72h, unchanged)
+v2_state.min_lp_deposit:       (unchanged)
+v2_state.seed_units:           0          (extracted)
+v2_state.house_units:          0          (extracted)
+v2_state.house_pending_units:  0          (extracted)
+v2_state.total_units:          77,757,304 + new deposit's mints
+                               (user LPs only)
+
+Code-level constants:
+  CLOSE_UNSETTLED_EXPIRY_SLOTS  38         (~15s — was 600)
+  GAME_EXPIRY_SLOTS             300       (unchanged)
+
+
+─── Part 7 ─ Memory rules added or strengthened ─────────────────────────
+
+  feedback_verify_pipeline_after_every_push.md
+    — Strengthened to cover branch pushes (PR-triggered CI), require
+      workspace-wide turbo typecheck before commit (per-package tsc
+      can miss cross-workspace breakage).
+
+  feedback_no_devnet_detours_mainnet_only.md
+    — New rule: for PlayKaboom and similar real-money Solana products,
+      no devnet/testnet detours. Everything ships mainnet-direct,
+      gated by multisig + feature flags.
+
+
+─── Part 8 ─ Open items / not done in this session ──────────────────────
+
+  Magicblock ER deploy
+    Blocked on:                Magicblock-labs/delegation-program#182
+                               response (force-undelegate documentation).
+    Code preserved on:         origin/magicblock-bundle-2 branch.
+    Plan:                      docs/magicblock-handoff.md
+
+  Web app: er-instructions.ts / magicblock.ts / session-keys.ts
+    Currently on main as dormant code (never executes — env defaults to
+    MAGICBLOCK_ENABLED=false, and the on-chain program doesn't have ER
+    ixs anyway). Could be stripped to match the slim program; not
+    required.
+
+  Squads `allowlist_remove(EchyZ)`
+    Optional cleanup: after the unlock_operator_position, EchyZ doesn't
+    need to stay on the withdraw_allowlist. Removing it tightens the
+    operator surface area slightly. One Squads vote.
+
+END OF SESSION LOG.
