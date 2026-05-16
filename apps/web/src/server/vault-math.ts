@@ -48,13 +48,22 @@ export function lamportsToUnits(
   return (amount * totalUnitsPre) / vaultAssetsPre;
 }
 
-/** Effective per-user position cap (in lamports), scaled by health. */
+/** Effective per-user position cap (in lamports), scaled by health.
+ *
+ * When the on-chain `max_user_position_bps` is 0 the cap is DISABLED —
+ * no per-user limit at all. We return `2^60` here (≈ 1.15 BILLION SOL,
+ * far past any plausible deposit) so the pre-flight comparison in
+ * /api/vault/deposit never blocks. Prior code returned `vaultAssets`,
+ * which wrongly capped a "disabled" deposit at the current vault size
+ * and produced confusing UI errors when an operator tried to refund a
+ * large position into a small vault. */
+const POSITION_CAP_DISABLED_SENTINEL = 1n << 60n;
 export function effectiveMaxUserPositionLamports(
   v2: VaultV2StateAccount,
   vaultAssets: bigint,
   health: number,
 ): bigint {
-  if (v2.maxUserPositionBps === 0) return vaultAssets; // disabled
+  if (v2.maxUserPositionBps === 0) return POSITION_CAP_DISABLED_SENTINEL;
   return (
     (((vaultAssets * BigInt(v2.maxUserPositionBps)) / BPS) * BigInt(health)) /
     BPS
