@@ -35,6 +35,10 @@ export const VAULT_SEED = "kaboom_vault";
 export const VAULT_V2_SEED = "kaboom_v2_state";
 export const LP_SEED = "kaboom_lp";
 export const GAME_SEED = "kaboom_game";
+/** Magicblock ER GameSessionV2 PDA seed — mirrors GAME_V2_SEED in the
+ * Anchor program. Distinct from GAME_SEED so the L1 and ER paths can
+ * coexist for a single player. */
+export const GAME_V2_SEED = "game_v2";
 export const STATS_SEED = "kaboom_stats";
 export const REFERRAL_SEED = "kaboom_referral";
 

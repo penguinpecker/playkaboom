@@ -18,8 +18,14 @@ import { housePubkey, programId, useMagicblock } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 import { indexFreshSignature } from "@/server/inline-ingest";
-import { buildRevealTileEr, deriveGameV2Pda } from "@/server/er-instructions";
-import { loadSessionKeypair } from "@/server/session-keys";
+import { buildDelegateGame, buildRevealTileEr, deriveGameV2Pda } from "@/server/er-instructions";
+import {
+  claimDelegationSlot,
+  isDelegated,
+  loadSessionKeypair,
+  releaseDelegationSlot,
+} from "@/server/session-keys";
+import { getValidatorPubkey } from "@/server/magicblock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -97,6 +103,12 @@ export async function POST(req: NextRequest) {
       // Magicblock ER hot path: session-key signs reveal_tile_er, sent
       // directly to the ER endpoint. No Turnkey involvement per-tile.
       //
+      // First reveal lazily runs delegate_game (Turnkey-signed, L1) so the
+      // GameSessionV2 PDA flips into ER ownership before the reveal_tile_er
+      // hits the validator. Subsequent reveals on the same game skip the
+      // delegate. claimDelegationSlot is the atomic write that prevents two
+      // concurrent first-reveals from both firing delegate_game.
+      //
       // On mine: settle no longer rides in the same tx (commit_and_undelegate
       // is its own ix issued via /api/settle). The reveal tx alone records
       // the mine inside the ER; the client should follow up with a settle
@@ -104,6 +116,29 @@ export async function POST(req: NextRequest) {
       // GameSession PDA undelegates + settles atomically server-side later.
       const [gamePda] = deriveGameV2Pda(programId(), playerPk);
       const sessionKp = await loadSessionKeypair(gamePda);
+
+      const needsDelegation = !(await isDelegated(gamePda));
+      if (needsDelegation && (await claimDelegationSlot(gamePda))) {
+        try {
+          const delegateIx = buildDelegateGame({
+            ctx,
+            player: playerPk,
+            houseAuthority: housePk,
+            validator: getValidatorPubkey(),
+          });
+          const delegateSig = await sendHouseTx([delegateIx]);
+          logger.info(
+            { gamePda: gamePda.toBase58(), sig: delegateSig },
+            "delegate_game landed",
+          );
+        } catch (delegateErr) {
+          // Release the slot so the next reveal can retry. Don't swallow —
+          // the player needs to know this reveal didn't land.
+          await releaseDelegationSlot(gamePda);
+          throw delegateErr;
+        }
+      }
+
       const revealErIx = buildRevealTileEr({
         ctx,
         player: playerPk,
