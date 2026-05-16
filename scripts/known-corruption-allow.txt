@@ -29,3 +29,16 @@ JfvMmDgWvBA5hHKrkoSyMABAUWmVE5XLN385o8TWpnYbAbFoK2DKDB6y29gYchgbjkLdEHPyLpL1ayXG
 2epw7gKccPcBnk35hKcd4PAsKVWzPFaPwTKgHbeaiHAuhrjrhhwkaEtqC8fZepxWnWNzTPqwgqcPpFtmkNudgAhR
 4q4TY4y5NARb7L7gXKNiTFUxdYANQcJ5c7dNoLpRxN1pwJAhTtpgWAm3RerWF7f4P7zjq9JTFPP83a4FyegoGCH9
 4Doe8vfDPcpM4hr9FGTHMcRACAaS91Nvzt6yA1MGitAYnALE34tatqFHJZRLE5DRzFYzwPdQxR7yoz9oMnmhjgh
+
+# 2026-05-12+ batch — same indexer race, surfaced after commit 81c19bb.
+# 4eRzpLUz row is the failed-first-settle of the 2026-05-12 stuck game
+# (mine_count=0 in the DB row, impossible on-chain → settle event from
+# a different game overwrote the cached fields). Other five rows fail
+# the same way (have/expected diverge, row metadata is from a different
+# settle event, on-chain math is sound).
+4eRzpLUzvQsZmaSxaPGqd8iSVogqU5urqUAJrz7opudRCtxVmSUuELnJceJsgn4bz9mYp2Hrgrf8xRU598M7tU3q
+si64AQrfkdPRjWKTqjb3U6L122JP4QkaRDwjFBCnZoD8t3CwremCkR8ufTeo1i1F4Vkb64oPzHf87RAzRGRcNAn
+2Ps23VAUsxvbY6NAYc5kjfW4QG17UWfWYoVQtjNL2nZkkwcrwx9TSgAu9u7e3STe7dy6kmkTNdY3oYoX77N49g3F
+5fJwVRHpgrQ8YGdsibNxt1ELyhU6ndgsMpZvkJJJRbdTLL77jFsEbSUZvTjAdMDUWTFUuZUk4EXwjBR3yRAiumVp
+59M9kTExWpcJaRUEfum4qpHft9ZVJhLiCEQHLx29gUQjQowKjRKeXhjTnSqWTxr7rZYw6AFGAULqq9AX37MPRb1b
+5Ls2deBDtj8DxbQDqCLEHT9dqCZwBmfnYmDcXdiS5Trd6k48QfVsJU7mVDin3UYqoqaC8hsaALEQyKfS4tpG83zp
