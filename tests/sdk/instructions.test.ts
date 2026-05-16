@@ -41,11 +41,13 @@ describe("instruction builders", () => {
   it("settle_game requires 32-byte salt", () => {
     const player = Keypair.generate().publicKey;
     const house = Keypair.generate().publicKey;
+    const treasury = Keypair.generate().publicKey;
     expect(() =>
       buildSettleGame({
         ctx: { programId },
         player,
         houseAuthority: house,
+        treasury,
         mineLayout: 0xff,
         salt: Buffer.alloc(31),
       }),
