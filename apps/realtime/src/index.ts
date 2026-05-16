@@ -30,10 +30,22 @@
  *   CRON_TICK_AUTH        Bearer token for the CRON_TICK_URL request.
  *                         For playkaboom.gg, this is the CRON_SECRET that
  *                         the /api/cron/index-events route validates.
+ *   ALCHEMY_WS_URL        Full Alchemy Solana mainnet WS URL incl. API key.
+ *                         When set with KABOOM_PROGRAM_ID + INGEST_URL +
+ *                         INGEST_AUTH, the relay also runs an Alchemy
+ *                         logsSubscribe push path that replaces the deleted
+ *                         Helius enhanced-webhook. See ./alchemy-logs.ts.
+ *   KABOOM_PROGRAM_ID     On-chain program ID for the logsSubscribe filter.
+ *   INGEST_URL            POST endpoint that ingests one signature at a
+ *                         time (the playkaboom.gg /api/ingest route).
+ *   INGEST_AUTH           Bearer token for INGEST_URL — same value as
+ *                         CRON_TICK_AUTH works; the route accepts either
+ *                         CRON_SECRET or HELIUS_WEBHOOK_AUTH.
  */
 import http from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
+import { startAlchemyLogsSubscriber } from "./alchemy-logs.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -57,6 +69,7 @@ if (!SUPABASE_ANON_KEY) {
 
 const clients = new Set<WebSocket>();
 let upstreamConnected = false;
+const alchemyLogs = startAlchemyLogsSubscriber();
 
 const httpServer = http.createServer((req, res) => {
   if (req.url === "/health" || req.url === "/healthz") {
@@ -66,6 +79,7 @@ const httpServer = http.createServer((req, res) => {
         ok: true,
         clients: clients.size,
         upstream: upstreamConnected,
+        alchemy_logs: alchemyLogs?.isConnected() ?? null,
         uptime_s: Math.round(process.uptime()),
       }),
     );
@@ -274,6 +288,7 @@ const shutdown = (sig: string) => {
   console.log(`[realtime] ${sig} — shutting down`);
   clearInterval(heartbeat);
   if (cronInterval) clearInterval(cronInterval);
+  alchemyLogs?.stop();
   for (const ws of clients) {
     try {
       ws.close(1001, "server shutdown");
