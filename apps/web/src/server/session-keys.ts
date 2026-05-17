@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { sessionEncKey } from "./env";
 import { supabaseAdmin } from "./db/supabase";
+import { getConnection } from "./connection";
 import { logger } from "./logger";
 
 /**
@@ -126,9 +127,51 @@ export async function ensureSessionKey(
       typeof raw === "string"
         ? Buffer.from(raw.startsWith("\\x") ? raw.slice(2) : raw, raw.startsWith("\\x") ? "hex" : "base64")
         : Buffer.from(raw);
-    const secretKey = decryptSecret(blob);
-    const kp = Keypair.fromSecretKey(secretKey);
-    return { publicKey: kp.publicKey, secretKey, created: false };
+    try {
+      const secretKey = decryptSecret(blob);
+      const kp = Keypair.fromSecretKey(secretKey);
+      return { publicKey: kp.publicKey, secretKey, created: false };
+    } catch (decryptErr) {
+      // Corrupt row — most likely from the legacy buffer-as-JSON write bug
+      // (PostgREST stored "{type:Buffer,data:[...]}" literal text instead of
+      // raw bytes). Only safe to auto-recover if no on-chain V2 PDA exists
+      // for this game_pda: that means start_game_er never landed, no game
+      // state is established, and the on-chain session_key reference doesn't
+      // point at a real keypair yet. If a V2 PDA DOES exist, we'd be
+      // silently breaking signature verification on the next reveal — refuse
+      // and require manual intervention.
+      const onChain = await getConnection().getAccountInfo(gamePda, "confirmed");
+      if (onChain) {
+        logger.error(
+          {
+            err: decryptErr instanceof Error ? decryptErr.message : String(decryptErr),
+            gamePda: gamePda.toBase58(),
+          },
+          "ensureSessionKey: corrupt row WITH on-chain V2 PDA present — manual recovery required",
+        );
+        throw new Error(
+          `ensureSessionKey: corrupt session keypair row for ${gamePda.toBase58()} but the on-chain V2 PDA exists; cannot auto-recover`,
+        );
+      }
+      logger.warn(
+        {
+          err: decryptErr instanceof Error ? decryptErr.message : String(decryptErr),
+          gamePda: gamePda.toBase58(),
+        },
+        "ensureSessionKey: corrupt row + no on-chain V2 PDA — overwriting with fresh keypair",
+      );
+      const fresh = generateGameSessionKey();
+      const ciphertext = encryptSecret(fresh.secretKey);
+      const encoded = "\\x" + Buffer.from(ciphertext).toString("hex");
+      const overwrite = await supa
+        .from("game_session_keys")
+        .update({ encrypted_secret: encoded, delegated_at: null })
+        .eq("game_pda", gamePda.toBase58());
+      if (overwrite.error) {
+        throw new Error(`ensureSessionKey: overwrite failed: ${overwrite.error.message}`);
+      }
+      return { publicKey: fresh.publicKey, secretKey: fresh.secretKey, created: true };
+    }
   }
 
   // No row exists — generate a new keypair and attempt to insert it. If a
