@@ -61,16 +61,39 @@ export async function POST(req: NextRequest) {
     // produced opaque 500s before this gate landed:
     //   1) Stale localStorage token from a previously-closed game.
     //   2) Tile click landing before start_game propagated (optimistic UI).
-    // requireActiveGame retries 3×250ms for (2); a null after retries means
-    // the PDA is truly absent. Returning 409+needsCleanup reuses the
-    // existing /api/commit recovery contract — the client already knows how
-    // to wipe its token and call /api/cleanup.
-    const onChainGame = await requireActiveGame(playerPk);
-    if (!onChainGame) {
-      await deleteSession(body.player);
-      throw new ApiError(409, "Game session no longer active — start a new round.", {
-        needsCleanup: true,
-      });
+    //
+    // For ER (Magicblock) games the on-chain game state lives at the V2 PDA
+    // (`game_v2` seed) — the V1 `kaboom_game` PDA never exists. If the player
+    // is in ER mode, check the V2 PDA instead so this gate doesn't bounce
+    // every ER reveal with a stale-V1 401. requireActiveGame retries 3×250ms;
+    // we replicate that pattern for V2 below via a small inline poll.
+    if (useMagicblock(body.player)) {
+      const { getConnection } = await import("@/server/connection");
+      const conn = getConnection();
+      const [gameV2Pda] = deriveGameV2Pda(programId(), playerPk);
+      let v2Info = await conn.getAccountInfo(gameV2Pda, "confirmed");
+      for (let i = 0; i < 2 && !v2Info; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        v2Info = await conn.getAccountInfo(gameV2Pda, "confirmed");
+      }
+      if (!v2Info) {
+        await deleteSession(body.player);
+        throw new ApiError(409, "Game session no longer active — start a new round.", {
+          needsCleanup: true,
+        });
+      }
+      // V2 PDA exists — could be owned by our program (delegate pending) OR
+      // by the DLP (delegated). Both states are valid for reveals on the ER
+      // hot path; the program enforces the actual semantics. Skip the V1
+      // probe entirely.
+    } else {
+      const onChainGame = await requireActiveGame(playerPk);
+      if (!onChainGame) {
+        await deleteSession(body.player);
+        throw new ApiError(409, "Game session no longer active — start a new round.", {
+          needsCleanup: true,
+        });
+      }
     }
 
     const { isMine, updated } = checkTile(session, body.tileIndex);

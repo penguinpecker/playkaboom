@@ -39,15 +39,29 @@ export async function POST(req: NextRequest) {
     const playerPk = new PublicKey(body.player);
     const ctx = { programId: programId() };
 
-    // On-chain truth gate — same rationale as /api/reveal. Without this,
-    // a stale gameToken + closed GameSession PDA produced an opaque 500
-    // from cash_out / settle_game simulation.
-    const onChainGame = await requireActiveGame(playerPk);
-    if (!onChainGame) {
-      await deleteSession(body.player);
-      throw new ApiError(409, "Game session no longer active — start a new round.", {
-        needsCleanup: true,
-      });
+    // On-chain truth gate. For ER players, the game state lives at the V2
+    // PDA, not V1 — falling through requireActiveGame (V1-only) would
+    // bounce every ER settle. Same V2-aware split as /api/reveal.
+    if (useMagicblock(body.player)) {
+      const { getConnection } = await import("@/server/connection");
+      const { deriveGameV2Pda } = await import("@/server/er-instructions");
+      const conn = getConnection();
+      const [gameV2Pda] = deriveGameV2Pda(programId(), playerPk);
+      const v2Info = await conn.getAccountInfo(gameV2Pda, "confirmed");
+      if (!v2Info) {
+        await deleteSession(body.player);
+        throw new ApiError(409, "Game session no longer active — start a new round.", {
+          needsCleanup: true,
+        });
+      }
+    } else {
+      const onChainGame = await requireActiveGame(playerPk);
+      if (!onChainGame) {
+        await deleteSession(body.player);
+        throw new ApiError(409, "Game session no longer active — start a new round.", {
+          needsCleanup: true,
+        });
+      }
     }
 
     if (body.phase === "settle") {
