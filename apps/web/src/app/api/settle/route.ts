@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     if (body.phase === "settle") {
       const referrer = await fetchPlayerReferrer(playerPk);
 
-      if (useMagicblock()) {
+      if (useMagicblock(body.player)) {
         // ER settle: commit_and_undelegate runs inside settle_game_er, so
         // the same Turnkey-signed tx undelegates the GameSession PDA back
         // to L1 and pays out. We submit to the ER endpoint; the validator

@@ -99,7 +99,7 @@ export async function POST(req: NextRequest) {
     let signature: string;
     let closeInstruction: ReturnType<typeof serializeIx> | undefined;
 
-    if (useMagicblock()) {
+    if (useMagicblock(body.player)) {
       // Magicblock ER hot path: session-key signs reveal_tile_er, sent
       // directly to the ER endpoint. No Turnkey involvement per-tile.
       //
@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
     let newToken = "";
     if (!isMine) {
       newToken = await saveSession(body.player, updated, session.createdAt);
-    } else if (useMagicblock()) {
+    } else if (useMagicblock(body.player)) {
       // ER mine: persist updated reveals so /api/settle can read mineLayout
       // + salt; deletion happens at settle.
       newToken = await saveSession(body.player, updated, session.createdAt);
