@@ -96,26 +96,29 @@ export function buildStartGameEr(args: StartGameErArgs): TransactionInstruction 
 // The on-chain handler uses ephemeral-rollups-sdk v0.13's `#[delegate]` proc
 // macro, which expands the Anchor struct to require EIGHT accounts (plus an
 // optional remaining_account for the validator pubkey that the handler reads
-// via `ctx.remaining_accounts.first()`). The macro's exact account order
-// after expansion (verified against attribute-delegate-0.13.0/src/lib.rs):
+// via `ctx.remaining_accounts.first()`). The macro inserts the three
+// auto-generated PDAs (buffer / delegation_record / delegation_metadata)
+// IMMEDIATELY BEFORE the `del`-tagged field in the struct, so the final
+// account order after expansion is (verified against the macro source at
+// attribute-delegate-0.13.0/src/lib.rs:64-114):
 //
-//   0. payer                       — signer + writable
-//   1. game                        — writable (the `del`-tagged PDA)
-//   2. buffer_game                 — PDA [b"buffer", game] under OWNER program — writable
-//   3. delegation_record_game      — PDA [b"delegation", game] under DLP — writable
-//   4. delegation_metadata_game    — PDA [b"delegation-metadata", game] under DLP — writable
-//   5. owner_program               — kaboom program ID — readonly
-//   6. delegation_program          — DELeGGvX… (DLP mainnet) — readonly
-//   7. system_program              — readonly
+//   0. payer                       — signer + writable    (user-declared)
+//   1. buffer_game                 — macro-injected, writable, PDA [b"buffer", game] under OWNER program
+//   2. delegation_record_game      — macro-injected, writable, PDA [b"delegation", game] under DLP
+//   3. delegation_metadata_game    — macro-injected, writable, PDA [b"delegation-metadata", game] under DLP
+//   4. game                        — user-declared `del`-tagged PDA, writable
+//   5. owner_program               — macro-appended, kaboom program ID, readonly
+//   6. delegation_program          — macro-appended, DELeGGvX… (DLP mainnet), readonly
+//   7. system_program              — macro-appended, readonly
 //   + remaining_accounts: [validator]
 //
-// Earlier this routine passed only 4 keys in the wrong order, which caused
-// every first-reveal's `delegate_game` to fail Anchor account validation
-// before the program even ran — the deployed kaboom binary saw the txs as
-// `InstructionFallbackNotFound` (no matching dispatcher could parse the
-// account layout) and the V2 GameSession PDA was stranded with no recovery.
-// See lib.rs:1844 `DelegateGame` for the source-side struct and the macro
-// expansion in `attribute-delegate-0.13.0/src/lib.rs:62-90`.
+// Prior versions of this helper got the order wrong (game placed at index 1
+// instead of 4) and produced an `AccountNotInitialized` error on-chain: the
+// program would try to deserialize whatever was at position 4 as the
+// GameSessionV2 PDA and find garbage. This was on top of the earlier bug
+// where only 4 keys were sent at all. See on-chain failure tx
+// 4uGQt25RGTqMxwNJsQfA2WG5P8EMZcE1Fm15kvev1dUBqZrmS6KNu73os6qAk9WbTNVjFwPGrFHJdt6hYdnoSU8x
+// for the canonical example.
 export interface DelegateGameArgs {
   ctx: ErBuildContext;
   player: PublicKey;
@@ -146,10 +149,10 @@ export function buildDelegateGame(args: DelegateGameArgs): TransactionInstructio
     programId: args.ctx.programId,
     keys: [
       writable(args.houseAuthority, true), // 0. payer (signer)
-      writable(gamePda),                    // 1. game (the `del`-tagged PDA)
-      writable(bufferPda),                  // 2. buffer_game
-      writable(delegationRecordPda),        // 3. delegation_record_game
-      writable(delegationMetadataPda),      // 4. delegation_metadata_game
+      writable(bufferPda),                  // 1. buffer_game (macro-injected, before game)
+      writable(delegationRecordPda),        // 2. delegation_record_game
+      writable(delegationMetadataPda),      // 3. delegation_metadata_game
+      writable(gamePda),                    // 4. game (the `del`-tagged PDA, AFTER buffer/record/metadata)
       readonly(args.ctx.programId),         // 5. owner_program (kaboom)
       readonly(DELEGATION_PROGRAM_ID),      // 6. delegation_program (DLP)
       readonly(SystemProgram.programId),    // 7. system_program

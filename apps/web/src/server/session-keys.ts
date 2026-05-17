@@ -63,12 +63,20 @@ function decryptSecret(blob: Buffer): Uint8Array {
  */
 export async function storeSessionKey(gamePda: PublicKey, secretKey: Uint8Array): Promise<void> {
   const ciphertext = encryptSecret(secretKey);
+  // Supabase JS serializes a raw Buffer as JSON ({"type":"Buffer","data":[...]}) — it
+  // does NOT recognise Buffer as a binary payload for bytea columns. The
+  // server-side ends up storing the JSON literal bytes, and a later read
+  // returns those literal characters back (starting with `{`). The fix is
+  // to send a "\x..." hex-escaped string, which PostgREST decodes back into
+  // real bytes before insert. Symptom this avoids: reads throw
+  // "unknown session-key version 123" because 123 = '{'.
+  const encoded = "\\x" + Buffer.from(ciphertext).toString("hex");
   const { error } = await supabaseAdmin()
     .from("game_session_keys")
     .upsert(
       {
         game_pda: gamePda.toBase58(),
-        encrypted_secret: ciphertext,
+        encrypted_secret: encoded,
       },
       { onConflict: "game_pda" },
     );
@@ -129,11 +137,14 @@ export async function ensureSessionKey(
   // the row the other writer left behind so both callers see identical keys.
   const fresh = generateGameSessionKey();
   const ciphertext = encryptSecret(fresh.secretKey);
+  // Encode as PG bytea hex-escaped string — see storeSessionKey comment for
+  // why a raw Buffer round-trips as JSON literal bytes.
+  const encoded = "\\x" + Buffer.from(ciphertext).toString("hex");
   const insert = await supa
     .from("game_session_keys")
     .insert({
       game_pda: gamePda.toBase58(),
-      encrypted_secret: ciphertext,
+      encrypted_secret: encoded,
     });
 
   if (insert.error) {
