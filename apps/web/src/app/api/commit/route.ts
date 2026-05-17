@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     // tx is confirmed, in a separate Turnkey-signed L1 tx. (Handled by a
     // follow-up server call; see /api/reveal which will short-circuit if
     // the game isn't yet delegated.)
-    if (useMagicblock()) {
+    if (useMagicblock(body.player)) {
       const session = generateGameSessionKey();
       const ix = buildStartGameEr({
         ctx: { programId: programId() },
