@@ -78,6 +78,97 @@ export async function storeSessionKey(gamePda: PublicKey, secretKey: Uint8Array)
   }
 }
 
+/**
+ * Get-or-create the per-game session keypair, NEVER overwriting an existing
+ * one. Solves the "overwrite-on-retry" footgun that previously stranded
+ * stuck V2 PDAs forever — the original on-chain session_key embedded in the
+ * GameSession PDA would still point at the OLD pubkey, but the server-side
+ * keypair row would have been overwritten by a fresh /api/commit retry,
+ * making reveal_tile_er signature checks impossible to satisfy.
+ *
+ * Returns: { publicKey, secretKey, created } — `created=true` if we just
+ * inserted a fresh keypair, `created=false` if we reused an existing row.
+ *
+ * Atomicity note: we use INSERT ... ON CONFLICT DO NOTHING semantics via a
+ * Supabase RPC so the read-then-write race is impossible. If two concurrent
+ * /api/commit calls for the same gamePda race, exactly one wins the insert
+ * and both end up returning the same keypair.
+ */
+export async function ensureSessionKey(
+  gamePda: PublicKey,
+): Promise<{ publicKey: PublicKey; secretKey: Uint8Array; created: boolean }> {
+  const supa = supabaseAdmin();
+
+  // Try to read first. If a row exists, return its keypair.
+  const existing = await supa
+    .from("game_session_keys")
+    .select("encrypted_secret")
+    .eq("game_pda", gamePda.toBase58())
+    .maybeSingle();
+  if (existing.error) {
+    logger.error(
+      { err: existing.error.message, gamePda: gamePda.toBase58() },
+      "ensureSessionKey: read failed",
+    );
+    throw new Error(`ensureSessionKey: ${existing.error.message}`);
+  }
+  if (existing.data?.encrypted_secret) {
+    const raw = existing.data.encrypted_secret as unknown as string | Buffer;
+    const blob =
+      typeof raw === "string"
+        ? Buffer.from(raw.startsWith("\\x") ? raw.slice(2) : raw, raw.startsWith("\\x") ? "hex" : "base64")
+        : Buffer.from(raw);
+    const secretKey = decryptSecret(blob);
+    const kp = Keypair.fromSecretKey(secretKey);
+    return { publicKey: kp.publicKey, secretKey, created: false };
+  }
+
+  // No row exists — generate a new keypair and attempt to insert it. If a
+  // concurrent commit slipped in between the read and the write, the unique
+  // constraint on game_pda will reject our insert; we fall back to re-reading
+  // the row the other writer left behind so both callers see identical keys.
+  const fresh = generateGameSessionKey();
+  const ciphertext = encryptSecret(fresh.secretKey);
+  const insert = await supa
+    .from("game_session_keys")
+    .insert({
+      game_pda: gamePda.toBase58(),
+      encrypted_secret: ciphertext,
+    });
+
+  if (insert.error) {
+    // Postgres unique violation = "23505" surfaced as 409 in PostgREST.
+    const isConflict =
+      insert.error.code === "23505" || insert.error.message?.includes("duplicate key");
+    if (!isConflict) {
+      logger.error(
+        { err: insert.error.message, gamePda: gamePda.toBase58() },
+        "ensureSessionKey: insert failed",
+      );
+      throw new Error(`ensureSessionKey: ${insert.error.message}`);
+    }
+    // Loser of the race — re-fetch the winner's row.
+    const reread = await supa
+      .from("game_session_keys")
+      .select("encrypted_secret")
+      .eq("game_pda", gamePda.toBase58())
+      .single();
+    if (reread.error) {
+      throw new Error(`ensureSessionKey: race re-read failed: ${reread.error.message}`);
+    }
+    const raw = reread.data.encrypted_secret as unknown as string | Buffer;
+    const blob =
+      typeof raw === "string"
+        ? Buffer.from(raw.startsWith("\\x") ? raw.slice(2) : raw, raw.startsWith("\\x") ? "hex" : "base64")
+        : Buffer.from(raw);
+    const secretKey = decryptSecret(blob);
+    const kp = Keypair.fromSecretKey(secretKey);
+    return { publicKey: kp.publicKey, secretKey, created: false };
+  }
+
+  return { publicKey: fresh.publicKey, secretKey: fresh.secretKey, created: true };
+}
+
 /** Fetch + decrypt. Throws if missing or corrupt. */
 export async function loadSessionKey(gamePda: PublicKey): Promise<Uint8Array> {
   const { data, error } = await supabaseAdmin()

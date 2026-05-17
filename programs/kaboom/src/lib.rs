@@ -1734,6 +1734,28 @@ pub mod kaboom {
         commitment: [u8; 32],
         session_key: Pubkey,
     ) -> Result<()> {
+        // Re-init guard: the GameSessionV2 PDA uses `init_if_needed`, so a
+        // previously-allocated PDA flows through here. We MUST refuse to
+        // overwrite a PDA that's still mid-game — otherwise the previous
+        // bet (sitting in the vault) is silently forfeited. The player has
+        // to call `reset_stranded_v2_session` (after the GAME_EXPIRY_SLOTS
+        // window) to recover the old bet before they can start fresh. A
+        // settled or expired PDA is fair game to overwrite.
+        //
+        // The default-zeroed account that init_if_needed produces on first
+        // ever use has `status = GameStatus::Playing` (variant 0) AND
+        // `player == Pubkey::default()` AND `bet == 0`. We distinguish
+        // first-ever-init from a stranded re-entry by checking the player
+        // field — a fresh PDA has player zeroed; a stranded PDA has it set.
+        {
+            let existing = &ctx.accounts.game;
+            if existing.player != Pubkey::default()
+                && existing.status == GameStatus::Playing
+            {
+                return Err(error!(KaboomError::GameAlreadyInProgress));
+            }
+        }
+
         let vault = &ctx.accounts.vault;
         require!(!vault.paused, KaboomError::VaultPaused);
         // Magicblock ER kill-switch. Defaults false on init (existing
@@ -1844,6 +1866,23 @@ pub mod kaboom {
     /// House signs once to hand the GameSessionV2 PDA over to the delegation
     /// program. `remaining_accounts[0]`, if present, pins the ER validator.
     pub fn delegate_game(ctx: Context<DelegateGame>) -> Result<()> {
+        // Idempotency gate. The Solana runtime considers an account
+        // "delegated" by checking its owner; once a successful delegate has
+        // landed, the GameSessionV2 PDA's owner is the Magicblock delegation
+        // program (`DELEGATION_PROGRAM_ID`) rather than our kaboom program.
+        // A duplicate delegate_game call (e.g. retry storm from the server
+        // because the first response was lost in transit) would otherwise
+        // CPI into the delegation program a second time and bounce with an
+        // unhelpful error — better to no-op here so retries are safe.
+        //
+        // Reference: magicblock-dev-skill/skill/delegation.md L271-275
+        //   "Not delegated: account.owner == YOUR_PROGRAM_ID;
+        //    Delegated:    account.owner == DELEGATION_PROGRAM_ID"
+        let game_account_info = ctx.accounts.game.to_account_info();
+        if game_account_info.owner == &ephemeral_rollups_sdk::id() {
+            return Ok(());
+        }
+
         // Snapshot the player key before delegation zeroes the PDA data.
         let player_key = ctx.accounts.game.player;
 
@@ -1857,6 +1896,84 @@ pub mod kaboom {
                 validator,
             },
         )?;
+        Ok(())
+    }
+
+    /// Self-service recovery for a stranded V2 GameSession PDA.
+    ///
+    /// Triggered by the player when their ER game got stuck — typically
+    /// because `delegate_game` failed after `start_game_er` landed, leaving
+    /// the PDA allocated, owned by this program, in `Playing` status, but
+    /// never delegated to Magicblock. Without this ix the player could
+    /// never start another ER game (PDA is permanently allocated) and would
+    /// lose the bet sitting in the vault.
+    ///
+    /// Gating mirrors `refund_expired`: must be Playing, must be past
+    /// `GAME_EXPIRY_SLOTS` since `start_slot`, and `vault.owner` doesn't
+    /// have to consent — the player can recover unilaterally. The PDA is
+    /// closed (rent returned to player) and the bet is refunded from the
+    /// vault, gated by the same min-vault-rent-floor logic as refund_expired.
+    ///
+    /// Crucially this ix REJECTS if the PDA has been delegated (owner ==
+    /// `DELEGATION_PROGRAM_ID`) — that flow has to go through `settle_game_er`
+    /// + commit-and-undelegate. We only handle the never-delegated stranded
+    /// case here.
+    pub fn reset_stranded_v2_session(ctx: Context<ResetStrandedV2Session>) -> Result<()> {
+        // Reject if the PDA was successfully delegated — that case has a
+        // different recovery path (settle_game_er fully owns lifecycle once
+        // the PDA is in DLP ownership).
+        require!(
+            ctx.accounts.game.to_account_info().owner != &ephemeral_rollups_sdk::id(),
+            KaboomError::GameIsDelegated
+        );
+
+        let game = &ctx.accounts.game;
+        require!(
+            game.status == GameStatus::Playing,
+            KaboomError::GameNotPlaying
+        );
+
+        let clock = Clock::get()?;
+        require!(
+            clock.slot > game.start_slot.saturating_add(GAME_EXPIRY_SLOTS),
+            KaboomError::GameNotExpired
+        );
+
+        // Refund bet from vault to player, respecting the vault-rent floor
+        // (same shape as refund_expired). Bet is bounded by `available` so
+        // we never break vault rent-exemption.
+        let vault_info = ctx.accounts.vault.to_account_info();
+        let rent = Rent::get()?.minimum_balance(Vault::SPACE);
+        let available = vault_info.lamports().saturating_sub(rent);
+        let refund = game.bet.min(available);
+
+        **vault_info.try_borrow_mut_lamports()? = vault_info
+            .lamports()
+            .checked_sub(refund)
+            .ok_or(KaboomError::MathOverflow)?;
+        let player_info = ctx.accounts.player.to_account_info();
+        **player_info.try_borrow_mut_lamports()? = player_info
+            .lamports()
+            .checked_add(refund)
+            .ok_or(KaboomError::MathOverflow)?;
+
+        // Release the V2 obligation counter — start_game_er had bumped
+        // total_outstanding_max_payout, leave that surface clean.
+        let v2 = &mut ctx.accounts.v2_state;
+        v2.total_outstanding_max_payout = v2
+            .total_outstanding_max_payout
+            .saturating_sub(game.max_payout);
+
+        emit!(GameRefunded {
+            player: game.player,
+            game: game.key(),
+            bet: game.bet,
+            refund,
+            slot: clock.slot,
+        });
+
+        // PDA close + rent return is handled by the `close = player`
+        // constraint on the `game` account in ResetStrandedV2Session.
         Ok(())
     }
 
@@ -3128,8 +3245,15 @@ pub struct StartGameEr<'info> {
     #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
     pub v2_state: Account<'info, VaultV2State>,
 
+    // `init_if_needed` lets a previously-stranded V2 PDA be re-used. A stuck
+    // PDA happens when `start_game_er` lands but the subsequent
+    // `delegate_game` fails before commit — without `init_if_needed` the
+    // player can never start another ER game because the PDA is permanently
+    // allocated. The handler itself is responsible for verifying the PDA is
+    // in a safe-to-overwrite state (status != Playing) before resetting all
+    // fields. See start_game_er body for the guard.
     #[account(
-        init,
+        init_if_needed,
         payer = player,
         space = GameSessionV2::SPACE,
         seeds = [GAME_V2_SEED, player.key().as_ref()],
@@ -3170,6 +3294,29 @@ pub struct DelegateGame<'info> {
         bump = game.bump,
     )]
     pub game: Account<'info, GameSessionV2>,
+}
+
+/// Player-signed recovery for an ER game stranded before delegate_game
+/// landed. See `reset_stranded_v2_session` for the full guard semantics.
+#[derive(Accounts)]
+pub struct ResetStrandedV2Session<'info> {
+    #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
+    pub vault: Account<'info, Vault>,
+
+    #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
+    pub v2_state: Account<'info, VaultV2State>,
+
+    #[account(
+        mut,
+        seeds = [GAME_V2_SEED, game.player.as_ref()],
+        bump = game.bump,
+        constraint = game.player == player.key() @ KaboomError::Unauthorized,
+        close = player,
+    )]
+    pub game: Account<'info, GameSessionV2>,
+
+    #[account(mut)]
+    pub player: Signer<'info>,
 }
 
 /// Reveal-tile while delegated to the ER. The session key is the only signer
@@ -3331,6 +3478,10 @@ pub enum KaboomError {
     ErRoutingDisabled,
     #[msg("Operator units (seed + house + house_pending) are already zero; nothing to unlock.")]
     NoOperatorUnitsToUnlock,
+    #[msg("Player already has an in-progress ER game; call reset_stranded_v2_session (after expiry) to recover before starting a new one.")]
+    GameAlreadyInProgress,
+    #[msg("Cannot reset: the V2 GameSession PDA is currently delegated to Magicblock; settle via settle_game_er instead.")]
+    GameIsDelegated,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
