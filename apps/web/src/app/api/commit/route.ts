@@ -6,13 +6,14 @@ import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { createGameSession } from "@/server/game";
 import { saveSession } from "@/server/session-store";
-import { playerHasActiveGame } from "@/server/solana";
-import { programId, useMagicblock } from "@/server/env";
+import { buildAndPartialSignPlayerTx, playerHasActiveGame } from "@/server/solana";
+import { housePubkey, programId, useMagicblock } from "@/server/env";
 import { getConnection } from "@/server/connection";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
-import { buildStartGameEr, deriveGameV2Pda } from "@/server/er-instructions";
-import { generateGameSessionKey, storeSessionKey } from "@/server/session-keys";
+import { buildDelegateGame, buildStartGameEr, deriveGameV2Pda } from "@/server/er-instructions";
+import { getValidatorPubkey } from "@/server/magicblock";
+import { ensureSessionKey } from "@/server/session-keys";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,28 +44,43 @@ export async function POST(req: NextRequest) {
 
     const { payload, commitment } = createGameSession(body.player, body.mineCount);
 
-    // Magicblock ER path (additive). When enabled we:
-    //   1) generate a per-game ephemeral session keypair
-    //   2) build start_game_er with the session pubkey baked in
-    //   3) persist the encrypted secret server-side keyed by GameSession PDA
-    // The delegate_game ix (Turnkey-signed) is intentionally NOT bundled
-    // into the client-facing instruction — the player only signs start_game_er.
-    // delegate_game runs server-side immediately after the player's start
-    // tx is confirmed, in a separate Turnkey-signed L1 tx. (Handled by a
-    // follow-up server call; see /api/reveal which will short-circuit if
-    // the game isn't yet delegated.)
+    // Magicblock ER atomic-bundle path. Both `start_game_er` and
+    // `delegate_game` ride in one transaction:
+    //   - Player signs the fee-payer slot + start_game_er's player slot
+    //   - Turnkey (house) pre-signs the delegate_game payer slot server-side
+    //   - Both ixs land or neither lands. Solves the previous strand-on-fail
+    //     bug where start_game_er would allocate the V2 PDA, the subsequent
+    //     delegate_game would fail (bad account layout), and the PDA was
+    //     locked forever with no on-chain refund path.
+    //
+    // Session keypair persistence uses ensureSessionKey() — INSERT-then-
+    // conflict-resolve so concurrent /api/commit retries cannot overwrite
+    // a live keypair. This pairs with the on-chain init_if_needed + handler
+    // guard in start_game_er (lib.rs ~L1742-1768): if the V2 PDA already
+    // exists in Playing state on a retry, the program rejects with
+    // GameAlreadyInProgress; the user goes through reset_stranded_v2_session
+    // first to recover the old bet + close the PDA, then retries.
     if (useMagicblock(body.player)) {
-      const session = generateGameSessionKey();
-      const ix = buildStartGameEr({
+      const [gamePda] = deriveGameV2Pda(programId(), playerPk);
+      const { publicKey: sessionPubkey } = await ensureSessionKey(gamePda);
+
+      const startIx = buildStartGameEr({
         ctx: { programId: programId() },
         player: playerPk,
         mineCount: body.mineCount,
         betLamports: BigInt(body.betLamports),
         commitment,
-        sessionKey: session.publicKey,
+        sessionKey: sessionPubkey,
       });
-      const [gamePda] = deriveGameV2Pda(programId(), playerPk);
-      await storeSessionKey(gamePda, session.secretKey);
+      const delegateIx = buildDelegateGame({
+        ctx: { programId: programId() },
+        player: playerPk,
+        houseAuthority: housePubkey(),
+        validator: getValidatorPubkey(),
+      });
+
+      const { partialTx, blockhash, lastValidBlockHeight } =
+        await buildAndPartialSignPlayerTx(playerPk, [startIx, delegateIx]);
 
       const gameToken = await saveSession(body.player, payload, slot, {
         betLamports: BigInt(body.betLamports),
@@ -77,20 +93,20 @@ export async function POST(req: NextRequest) {
           player: body.player,
           mineCount: body.mineCount,
           bet: body.betLamports.toString(),
-          mode: "er",
-          sessionKey: session.publicKey.toBase58(),
+          mode: "er-atomic",
+          sessionKey: sessionPubkey.toBase58(),
         },
         "commit",
       );
 
       return NextResponse.json({
         commitment: commitment.toString("hex"),
-        instruction: serializeIx(ix),
+        partialTx,
+        blockhash,
+        lastValidBlockHeight,
         gameToken,
-        mode: "er",
-        sessionKey: session.publicKey.toBase58(),
-        // `delegateInstruction` is intentionally absent — the server runs
-        // delegate_game via sendHouseTx after the player's start tx lands.
+        mode: "er-atomic",
+        sessionKey: sessionPubkey.toBase58(),
       });
     }
 

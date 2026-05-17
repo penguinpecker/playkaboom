@@ -80,11 +80,33 @@ async function post<TIn extends object, TOut>(path: string, body: TIn): Promise<
   return json as TOut;
 }
 
-export interface CommitResponse {
-  commitment: string;
-  instruction: SerializedIx;
-  gameToken: string;
-}
+/**
+ * Two response shapes depending on whether ER routing is enabled for this
+ * player:
+ *   - `mode: undefined` (classic): single `instruction` (start_game) that
+ *     the client signs + broadcasts.
+ *   - `mode: "er-atomic"` (Magicblock): `partialTx` is a base64 Transaction
+ *     containing both `start_game_er` + `delegate_game`, pre-signed by
+ *     Turnkey for the delegate's payer slot. The client deserializes,
+ *     fills the player signature, and broadcasts. Either both ixs land or
+ *     neither does — no possible strand.
+ */
+export type CommitResponse =
+  | {
+      mode?: undefined;
+      commitment: string;
+      instruction: SerializedIx;
+      gameToken: string;
+    }
+  | {
+      mode: "er-atomic";
+      commitment: string;
+      partialTx: string;
+      blockhash: string;
+      lastValidBlockHeight: number;
+      sessionKey: string;
+      gameToken: string;
+    };
 export async function apiCommit(input: {
   player: string;
   mineCount: number;
@@ -122,17 +144,26 @@ export type CleanupResponse =
   | { active: false }
   | {
       active: true;
-      action: "close_game" | "close_unsettled_game" | "refund_expired";
+      action:
+        | "close_game"
+        | "close_unsettled_game"
+        | "refund_expired"
+        | "reset_stranded_v2_session";
       instruction: SerializedIx;
       readyAt: number;
       secondsUntilReady: 0;
     }
   | {
       active: true;
-      action: "wait_close_unsettled" | "wait_refund";
+      action: "wait_close_unsettled" | "wait_refund" | "wait_v2_reset";
       readyAt: number;
       secondsUntilReady: number;
       currentSlot: number;
+    }
+  | {
+      active: true;
+      action: "v2_delegated";
+      message: string;
     }
   | {
       // Decode failure fallback — the legacy two-ix shape; client will try

@@ -86,6 +86,68 @@ export function useGameActions(): ActionsResult {
   // confirm fixes both: UI updates within ~200ms of click, and a tx that
   // lands but never gets a confirm signal still produces correct local
   // state (because we set "playing" the moment we have a sig).
+  /**
+   * Broadcast a pre-signed atomic-bundle Transaction returned by /api/commit
+   * (Magicblock ER path). The server has already partial-signed the
+   * delegate_game payer slot with Turnkey; the player's wallet only has to
+   * add its own signature to the existing Transaction and broadcast.
+   */
+  const broadcastPartialSignedTx = useCallback(
+    async (
+      partialTxBase64: string,
+      blockhash: string,
+      lastValidBlockHeight: number,
+    ): Promise<{ sig: string; confirmation: Promise<string> }> => {
+      if (!wallet) throw new Error("No wallet");
+      const txBuf = Buffer.from(partialTxBase64, "base64");
+      const tx = Transaction.from(txBuf);
+      const signed = await signTransaction({
+        transaction: tx,
+        connection,
+        address: wallet.address,
+      });
+      const raw =
+        signed instanceof VersionedTransaction
+          ? signed.serialize()
+          : (signed as Transaction).serialize();
+      const sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
+      const confirmation = (async () => {
+        try {
+          await Promise.any([
+            awaitSigConfirmedWs(connection, sig, "confirmed", 12_000).then(() => "ws"),
+            confirmByPolling(connection, sig, blockhash, lastValidBlockHeight).then(() => "poll"),
+          ]);
+          return sig;
+        } catch (raceErr) {
+          try {
+            const { value } = await connection.getSignatureStatuses([sig]);
+            const s = value[0];
+            if (
+              s &&
+              !s.err &&
+              (s.confirmationStatus === "processed" ||
+                s.confirmationStatus === "confirmed" ||
+                s.confirmationStatus === "finalized")
+            ) {
+              return sig;
+            }
+          } catch {
+            /* fall through */
+          }
+          if (raceErr instanceof AggregateError) {
+            const pollErr = raceErr.errors.find(
+              (e) => e instanceof Error && !/ws (sig|account)/.test(e.message),
+            );
+            throw pollErr ?? raceErr.errors[0] ?? raceErr;
+          }
+          throw raceErr instanceof Error ? raceErr : new Error(String(raceErr));
+        }
+      })();
+      return { sig, confirmation };
+    },
+    [wallet, connection, signTransaction],
+  );
+
   const signAndBroadcast = useCallback(
     async (
       ixOrList: TransactionInstruction | TransactionInstruction[],
@@ -211,6 +273,7 @@ export function useGameActions(): ActionsResult {
         case "close_game":
         case "close_unsettled_game":
         case "refund_expired":
+        case "reset_stranded_v2_session":
           return await trySend(data.instruction);
         case "wait_close_unsettled": {
           const secs = data.secondsUntilReady;
@@ -220,9 +283,18 @@ export function useGameActions(): ActionsResult {
           toast(msg, "amber");
           return false;
         }
-        case "wait_refund": {
+        case "wait_refund":
+        case "wait_v2_reset": {
           const secs = data.secondsUntilReady;
           const msg = `Active game in progress. Refund available in ~${secs}s. Scroll down for REFUND BET button.`;
+          store.setStatus("idle");
+          store.setError(msg);
+          toast(msg, "amber");
+          return false;
+        }
+        case "v2_delegated": {
+          const msg =
+            "Magicblock ER game is still running and will auto-settle. Try again in a minute.";
           store.setStatus("idle");
           store.setError(msg);
           toast(msg, "amber");
@@ -311,50 +383,58 @@ export function useGameActions(): ActionsResult {
 
     store.setGameToken(commit.gameToken);
 
-    // 2026-05-12: bundle set_referrer into the player's first start_game
-    // if they came in via a referral link and don't have a referrer set
-    // on-chain yet. One signature, both ixs execute atomically. Removes
-    // the manual "Confirm referrer" step on /referrals. If anything in
-    // the check fails (RPC blip, decode error), we just skip the bundle
-    // and proceed with start_game alone — the /referrals page button
-    // stays as a fallback.
-    const ixs: TransactionInstruction[] = [];
+    let sig: string;
+    let confirmation: Promise<string>;
     let bundledSetReferrer = false;
-    const pendingRef = getPendingReferrer();
-    if (pendingRef && pendingRef !== walletAddress) {
-      try {
-        const playerPk = new PublicKey(walletAddress);
-        const referrerPk = new PublicKey(pendingRef);
-        const [statsPda] = derivePlayerStatsPda(PROGRAM_ID, playerPk);
-        const info = await connection.getAccountInfo(statsPda, "confirmed");
-        const hasReferrer =
-          info && info.owner.equals(PROGRAM_ID)
-            ? decodePlayerStats(info.data as Buffer).referrer !== null
-            : false;
-        if (!hasReferrer) {
-          ixs.push(
-            buildSetReferrer({
-              ctx: { programId: PROGRAM_ID },
-              player: playerPk,
-              referrer: referrerPk,
-            }),
-          );
-          bundledSetReferrer = true;
-        }
-      } catch {
-        /* skip bundle on any error — start_game still ships */
-      }
-    }
-    ixs.push(deserializeIx(commit.instruction));
 
     try {
-      // Optimistic flow: as soon as the RPC ACKs the tx (~200ms), flip
-      // the local UI to "playing" with the sig. This is the fix for the
-      // recurring "I clicked ENGAGE, nothing happened on screen, but a
-      // game started in the background" report — the OLD code awaited
-      // confirmByPolling (1.5-3s) before updating UI, and on confirm
-      // timeout it reverted to idle while the tx landed anyway.
-      const { sig, confirmation } = await signAndBroadcast(ixs);
+      if (commit.mode === "er-atomic") {
+        // Magicblock ER atomic-bundle path: server returned a partial-signed
+        // Transaction with start_game_er + delegate_game already inside.
+        // The player only adds their own signature and broadcasts. Referrer
+        // bundling is intentionally skipped on this path — modifying the
+        // pre-signed Transaction would invalidate Turnkey's signature, and
+        // the /referrals page is the documented fallback.
+        ({ sig, confirmation } = await broadcastPartialSignedTx(
+          commit.partialTx,
+          commit.blockhash,
+          commit.lastValidBlockHeight,
+        ));
+      } else {
+        // Classic (non-ER) path. 2026-05-12: optionally bundle set_referrer
+        // into the player's first start_game if they came in via a referral
+        // link and don't have a referrer set on-chain yet — one signature,
+        // both ixs execute atomically. /referrals page is the fallback if
+        // the bundle check fails.
+        const ixs: TransactionInstruction[] = [];
+        const pendingRef = getPendingReferrer();
+        if (pendingRef && pendingRef !== walletAddress) {
+          try {
+            const playerPk = new PublicKey(walletAddress);
+            const referrerPk = new PublicKey(pendingRef);
+            const [statsPda] = derivePlayerStatsPda(PROGRAM_ID, playerPk);
+            const info = await connection.getAccountInfo(statsPda, "confirmed");
+            const hasReferrer =
+              info && info.owner.equals(PROGRAM_ID)
+                ? decodePlayerStats(info.data as Buffer).referrer !== null
+                : false;
+            if (!hasReferrer) {
+              ixs.push(
+                buildSetReferrer({
+                  ctx: { programId: PROGRAM_ID },
+                  player: playerPk,
+                  referrer: referrerPk,
+                }),
+              );
+              bundledSetReferrer = true;
+            }
+          } catch {
+            /* skip bundle on any error — start_game still ships */
+          }
+        }
+        ixs.push(deserializeIx(commit.instruction));
+        ({ sig, confirmation } = await signAndBroadcast(ixs));
+      }
       store.beginGame(commit.commitment, sig);
       // If we bundled set_referrer, clear the pending-referrer state
       // immediately + fire the analytics endpoint best-effort. The
@@ -395,7 +475,7 @@ export function useGameActions(): ActionsResult {
       store.setStatus("idle");
       store.setError(decodeProgramError(err instanceof Error ? err.message : "Sign failed"));
     }
-  }, [authenticated, walletAddress, store, signAndBroadcast, cleanupStuck, login, toast]);
+  }, [authenticated, walletAddress, store, signAndBroadcast, broadcastPartialSignedTx, cleanupStuck, login, toast]);
 
   const revealTile = useCallback(
     async (idx: number) => {

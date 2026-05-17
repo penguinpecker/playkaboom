@@ -4,9 +4,11 @@ import {
   buildCloseGame,
   buildCloseUnsettledGame,
   buildRefundExpired,
+  buildResetStrandedV2Session,
   buildSettleGame,
   decodeGameSession,
   deriveGamePda,
+  deriveGameV2Pda,
   serializeIx,
 } from "@playkaboom/sdk";
 import { CleanupInput } from "@playkaboom/shared";
@@ -19,6 +21,12 @@ import { getConnection } from "@/server/connection";
 import { housePubkey, programId, treasuryPubkey } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
+
+// Mainnet Magicblock Delegation Program (DLP) ID. Used to disambiguate a
+// stranded-but-undelegated V2 PDA (owner == kaboom program) from a
+// fully-delegated one (owner == DLP). reset_stranded_v2_session only
+// handles the former; the latter routes through settle_game_er.
+const DELEGATION_PROGRAM_ID = new PublicKey("DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh");
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,8 +47,69 @@ export async function POST(req: NextRequest) {
     const playerPk = new PublicKey(body.player);
     const ctx = { programId: programId() };
     const [gamePda] = deriveGamePda(ctx.programId, playerPk);
+    const [gameV2Pda] = deriveGameV2Pda(ctx.programId, playerPk);
     const conn = getConnection();
-    const info = await conn.getAccountInfo(gamePda, "confirmed");
+
+    // Fetch both PDAs in one RPC round-trip. V1 takes priority if both
+    // somehow exist (would only happen during a brief migration window);
+    // the V2 path only fires when V1 is absent.
+    const [info, v2Info] = await conn.getMultipleAccountsInfo(
+      [gamePda, gameV2Pda],
+      "confirmed",
+    );
+
+    // V2 (Magicblock ER) stranded-recovery path. If the V2 PDA exists but
+    // V1 doesn't, the player's last game went through start_game_er. The
+    // only recovery offered here is reset_stranded_v2_session — refunds
+    // bet + closes the PDA — and only when the on-chain PDA is still owned
+    // by the kaboom program (i.e. delegate_game never landed or the game
+    // was undelegated by commit_and_undelegate but somehow stayed open).
+    // A still-delegated PDA (owner == DELEGATION_PROGRAM_ID) is the
+    // settle_game_er path and isn't recoverable through /api/cleanup.
+    if (!info && v2Info) {
+      const isDelegated = v2Info.owner.equals(DELEGATION_PROGRAM_ID);
+      if (isDelegated) {
+        logger.warn(
+          { player: body.player, gameV2Pda: gameV2Pda.toBase58() },
+          "cleanup: V2 PDA is delegated to Magicblock — out of scope for cleanup route",
+        );
+        return NextResponse.json({
+          active: true,
+          action: "v2_delegated",
+          message:
+            "Game is still running on Magicblock. It will auto-settle and undelegate; try again in a minute.",
+        });
+      }
+      // Decode minimal fields to compute readyAt: start_slot lives at a
+      // fixed offset in the GameSessionV2 layout (see lib.rs ~L2572) — we
+      // need it to gate reset_stranded_v2_session against the 300-slot
+      // expiry window the program enforces.
+      // Layout: 8 disc + 32 player + 1 bump + 1 status + 8 bet + 1 mine_count
+      //         + 32 commitment + 2 revealed + 2 revealed_safe + 1 safe_reveals
+      //         + 8 multiplier + 8 start_slot ...
+      const startSlot = Number(v2Info.data.readBigUInt64LE(8 + 32 + 1 + 1 + 8 + 1 + 32 + 2 + 2 + 1 + 8));
+      const currentSlot = await conn.getSlot("confirmed");
+      const readyAt = startSlot + REFUND_EXPIRED_SLOTS;
+      const slotsUntilReady = Math.max(0, readyAt - currentSlot);
+      const secondsUntilReady = Math.ceil(slotsUntilReady * 0.4);
+      if (slotsUntilReady > 0) {
+        return NextResponse.json({
+          active: true,
+          action: "wait_v2_reset",
+          readyAt,
+          secondsUntilReady,
+          currentSlot,
+        });
+      }
+      return NextResponse.json({
+        active: true,
+        action: "reset_stranded_v2_session",
+        instruction: serializeIx(buildResetStrandedV2Session({ ctx, player: playerPk })),
+        readyAt,
+        secondsUntilReady: 0,
+      });
+    }
+
     if (!info) {
       // Game closed on-chain; clear any stale server-side session.
       await deleteSession(body.player);

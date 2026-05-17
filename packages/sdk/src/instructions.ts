@@ -7,6 +7,7 @@ import {
 import { ixDiscriminator } from "./discriminator";
 import {
   deriveGamePda,
+  deriveGameV2Pda,
   deriveLpPositionPda,
   derivePlayerStatsPda,
   deriveReferralPda,
@@ -311,6 +312,38 @@ export function buildRefundExpired(args: RefundExpiredArgs): TransactionInstruct
   const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
   const data = Buffer.alloc(8);
   ixDiscriminator("refund_expired").copy(data, 0);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(vaultPda),
+      writable(v2StatePda),
+      writable(gamePda),
+      writable(args.player, true),
+    ],
+    data,
+  });
+}
+
+// ── reset_stranded_v2_session ────────────────────────────────────────────────
+// Player self-recovery for an ER GameSessionV2 PDA that was allocated by
+// start_game_er but never made it past delegate_game (e.g. delegate ix
+// failed pre-fix, or RPC blip mid-flow). After GAME_EXPIRY_SLOTS the player
+// can call this ix to refund the bet + close the PDA, reclaiming rent. The
+// program rejects the call if the PDA was actually delegated (owner ==
+// DELEGATION_PROGRAM_ID) — that case has to settle through settle_game_er.
+export interface ResetStrandedV2SessionArgs {
+  ctx: BuildContext;
+  player: PublicKey;
+}
+
+export function buildResetStrandedV2Session(
+  args: ResetStrandedV2SessionArgs,
+): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const [gamePda] = deriveGameV2Pda(args.ctx.programId, args.player);
+  const data = Buffer.alloc(8);
+  ixDiscriminator("reset_stranded_v2_session").copy(data, 0);
   return new TransactionInstruction({
     programId: args.ctx.programId,
     keys: [

@@ -14,6 +14,7 @@ import { getErConnection } from "./magicblock";
 import { getHouseSigner } from "./turnkey-signer";
 import {
   deriveGamePda,
+  deriveGameV2Pda,
   extractAnchorFrameworkError,
   isAccountNotInitializedError,
 } from "@playkaboom/sdk";
@@ -125,6 +126,47 @@ async function computePriorityFee(): Promise<number> {
  * caused settle/reveal drops during congestion. Worst-case spend bounded
  * at 10_000 lamports/tx (~$0.002).
  */
+/**
+ * Build a multi-ix transaction with the player as fee payer + signer, then
+ * partial-sign it with the house authority (Turnkey). Returns the base64
+ * serialized transaction with `requireAllSignatures: false`, leaving the
+ * player's signature slot empty for the client to fill in.
+ *
+ * Used for the Magicblock ER atomic-bundle pattern: start_game_er +
+ * delegate_game are placed in one transaction, the player's wallet signs
+ * the start_game_er + fee-payer slot, and Turnkey pre-signs the
+ * delegate_game payer slot server-side. Atomic landing — start_game_er
+ * cannot land without delegate_game landing in the same transaction, so a
+ * delegate failure can't strand a freshly-allocated V2 PDA.
+ *
+ * The two priority compute-budget ixs are added automatically.
+ */
+export async function buildAndPartialSignPlayerTx(
+  feePayer: PublicKey,
+  instructions: TransactionInstruction[],
+): Promise<{ partialTx: string; blockhash: string; lastValidBlockHeight: number }> {
+  const conn = getConnection();
+  const house = getHouseSigner();
+  const priceMicroLamports = await computePriorityFee();
+  const tx = new Transaction();
+  tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priceMicroLamports }));
+  // 500k CU — enough for start_game_er + delegate_game which CPIs into the
+  // DLP. The compute-budget program's 200k default is too tight.
+  tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: 500_000 }));
+  for (const ix of instructions) tx.add(ix);
+
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("processed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = feePayer;
+
+  const partial = await house.signTransaction(tx);
+  const partialTx = (partial as Transaction)
+    .serialize({ requireAllSignatures: false })
+    .toString("base64");
+  return { partialTx, blockhash, lastValidBlockHeight };
+}
+
 export async function sendHouseTx(
   instructions: TransactionInstruction[],
   opts: SendHouseTxOpts = {},
@@ -216,9 +258,15 @@ export async function sendErTx(
 }
 
 export async function playerHasActiveGame(player: PublicKey): Promise<boolean> {
-  const [pda] = deriveGamePda(programId(), player);
-  const info = await getConnection().getAccountInfo(pda, "confirmed");
-  return info !== null;
+  // Check both the legacy V1 GameSession PDA AND the Magicblock ER
+  // GameSessionV2 PDA. A leftover V2 PDA from a previously-stranded ER
+  // session blocks fresh start_game_er with "Allocate already in use" at
+  // the runtime layer; surface it here so /api/cleanup can offer the
+  // reset_stranded_v2_session recovery before the player wastes a tx.
+  const [v1] = deriveGamePda(programId(), player);
+  const [v2] = deriveGameV2Pda(programId(), player);
+  const infos = await getConnection().getMultipleAccountsInfo([v1, v2], "confirmed");
+  return infos[0] !== null || infos[1] !== null;
 }
 
 /**
