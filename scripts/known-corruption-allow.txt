@@ -42,3 +42,13 @@ si64AQrfkdPRjWKTqjb3U6L122JP4QkaRDwjFBCnZoD8t3CwremCkR8ufTeo1i1F4Vkb64oPzHf87RAz
 5fJwVRHpgrQ8YGdsibNxt1ELyhU6ndgsMpZvkJJJRbdTLL77jFsEbSUZvTjAdMDUWTFUuZUk4EXwjBR3yRAiumVp
 59M9kTExWpcJaRUEfum4qpHft9ZVJhLiCEQHLx29gUQjQowKjRKeXhjTnSqWTxr7rZYw6AFGAULqq9AX37MPRb1b
 5Ls2deBDtj8DxbQDqCLEHT9dqCZwBmfnYmDcXdiS5Trd6k48QfVsJU7mVDin3UYqoqaC8hsaALEQyKfS4tpG83zp
+
+# 2026-05-18 — same indexer race recurrence. Cashout 5i6A5N87 stayed in
+# GameWon sentinel (mine_count=0, mine_layout=NULL) because its paired
+# settle z5DCzB9R (slot 420481753) was processed before the cashout row
+# (slot 420481749) was inserted, so the match query fell through to an
+# older stranded unsettled row vEcNh8Ut (slot 420319943) on the same PDA
+# 8bFsb8u4… and corrupted it instead. Chain math is sound; only the DB
+# pairing is wrong. SQL fix landed in
+# 20260518000001_game_settled_cutoff_by_settled_slot.sql.
+5i6A5N87R73cU94ZHcF4xZD2cSLXHGVPERTJHkhwEgwsrMjP7KDGFW77j1kT4LbSLWWcvYDsBu4Ybc99KbVPfMTC
