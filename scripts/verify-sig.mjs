@@ -5,7 +5,7 @@
 //
 // What it verifies depends on which event the signature emits:
 //
-//   GameSettled event (settle_game / settle_game_er tx):
+//   GameSettled event (settle_game tx):
 //     - popcount(mine_layout)            == mine_count                    [chain invariant]
 //     - sha256(layout_le || mc || salt)  == commitment                    [chain invariant]
 //     - emitted `verified` flag           == true                          [chain assertion]
