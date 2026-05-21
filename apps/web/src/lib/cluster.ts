@@ -111,3 +111,4 @@ export const CLUSTER_LABEL: Record<SolanaCluster, string> = {
   testnet: "Solana Testnet",
   localnet: "Solana Localnet",
 };
+// trigger CI
