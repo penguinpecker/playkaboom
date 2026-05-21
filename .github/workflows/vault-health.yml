@@ -3,7 +3,9 @@ name: Vault health probe
 # Vault + V2State PDAs, computes calc_health_bps, and pings ALERT_WEBHOOK_URL
 # if the vault is paused, health < 50%, or balance is low. Idempotent.
 #
-# Requires repo secret CRON_SECRET (same one /api/cron/index-events uses).
+# 2026-05-21: migrated from the shared CRON_SECRET to the per-purpose
+# CRON_TICK_SECRET so this read-only probe and the destructive admin
+# endpoints rotate independently.
 
 on:
   schedule:
@@ -17,15 +19,15 @@ jobs:
     steps:
       - name: Hit probe
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          CRON_TICK_SECRET: ${{ secrets.CRON_TICK_SECRET }}
         run: |
           set -eu
-          if [ -z "${CRON_SECRET:-}" ]; then
-            echo "CRON_SECRET secret not configured" >&2
+          if [ -z "${CRON_TICK_SECRET:-}" ]; then
+            echo "CRON_TICK_SECRET secret not configured" >&2
             exit 1
           fi
           response=$(curl -sS -w "\nHTTP %{http_code}" \
-            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Authorization: Bearer $CRON_TICK_SECRET" \
             https://www.playkaboom.gg/api/cron/vault-health)
           echo "$response"
           echo "$response" | tail -n1 | grep -q "HTTP 200"

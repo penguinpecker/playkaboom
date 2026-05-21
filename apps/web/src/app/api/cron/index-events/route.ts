@@ -231,13 +231,18 @@ function authorise(req: NextRequest, resetPath: boolean): boolean {
   const auth = req.headers.get("authorization");
   if (!auth) return false;
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : auth;
-  // ?reset=1 paths are gated to CRON_SECRET only (single rotation surface).
-  // Normal path accepts CRON_SECRET or HELIUS_WEBHOOK_AUTH so the Helius
-  // webhook secret can double as the cron secret when only one is configured.
+  // 2026-05-21: CRON_SECRET split into per-purpose secrets. Per-endpoint
+  // blast radius so a leak of one credential doesn't compromise both the
+  // routine tick path AND the destructive reset path. CRON_SECRET stays
+  // as a transitional fallback so operator rotations + Railway tickler
+  // updates can happen in any order without an outage. Remove the
+  // CRON_SECRET fallback after Vercel/Railway env cleanup.
+  const reset = process.env.ADMIN_INDEX_RESET_SECRET;
+  const tick = process.env.CRON_TICK_SECRET;
   const accepted = (
     resetPath
-      ? [process.env.CRON_SECRET]
-      : [process.env.CRON_SECRET, process.env.HELIUS_WEBHOOK_AUTH]
+      ? [reset, process.env.CRON_SECRET]
+      : [tick, reset, process.env.CRON_SECRET, process.env.HELIUS_WEBHOOK_AUTH]
   ).filter((s): s is string => Boolean(s));
   return accepted.some((s) => safeEqual(s, token));
 }
