@@ -97,6 +97,19 @@ export function useVaultBalance() {
 }
 
 /**
+ * Live on-chain house edge. Falls back to HOUSE_EDGE_BPS_DEFAULT only
+ * while the vault account is still loading on the first paint — once the
+ * account info has arrived, the displayed multiplier exactly matches what
+ * the program will pay out at cash_out / settle_game. Governance can
+ * change the on-chain edge via update_vault; without this hook, the UI
+ * would render stale until the next deploy.
+ */
+export function useHouseEdgeBps(): number {
+  const { vault } = useVaultAccount();
+  return vault?.houseEdgeBps ?? HOUSE_EDGE_BPS_DEFAULT;
+}
+
+/**
  * Mirrors the program's calc_health_bps (lib.rs ~line 2000):
  *   pending_value = units_to_assets(total_pending_units, available, total_units)
  *   obligations   = total_outstanding_max_payout + pending_value

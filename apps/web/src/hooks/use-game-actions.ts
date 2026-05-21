@@ -29,11 +29,10 @@ import { buildPriorityIxs } from "@/lib/priority-fee";
 import { PROGRAM_ID } from "@/lib/cluster";
 import { decodeProgramError } from "@/lib/program-errors";
 import { awaitAccountChangeWs, awaitSigConfirmedWs } from "@/lib/ws-confirm";
+import { useHouseEdgeBps } from "@/hooks/useContracts";
 import { useGameStore, type GameResult } from "@/stores/game-store";
 import { useHistoryStore } from "@/stores/history-store";
 import { useToast } from "@/components/providers/toast";
-
-const HOUSE_EDGE_BPS = 200;
 
 interface ActionsResult {
   authenticated: boolean;
@@ -66,6 +65,7 @@ export function useGameActions(): ActionsResult {
   const cashOutInflightRef = useRef(false);
   const revealInflightRef = useRef(false);
   const pushHistory = useHistoryStore((s) => s.push);
+  const houseEdgeBps = useHouseEdgeBps();
   const { toast } = useToast();
 
   const wallet = wallets[0];
@@ -108,7 +108,18 @@ export function useGameActions(): ActionsResult {
         signed instanceof VersionedTransaction
           ? signed.serialize()
           : (signed as Transaction).serialize();
-      const sig = await connection.sendRawTransaction(raw, { skipPreflight: true });
+      // Preflight stays ON for player-signed game txs. Skipping preflight
+      // makes deterministic-fail txs (stale state, bet > capacity, expired
+      // blockhash) consume the user's priority fee with no surfaced error
+      // — the wallet shows "submitted" and the UI optimistically renders a
+      // game that will never land. ~30-80ms preflight cost is invisible
+      // next to the optimistic-render path and saves users from losing
+      // signature fees to no-op txs.
+      const sig = await connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        maxRetries: 3,
+        preflightCommitment: "confirmed",
+      });
       // Confirmation: race awaitSigConfirmedWs (Connection's WS,
       // includes pre-flight status check that short-circuits for
       // already-finalized sigs) against confirmByPolling. Whichever
@@ -429,18 +440,36 @@ export function useGameActions(): ActionsResult {
             // same on-chain tx, so once apiReveal returns the prereq
             // state for close_game (Lost+settled) is at least ack'd by
             // the leader. 500ms grace before first attempt; retry once
-            // after 800ms; pendingClose holds until on-chain truth.
+            // after 800ms IF the PDA is still alive; pendingClose holds
+            // until on-chain truth.
             store.setPendingClose(true);
             const closeIxBytes = data.closeInstruction;
             const player = walletAddress;
             void (async () => {
+              const [gamePda] = deriveGamePda(PROGRAM_ID, new PublicKey(player));
               try {
                 await new Promise((r) => setTimeout(r, 500));
                 try {
                   await signAndSend(deserializeIx(closeIxBytes));
                 } catch {
+                  // Before re-prompting the wallet, check whether the
+                  // first attempt actually landed on chain — sign/confirm
+                  // can throw on a blockhash race even when the tx
+                  // succeeded. Re-signing with a fresh blockhash burns a
+                  // priority fee AND a Privy modal for no on-chain effect.
                   await new Promise((r) => setTimeout(r, 800));
-                  await signAndSend(deserializeIx(closeIxBytes)).catch(() => {});
+                  let pdaAlive = true;
+                  try {
+                    const info = await connection.getAccountInfo(gamePda, "confirmed");
+                    pdaAlive = info !== null && info.lamports > 0;
+                  } catch {
+                    /* RPC blip — assume alive and retry, the worst case
+                       is the second tx simulating-fail and being dropped
+                       at preflight (skipPreflight is now off). */
+                  }
+                  if (pdaAlive) {
+                    await signAndSend(deserializeIx(closeIxBytes)).catch(() => {});
+                  }
                 }
               } catch {
                 /* sign errors handled inside signAndSend */
@@ -452,7 +481,6 @@ export function useGameActions(): ActionsResult {
               // playerHasActiveGame check. Releasing too early ⇒ user
               // clicks engage ⇒ 409.
               try {
-                const [gamePda] = deriveGamePda(PROGRAM_ID, new PublicKey(player));
                 const wsClosed = awaitAccountChangeWs(
                   connection,
                   gamePda,
@@ -484,7 +512,7 @@ export function useGameActions(): ActionsResult {
         } else {
           // Safe reveal: server returned the rotated session token; persist it.
           store.setGameToken(data.gameToken);
-          const next = calcMultiplier(s.safeTiles.size + 1, s.mineCount, HOUSE_EDGE_BPS);
+          const next = calcMultiplier(s.safeTiles.size + 1, s.mineCount, houseEdgeBps);
           store.applySafeReveal(idx, next, data.signature);
         }
       } catch (err) {
@@ -524,7 +552,7 @@ export function useGameActions(): ActionsResult {
         toast(friendly, "error");
       }
     },
-    [walletAddress, store, signAndSend, cleanupStuck, pushHistory, toast],
+    [walletAddress, store, signAndSend, cleanupStuck, pushHistory, toast, houseEdgeBps, connection],
   );
 
   const cashOut = useCallback(async () => {

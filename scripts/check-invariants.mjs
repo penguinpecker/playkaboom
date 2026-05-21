@@ -77,7 +77,7 @@ async function fetchAll() {
   let offset = 0;
   const pageSize = 1000;
   while (true) {
-    const url = `${SUPABASE_URL}/rest/v1/games?select=signature,player,bet,mine_count,outcome,multiplier_bps,safe_reveals,mine_layout,settled_layout,commitment,salt&order=settled_at.desc&limit=${pageSize}&offset=${offset}`;
+    const url = `${SUPABASE_URL}/rest/v1/games?select=signature,player,bet,mine_count,outcome,multiplier_bps,safe_reveals,mine_layout,settled_layout,commitment,salt,settle_signature&order=settled_at.desc&limit=${pageSize}&offset=${offset}`;
     const res = await fetch(url, {
       headers: { apikey: ANON, Authorization: `Bearer ${ANON}` },
     });
@@ -104,14 +104,43 @@ if (process.env.ALLOWED_MISMATCH_SIGNATURES_PATH) {
   }
 }
 
+// A row is "settle-pending" iff the GameWon/GameLost insert landed (so the
+// row exists with `outcome` set) but no matching GameSettled event ever
+// updated it to fill in mine_layout / commitment / salt / mine_count. The
+// indexer writes mine_count=0 as the sentinel on insert (see
+// apps/web/src/server/indexer.ts), and MIN_MINES on chain is 1, so any
+// row with mine_count===0 is unambiguously sentinel data — the on-chain
+// multiplier_bps + safe_reveals are real, but the math invariant cannot
+// be evaluated against a sentinel mine_count.
+//
+// Pre-2026-05-21 this script tried to check those rows and failed daily.
+// Skip them from invariant evaluation; track separately so an operator
+// notices if the sentinel-pending population grows unbounded (would
+// indicate the indexer is permanently losing settle events for some PDA
+// class — different bug, different alert).
+function isSettlePendingSentinel(r) {
+  return (
+    r.mine_count === 0 &&
+    (r.mine_layout === null || r.mine_layout === undefined) &&
+    (!r.settle_signature || r.settle_signature.length === 0)
+  );
+}
+
 const rows = await fetchAll();
 let checked = 0;
 let multBad = 0;
 let popBad = 0;
 let commitBad = 0;
+let settlePending = 0;
 const failures = [];
+const pendingSigs = [];
 
 for (const r of rows) {
+  if (isSettlePendingSentinel(r)) {
+    settlePending++;
+    if (pendingSigs.length < 5) pendingSigs.push(r.signature);
+    continue;
+  }
   if (r.outcome === "won") {
     checked++;
     // Invariant 1: chain math matches DB-stored multiplier.
@@ -166,10 +195,15 @@ for (const r of rows) {
 
 console.log(`# rows scanned: ${rows.length}`);
 console.log(`# won rows checked for multiplier: ${checked}`);
+console.log(`# settle-pending sentinel rows (skipped): ${settlePending}`);
 console.log(`# allowed (legacy 2026-05-11 corruption): ${allowedSet.size}`);
 console.log(`# multiplier mismatches: ${multBad}`);
 console.log(`# popcount mismatches:   ${popBad}`);
 console.log(`# commitment mismatches: ${commitBad}`);
+
+if (settlePending > 0) {
+  console.log(`# sample settle-pending sigs: ${pendingSigs.join(", ")}`);
+}
 
 if (VERBOSE || failures.length > 0) {
   for (const f of failures.slice(0, 50)) {
@@ -178,6 +212,10 @@ if (VERBOSE || failures.length > 0) {
   if (failures.length > 50) console.log(`# … and ${failures.length - 50} more`);
 }
 
+// Hard-fail only on real invariant violations. Settle-pending sentinels
+// are logged + counted but do NOT fail the run — they're a separate
+// operational concern (indexer ordering) handled by the matching alert
+// pipeline if the population ever grows past the historical baseline.
 if (multBad + popBad + commitBad > 0) {
   console.error(`\nFAIL: ${multBad + popBad + commitBad} invariant violations`);
   process.exit(1);

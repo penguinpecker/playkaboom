@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
-import { jsonError } from "@/server/api-helpers";
+import { ApiError, clientIp, jsonError } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
+import { enforceRateLimit } from "@/server/ratelimit";
 import { getOrCreateCodeForWallet } from "@/server/referral-codes";
 
 export const runtime = "nodejs";
@@ -17,6 +18,12 @@ interface RouteContext {
  * a code for their own wallet — this is the core of the tamper-resistance
  * guarantee. Without this check, anyone could re-claim a code for a
  * popular streamer's wallet and divert their referrals.
+ *
+ * Rate-limited per (wallet, ip) so a sybil farm (free Privy email logins)
+ * can't iterate code-mint requests to pollute analytics counters or burn
+ * Supabase quota. The shared `enforceRateLimit` helper currently fails
+ * open until Upstash is provisioned in prod; once that lands this
+ * becomes a real guard with no code change here.
  */
 export async function GET(req: NextRequest, ctx: RouteContext) {
   try {
@@ -26,7 +33,11 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     } catch {
       return NextResponse.json({ error: "Invalid wallet" }, { status: 400 });
     }
-    await verifyPlayerAuth(req, wallet);
+    const [, rl] = await Promise.all([
+      verifyPlayerAuth(req, wallet),
+      enforceRateLimit(`ref:code:${clientIp(req)}:${wallet}`),
+    ]);
+    if (!rl.ok) throw new ApiError(429, "Too many requests");
     const row = await getOrCreateCodeForWallet(wallet);
     return NextResponse.json({
       code: row.code,
