@@ -43,7 +43,7 @@
  *                         CRON_SECRET or HELIUS_WEBHOOK_AUTH.
  */
 import http from "node:http";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocket as UpstreamWS, WebSocketServer, type WebSocket } from "ws";
 import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
 import { startAlchemyLogsSubscriber } from "./alchemy-logs.js";
 
@@ -78,6 +78,7 @@ const httpServer = http.createServer((req, res) => {
       JSON.stringify({
         ok: true,
         clients: clients.size,
+        rpc_proxy_clients: rpcProxyActive.size,
         upstream: upstreamConnected,
         alchemy_logs: alchemyLogs?.isConnected() ?? null,
         uptime_s: Math.round(process.uptime()),
@@ -89,20 +90,46 @@ const httpServer = http.createServer((req, res) => {
   res.end("not found");
 });
 
-const wss = new WebSocketServer({
-  server: httpServer,
-  // Origin gate so unrelated sites can't piggyback on our broadcast
-  // and burn through our connection quota. The feed itself is public.
-  verifyClient: ({ origin }, cb) => {
-    if (!origin || ALLOWED_ORIGINS.includes("*") || ALLOWED_ORIGINS.includes(origin)) {
-      cb(true);
-      return;
-    }
-    cb(false, 403, "origin not allowed");
-  },
+// Two WS surfaces share the same HTTP listener via path-based routing on
+// `upgrade`:
+//   - `/`            game-settle fanout (this file's original purpose)
+//   - `/rpc-ws`      Alchemy WS proxy for browser web3.js Connection
+//                    (added 2026-05-21 — keeps the paid Alchemy key in
+//                    Railway env so it never enters the browser bundle)
+// Both use `noServer: true` so we can branch in the upgrade handler.
+const wssRelay = new WebSocketServer({ noServer: true });
+const wssProxy = new WebSocketServer({ noServer: true });
+
+const RPC_PROXY_PATH = "/rpc-ws";
+
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin) return true; // non-browser clients (curl) — feed is public anyway
+  if (ALLOWED_ORIGINS.includes("*")) return true;
+  return ALLOWED_ORIGINS.includes(origin);
+}
+
+httpServer.on("upgrade", (req, socket, head) => {
+  const origin = req.headers.origin as string | undefined;
+  if (!isAllowedOrigin(origin)) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  // Strip query/fragment so /rpc-ws?cluster=mainnet would also match.
+  const pathname = (req.url ?? "/").split("?")[0];
+  if (pathname === RPC_PROXY_PATH) {
+    wssProxy.handleUpgrade(req, socket, head, (ws) => {
+      handleRpcProxyConnection(ws);
+    });
+    return;
+  }
+  // Default: relay broadcast (existing behaviour).
+  wssRelay.handleUpgrade(req, socket, head, (ws) => {
+    handleRelayConnection(ws);
+  });
 });
 
-wss.on("connection", (ws) => {
+function handleRelayConnection(ws: WebSocket): void {
   clients.add(ws);
   const live = ws as WebSocket & { isAlive?: boolean };
   live.isAlive = true;
@@ -119,7 +146,98 @@ wss.on("connection", (ws) => {
       ts: Date.now(),
     }),
   );
-});
+}
+
+// ── /rpc-ws → Alchemy WS proxy ───────────────────────────────────────────
+//
+// Browser web3.js Connection opens this WS for signatureSubscribe +
+// accountSubscribe. We open a matching upstream WS to Alchemy (URL +
+// API key from ALCHEMY_WS_URL env, same value alchemy-logs.ts uses) and
+// pipe messages bidirectionally. Each browser → its own upstream, no
+// multiplexing — simpler protocol fidelity, and Solana subscription
+// state is per-connection so de-muxing would be invasive. Resource
+// budget at expected concurrency (≤100 simultaneous players) sits well
+// inside Alchemy paid-tier WS limits.
+//
+// Failure modes handled:
+//   - Upstream fails to open                  → close client immediately
+//   - Client closes mid-flight                → close upstream
+//   - Upstream closes                         → close client
+//   - Either side throws                      → close both
+//   - Messages arrive on client BEFORE
+//     upstream's `open` fires                 → buffer + flush on open
+const rpcProxyActive = new Set<WebSocket>();
+
+function handleRpcProxyConnection(client: WebSocket): void {
+  const alchemyUrl = process.env.ALCHEMY_WS_URL;
+  if (!alchemyUrl) {
+    client.send(JSON.stringify({ error: "rpc proxy not configured" }));
+    client.close(1011, "ALCHEMY_WS_URL not set");
+    return;
+  }
+
+  let upstream: UpstreamWS;
+  try {
+    upstream = new UpstreamWS(alchemyUrl);
+  } catch (err) {
+    client.close(1011, `upstream open failed: ${(err as Error).message}`);
+    return;
+  }
+
+  rpcProxyActive.add(client);
+  const pending: Array<Buffer> = [];
+  let upstreamOpen = false;
+  let closed = false;
+
+  const closeBoth = (code = 1000, reason = ""): void => {
+    if (closed) return;
+    closed = true;
+    rpcProxyActive.delete(client);
+    try {
+      if (client.readyState === client.OPEN) client.close(code, reason);
+      else client.terminate();
+    } catch {
+      /* ignore */
+    }
+    try {
+      if (upstream.readyState === upstream.OPEN) upstream.close(code, reason);
+      else upstream.terminate();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  upstream.on("open", () => {
+    upstreamOpen = true;
+    for (const m of pending) upstream.send(m);
+    pending.length = 0;
+  });
+  upstream.on("message", (data, isBinary) => {
+    if (client.readyState !== client.OPEN) return;
+    try {
+      client.send(data, { binary: isBinary });
+    } catch {
+      closeBoth(1011, "client send error");
+    }
+  });
+  upstream.on("close", (code, reason) => closeBoth(code, reason?.toString() ?? ""));
+  upstream.on("error", () => closeBoth(1011, "upstream error"));
+
+  client.on("message", (data, isBinary) => {
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+    if (!upstreamOpen) {
+      pending.push(buf);
+      return;
+    }
+    try {
+      upstream.send(buf, { binary: isBinary });
+    } catch {
+      closeBoth(1011, "upstream send error");
+    }
+  });
+  client.on("close", (code, reason) => closeBoth(code, reason?.toString() ?? ""));
+  client.on("error", () => closeBoth(1011, "client error"));
+}
 
 // Reap dead sockets that disappeared without a clean close (mobile-tab
 // kill / network drop). Browsers auto-respond to pings; clients that
@@ -343,6 +461,13 @@ const shutdown = (sig: string) => {
   if (cronInterval) clearInterval(cronInterval);
   alchemyLogs?.stop();
   for (const ws of clients) {
+    try {
+      ws.close(1001, "server shutdown");
+    } catch {
+      /* noop */
+    }
+  }
+  for (const ws of rpcProxyActive) {
     try {
       ws.close(1001, "server shutdown");
     } catch {
