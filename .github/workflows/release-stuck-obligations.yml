@@ -14,7 +14,11 @@ name: Release stuck obligations
 # admin click triggered it. Now requires an explicit confirm input so the
 # operator has to type the exact phrase before the run can proceed.
 #
-# Requires repo secret CRON_SECRET (must match Vercel env CRON_SECRET).
+# 2026-05-21: migrated from the shared CRON_SECRET to the per-purpose
+# ADMIN_RELEASE_SECRET. This endpoint sends real settle_game txs via the
+# house signer — keeping its credential isolated from the routine tick
+# and indexer-reset surfaces is good hygiene. Vercel env mirrors the
+# GitHub secret name.
 
 on:
   workflow_dispatch:
@@ -40,11 +44,11 @@ jobs:
           fi
       - name: Hit release-stuck-obligations
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ADMIN_RELEASE_SECRET: ${{ secrets.ADMIN_RELEASE_SECRET }}
         run: |
           set -eu
-          if [ -z "${CRON_SECRET:-}" ]; then
-            echo "CRON_SECRET secret not configured" >&2
+          if [ -z "${ADMIN_RELEASE_SECRET:-}" ]; then
+            echo "ADMIN_RELEASE_SECRET secret not configured" >&2
             exit 1
           fi
           URL="https://www.playkaboom.gg/api/admin/release-stuck-obligations"
@@ -53,7 +57,7 @@ jobs:
           # AFTER the body so the JSON response is on stdout for log parsing.
           HTTP=$(curl -sS -o /tmp/resp.json -w "%{http_code}" \
             -X POST "$URL" \
-            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Authorization: Bearer $ADMIN_RELEASE_SECRET" \
             -H "Content-Type: application/json")
           echo "HTTP $HTTP"
           if [ "$HTTP" != "200" ]; then

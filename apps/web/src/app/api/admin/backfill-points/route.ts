@@ -32,9 +32,17 @@ const PAGE = 500;
 
 export async function GET(req: NextRequest) {
   try {
-    const secret = process.env.CRON_SECRET;
+    // 2026-05-21: ADMIN_BACKFILL_SECRET is the per-purpose secret for this
+    // endpoint; CRON_SECRET kept as a transitional fallback during rotation.
     const auth = req.headers.get("authorization");
-    if (!secret || auth !== `Bearer ${secret}`) {
+    if (!auth || !auth.startsWith("Bearer ")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const token = auth.slice(7);
+    const accepted = [process.env.ADMIN_BACKFILL_SECRET, process.env.CRON_SECRET].filter(
+      (s): s is string => Boolean(s),
+    );
+    if (accepted.length === 0 || !accepted.some((s) => s === token)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const url = new URL(req.url);
