@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { decodeGameSession, deriveGamePda } from "@playkaboom/sdk";
+import {
+  CLOSE_UNSETTLED_EXPIRY_SLOTS,
+  GAME_EXPIRY_SLOTS,
+} from "@playkaboom/shared";
 import { jsonError } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { getConnection } from "@/server/connection";
@@ -46,14 +50,18 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     const session = await loadSession(player);
 
     // Compute the recovery window. The program has three distinct ixs depending
-    // on game status — each has its own slot timer:
-    //   Playing  → refund_expired         (start + 300, refunds bet)
-    //   Won/Lost → close_unsettled_game   (start + 600, reclaims rent)
-    //   Expired  → close_game             (no slot guard — already past 300)
+    // on game status — each has its own slot timer (mirrored from @playkaboom/shared):
+    //   Playing  → refund_expired         (start + GAME_EXPIRY_SLOTS, refunds bet)
+    //   Won/Lost → close_unsettled_game   (start + CLOSE_UNSETTLED_EXPIRY_SLOTS, reclaims rent)
+    //   Expired  → close_game             (no slot guard — already past expiry)
     const currentSlot = await conn.getSlot("confirmed");
     const startSlot = Number(game.startSlot);
     const expirySlots =
-      game.status === "Playing" ? 300 : game.status === "Expired" ? 0 : 600;
+      game.status === "Playing"
+        ? GAME_EXPIRY_SLOTS
+        : game.status === "Expired"
+          ? 0
+          : CLOSE_UNSETTLED_EXPIRY_SLOTS;
     const expirySlot = startSlot + expirySlots;
     const slotsUntilRefund = expirySlot - currentSlot;
     const refundable = slotsUntilRefund <= 0;
