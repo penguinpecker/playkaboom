@@ -4,7 +4,7 @@ import { PrivyProvider, usePrivy } from "@privy-io/react-auth";
 import { ConnectionProvider } from "@solana/wallet-adapter-react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { CLUSTER, RPC_URL } from "@/lib/cluster";
+import { CLUSTER, RPC_URL, WS_URL } from "@/lib/cluster";
 import { setAuthFailureHandler, setAuthTokenResolver } from "@/lib/api";
 import { useReferralCodePrefetch, useReferralSignupAttribution } from "@/hooks/use-referral";
 
@@ -80,7 +80,11 @@ export function Web3Provider({ children }: { children: ReactNode }) {
             : [{ name: "devnet", rpcUrl: RPC_URL }],
       }}
     >
-      <ConnectionProvider endpoint={RPC_URL}>
+      {/* wsEndpoint MUST be passed explicitly because the same-origin
+          /api/rpc/<cluster> proxy is HTTP-only and Connection's default
+          (`https://` → `wss://` swap) would dead-end on Vercel. See
+          lib/cluster.ts WS_URL comment for why this exists. */}
+      <ConnectionProvider endpoint={RPC_URL} config={{ commitment: "confirmed", wsEndpoint: WS_URL }}>
         <QueryClientProvider client={queryClient}>
           <PrivyAuthBridge>{children}</PrivyAuthBridge>
         </QueryClientProvider>
