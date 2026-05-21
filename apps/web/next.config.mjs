@@ -39,6 +39,14 @@ const csp = [
     "wss://*.supabase.co",
     "https://api.mainnet-beta.solana.com",
     "https://api.devnet.solana.com",
+    // wss:// added 2026-05-21: web3.js Connection's signatureSubscribe +
+    // accountSubscribe go through public Solana WS (free, no key) because
+    // the same-origin /api/rpc proxy is HTTP-only. See lib/cluster.ts
+    // WS_URL comment. Without these, every onSignature / onAccountChange
+    // is CSP-blocked and races against polling resolve at 1s ticks —
+    // post-cashout Engage lock balloons from 2-3s to 15-20s.
+    "wss://api.mainnet-beta.solana.com",
+    "wss://api.devnet.solana.com",
     "https://*.g.alchemy.com",
     "wss://*.g.alchemy.com",
     // Railway realtime relay — fans out public.games settle events to
