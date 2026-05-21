@@ -56,13 +56,22 @@ interface ReleaseResult {
 }
 
 function requireCronAuth(req: NextRequest): void {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) throw new ApiError(503, "CRON_SECRET not configured");
+  // 2026-05-21: ADMIN_RELEASE_SECRET is the per-purpose secret for this
+  // endpoint; CRON_SECRET kept as a transitional fallback during rotation.
+  // Remove the CRON_SECRET branch once GitHub Actions + operator clients
+  // are migrated and the legacy value is rotated out.
+  const accepted = [process.env.ADMIN_RELEASE_SECRET, process.env.CRON_SECRET].filter(
+    (s): s is string => Boolean(s),
+  );
+  if (accepted.length === 0) {
+    throw new ApiError(503, "ADMIN_RELEASE_SECRET not configured");
+  }
   const provided = req.headers.get("authorization");
   if (!provided || !provided.startsWith("Bearer ")) {
     throw new ApiError(401, "Missing bearer token");
   }
-  if (provided.slice(7) !== secret) throw new ApiError(401, "Bad token");
+  const token = provided.slice(7);
+  if (!accepted.some((s) => s === token)) throw new ApiError(401, "Bad token");
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {

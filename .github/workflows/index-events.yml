@@ -13,8 +13,9 @@ name: Index program events
 #   2. Pass that value as the workflow's `confirm` input. The endpoint
 #      will 400 if the value doesn't match the live cursor — preventing
 #      a stale or accidental dispatch.
-#   3. CRON_SECRET (not HELIUS_WEBHOOK_AUTH) is required for the reset
-#      path — single rotation surface for the destructive operation.
+#   3. ADMIN_INDEX_RESET_SECRET (NOT the shared CRON_SECRET) is required
+#      for the reset path — isolated rotation surface for the destructive
+#      operation, separate from the routine read-only tick path.
 #
 # Run via:
 #   gh workflow run index-events.yml --repo penguinpecker/playkaboom \
@@ -35,12 +36,12 @@ jobs:
     steps:
       - name: Hit indexer (reset, with confirm)
         env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          ADMIN_INDEX_RESET_SECRET: ${{ secrets.ADMIN_INDEX_RESET_SECRET }}
           CONFIRM: ${{ inputs.confirm }}
         run: |
           set -eu
-          if [ -z "${CRON_SECRET:-}" ]; then
-            echo "CRON_SECRET secret not configured" >&2
+          if [ -z "${ADMIN_INDEX_RESET_SECRET:-}" ]; then
+            echo "ADMIN_INDEX_RESET_SECRET secret not configured" >&2
             exit 1
           fi
           if [ -z "${CONFIRM:-}" ] || [ "${#CONFIRM}" -ne 8 ]; then
@@ -52,7 +53,7 @@ jobs:
           URL="https://www.playkaboom.gg/api/cron/index-events?reset=1&confirm=${CONFIRM}"
           echo "RESET MODE — full rescan (confirm=${CONFIRM})"
           response=$(curl -sS -w "\nHTTP %{http_code}" \
-            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Authorization: Bearer $ADMIN_INDEX_RESET_SECRET" \
             "$URL")
           echo "$response"
           echo "$response" | tail -n1 | grep -q "HTTP 200"

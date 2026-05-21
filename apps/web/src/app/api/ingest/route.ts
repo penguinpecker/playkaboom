@@ -37,12 +37,15 @@ function authorise(req: NextRequest): boolean {
   const auth = req.headers.get("authorization");
   if (!auth) return false;
   const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : auth;
-  // Mirrors /api/cron/index-events: accepts CRON_SECRET or HELIUS_WEBHOOK_AUTH
-  // so the Railway push subscriber can reuse whichever value is already wired
-  // into its CRON_TICK_AUTH env (saves a Railway redeploy for the WS rollout).
-  const accepted = [process.env.CRON_SECRET, process.env.HELIUS_WEBHOOK_AUTH].filter(
-    (s): s is string => Boolean(s),
-  );
+  // 2026-05-21: INGEST_SECRET is the per-purpose secret for the Railway push
+  // ingest path; CRON_SECRET + HELIUS_WEBHOOK_AUTH kept as transitional
+  // fallbacks during rotation. Remove the legacy entries once Railway env
+  // (CRON_TICK_AUTH) is updated to the new INGEST_SECRET value.
+  const accepted = [
+    process.env.INGEST_SECRET,
+    process.env.CRON_SECRET,
+    process.env.HELIUS_WEBHOOK_AUTH,
+  ].filter((s): s is string => Boolean(s));
   return accepted.some((s) => safeEqual(s, token));
 }
 
