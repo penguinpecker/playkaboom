@@ -13,13 +13,39 @@ import { awardPoints } from "./points";
 // program and this constant are 200.
 const POINTS_EDGE_BPS = 200;
 
-/** Throw on Postgrest errors so they surface in `ingestTransactions`'s catch
- * block (logged + counted) instead of being silently swallowed. */
-function check(table: string, ev: string, res: { error: PostgrestError | null }): void {
-  if (res.error) {
-    throw new Error(`[${ev}→${table}] ${res.error.code ?? ""} ${res.error.message}`);
+class IndexerApplyError extends Error {
+  readonly pgCode?: string;
+  constructor(message: string, pgCode?: string) {
+    super(message);
+    this.name = "IndexerApplyError";
+    this.pgCode = pgCode;
   }
 }
+
+/** Throw on Postgrest errors so they surface in `ingestTransactions`'s catch
+ * block (logged + counted) instead of being silently swallowed. The PG error
+ * code is preserved on the thrown error so the outer loop can decide
+ * whether a retry is meaningful (e.g. 23505 unique-violation will repeat
+ * deterministically — keep the claim and skip future retries). */
+function check(table: string, ev: string, res: { error: PostgrestError | null }): void {
+  if (res.error) {
+    throw new IndexerApplyError(
+      `[${ev}→${table}] ${res.error.code ?? ""} ${res.error.message}`,
+      res.error.code ?? undefined,
+    );
+  }
+}
+
+/** Postgres SQLSTATE codes that are deterministic on replay — retrying just
+ * burns RPC quota and spams the log. When we hit one of these we KEEP the
+ * processed_events claim so the cron skips the signature on future ticks. */
+const TERMINAL_PG_CODES = new Set<string>([
+  "23505", // unique_violation
+  "23514", // check_violation
+  "23502", // not_null_violation
+  "23503", // foreign_key_violation
+  "22003", // numeric_value_out_of_range
+]);
 
 /** Minimal payload shape needed to apply an event — works for both Helius
  * webhook payloads and our own cron-fetched transactions. */
@@ -96,20 +122,33 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
         skipped++;
         continue;
       }
-      // Apply events; on ANY throw, release the claim so a retry can re-attempt.
+      // Apply events. On a TRANSIENT error, release the claim so the next
+      // cron tick retries. On a TERMINAL error (deterministic Postgres
+      // constraint violations — they will fail the same way forever),
+      // KEEP the claim so we stop retrying and surface the failure once.
       try {
         for (const ev of events) {
           await applyEvent(ev, tx);
         }
       } catch (applyErr) {
-        const del = await db
-          .from("processed_events")
-          .delete()
-          .eq("signature", tx.signature);
-        if (del.error) {
+        const pgCode =
+          applyErr instanceof IndexerApplyError ? applyErr.pgCode : undefined;
+        const isTerminal = pgCode !== undefined && TERMINAL_PG_CODES.has(pgCode);
+        if (!isTerminal) {
+          const del = await db
+            .from("processed_events")
+            .delete()
+            .eq("signature", tx.signature);
+          if (del.error) {
+            logger.error(
+              { sig: tx.signature, err: del.error.message },
+              "[indexer] FAILED to release processed_events claim after apply error — sig will be skipped on retry",
+            );
+          }
+        } else {
           logger.error(
-            { sig: tx.signature, err: del.error.message },
-            "[indexer] FAILED to release processed_events claim after apply error — sig will be skipped on retry",
+            { sig: tx.signature, pgCode, err: (applyErr as Error).message },
+            "[indexer] terminal PG constraint violation — keeping claim, will not retry",
           );
         }
         throw applyErr;
@@ -140,13 +179,18 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       // are GREATEST'd inside the function so they stay monotonic even if a
       // later event has a smaller absolute value (shouldn't happen on chain
       // but the function is defensive).
+      // 2026-05-21: pass lamport totals as decimal strings (bigint) rather
+      // than Number(). Postgres `bigint` accepts JSON strings and parses
+      // them exactly; Number() silently rounds anything above 2^53
+      // (~9007 SOL). At realistic mainnet usage `total_wagered` /
+      // `total_payouts` cross 2^53 over the lifetime of a player.
       const rpc = await db.rpc("idx_apply_stats", {
         p_player: ev.player.toBase58(),
-        p_games_played: Number(ev.gamesPlayed),
-        p_games_won: Number(ev.gamesWon),
-        p_total_wagered: Number(ev.totalWagered),
-        p_total_payouts: Number(ev.totalPayouts),
-        p_biggest_win: Number(ev.biggestWin),
+        p_games_played: ev.gamesPlayed.toString(),
+        p_games_won: ev.gamesWon.toString(),
+        p_total_wagered: ev.totalWagered.toString(),
+        p_total_payouts: ev.totalPayouts.toString(),
+        p_biggest_win: ev.biggestWin.toString(),
         p_current_streak: ev.currentStreak,
         p_best_streak: ev.currentStreak,
         p_last_played: blockTime,
@@ -214,10 +258,10 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           signature: tx.signature,
           game: ev.game.toBase58(),
           player: ev.player.toBase58(),
-          bet: Number(ev.bet),
+          bet: ev.bet.toString(),
           mine_count: 0, // sentinel — filled in by GameSettled handler keyed on `game`
           outcome: "won",
-          payout: Number(ev.payout),
+          payout: ev.payout.toString(),
           multiplier_bps: Number(ev.multiplierBps),
           safe_reveals: ev.safeReveals,
           mine_layout: null,
@@ -235,7 +279,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         player: ev.player.toBase58(),
         sourceKey: tx.signature,
         source: "game_won",
-        betLamports: BigInt(ev.bet),
+        betLamports: ev.bet,
         edgeBps: POINTS_EDGE_BPS,
       });
       break;
@@ -246,7 +290,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           signature: tx.signature,
           game: ev.game.toBase58(),
           player: ev.player.toBase58(),
-          bet: Number(ev.bet),
+          bet: ev.bet.toString(),
           mine_count: 0,
           outcome: "lost",
           payout: 0,
@@ -264,7 +308,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         player: ev.player.toBase58(),
         sourceKey: tx.signature,
         source: "game_lost",
-        betLamports: BigInt(ev.bet),
+        betLamports: ev.bet,
         edgeBps: POINTS_EDGE_BPS,
       });
       break;
@@ -293,7 +337,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           signature: tx.signature,
           referrer: ev.referrer.toBase58(),
           player: ev.player.toBase58(),
-          amount: Number(ev.amount),
+          amount: ev.amount.toString(),
           tier: ev.tier,
           occurred_at: blockTime,
           slot,
@@ -305,7 +349,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       // old hard-coded × 200 (only correct for tier 0).
       const rpc = await db.rpc("idx_apply_referral_accrued", {
         p_referrer: ev.referrer.toBase58(),
-        p_amount: Number(ev.amount),
+        p_amount: ev.amount.toString(),
         p_tier: ev.tier,
         p_event_slot: slot,
       });
@@ -326,7 +370,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       // Atomic decrement, clamped at 0 inside the RPC.
       const rpc = await db.rpc("idx_apply_referral_claimed", {
         p_referrer: ev.referrer.toBase58(),
-        p_amount: Number(ev.amount),
+        p_amount: ev.amount.toString(),
         p_event_slot: slot,
       });
       check("referrals", "ReferralClaimed.rpc", rpc);
@@ -336,14 +380,14 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
     case "LpDeposited": {
       const userKey = ev.user.toBase58();
       const unitValue =
-        ev.totalUnitsAfter > 0n ? (BigInt(ev.vaultAssetsAfter) * 10n ** 18n) / ev.totalUnitsAfter : 0n;
+        ev.totalUnitsAfter > 0n ? (ev.vaultAssetsAfter * 10n ** 18n) / ev.totalUnitsAfter : 0n;
       await db.from("lp_actions").upsert(
         {
           signature: tx.signature,
           user_address: userKey,
           action: "deposit",
           units_delta: ev.unitsMinted.toString(),
-          lamports_delta: Number(ev.amountLamports),
+          lamports_delta: ev.amountLamports.toString(),
           unit_value_lamports: unitValue.toString(),
           slot,
           block_time: blockTime,
@@ -354,7 +398,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       const rpc = await db.rpc("idx_apply_lp_deposit", {
         p_user_address: userKey,
         p_units_delta: ev.unitsMinted.toString(),
-        p_lamports_delta: Number(ev.amountLamports),
+        p_lamports_delta: ev.amountLamports.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
       });
@@ -379,7 +423,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       const rpc = await db.rpc("idx_apply_lp_request", {
         p_user_address: userKey,
         p_units: ev.units.toString(),
-        p_unlock_slot: Number(ev.unlockSlot),
+        p_unlock_slot: ev.unlockSlot.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
       });
@@ -413,14 +457,17 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
     case "LpWithdrawCompleted": {
       const userKey = ev.user.toBase58();
       const unitValue =
-        ev.totalUnitsAfter > 0n ? (BigInt(ev.vaultAssetsAfter) * 10n ** 18n) / ev.totalUnitsAfter : 0n;
+        ev.totalUnitsAfter > 0n ? (ev.vaultAssetsAfter * 10n ** 18n) / ev.totalUnitsAfter : 0n;
       await db.from("lp_actions").upsert(
         {
           signature: tx.signature,
           user_address: userKey,
           action: "complete_withdraw",
           units_delta: (-ev.unitsBurned).toString(),
-          lamports_delta: -Number(ev.amountLamports),
+          // Negative bigint as a JSON-stringified decimal — Postgres
+          // bigint column parses signed strings exactly. Number() would
+          // round on cumulative LP volumes >2^53.
+          lamports_delta: (-ev.amountLamports).toString(),
           unit_value_lamports: unitValue.toString(),
           slot,
           block_time: blockTime,
@@ -430,7 +477,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       const rpc = await db.rpc("idx_apply_lp_complete", {
         p_user_address: userKey,
         p_units_burned: ev.unitsBurned.toString(),
-        p_lamports_out: Number(ev.amountLamports),
+        p_lamports_out: ev.amountLamports.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
       });
@@ -439,11 +486,13 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
     }
     case "VaultUnitValueUpdated": {
       const unitValue =
-        ev.totalUnits > 0n ? (BigInt(ev.vaultAssets) * 10n ** 18n) / ev.totalUnits : 0n;
+        ev.totalUnits > 0n ? (ev.vaultAssets * 10n ** 18n) / ev.totalUnits : 0n;
       await db.from("vault_unit_value_history").upsert(
         {
           slot,
-          vault_assets: Number(ev.vaultAssets),
+          // vault_assets at SOL-scale TVL exceeds 2^53 lamports (9007 SOL).
+          // Always carry as a decimal string into the bigint column.
+          vault_assets: ev.vaultAssets.toString(),
           total_units: ev.totalUnits.toString(),
           unit_value_e18: unitValue.toString(),
           health_bps: ev.healthBps,
@@ -483,10 +532,10 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
                   : 0n;
         const lamportsDelta =
           ev.kind === "HouseDeposited"
-            ? Number(ev.amountLamports)
+            ? ev.amountLamports.toString()
             : ev.kind === "HouseWithdrawCompleted"
-              ? -Number(ev.amountLamports)
-              : 0;
+              ? (-ev.amountLamports).toString()
+              : "0";
         await db.from("lp_actions").upsert(
           {
             signature: tx.signature,

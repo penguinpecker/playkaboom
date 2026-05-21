@@ -177,15 +177,58 @@ function startUpstream() {
   // UPDATEs from the GameSettled handler never reached the live feed.
   // Players saw their win but the fairness fields stayed empty in real
   // time; only a 60s polling refresh eventually filled them.
+  //
+  // 2026-05-21 hardening: the games table is published with
+  // `replica identity full`, so the postgres_changes payload carries
+  // the ENTIRE row — including mine_layout + salt as soon as the
+  // server-side GameSettled UPDATE writes them. Forwarding the raw row
+  // would broadcast every player's fairness pre-image to anyone listening
+  // on the public relay. We project to a closed allowlist of fields that
+  // the UI actually consumes; the fairness pre-image is left for the
+  // dedicated /verify endpoint (which reads chain-direct).
+  type GameRow = {
+    signature?: string | null;
+    game?: string | null;
+    player?: string | null;
+    bet?: number | string | null;
+    outcome?: string | null;
+    payout?: number | string | null;
+    multiplier_bps?: number | null;
+    safe_reveals?: number | null;
+    mine_count?: number | null;
+    settled_at?: string | null;
+    settle_signature?: string | null;
+    slot?: number | null;
+  };
+  const pickSafeCols = (row: unknown): GameRow | null => {
+    if (!row || typeof row !== "object") return null;
+    const r = row as Record<string, unknown>;
+    return {
+      signature: (r.signature as string | null) ?? null,
+      game: (r.game as string | null) ?? null,
+      player: (r.player as string | null) ?? null,
+      bet: (r.bet as number | string | null) ?? null,
+      outcome: (r.outcome as string | null) ?? null,
+      payout: (r.payout as number | string | null) ?? null,
+      multiplier_bps: (r.multiplier_bps as number | null) ?? null,
+      safe_reveals: (r.safe_reveals as number | null) ?? null,
+      mine_count: (r.mine_count as number | null) ?? null,
+      settled_at: (r.settled_at as string | null) ?? null,
+      settle_signature: (r.settle_signature as string | null) ?? null,
+      slot: (r.slot as number | null) ?? null,
+    };
+  };
   const handler = (eventName: "game_inserted" | "game_updated") =>
     (payload: { new?: unknown; old?: unknown }) => {
+      const data = pickSafeCols(payload.new ?? payload.old);
+      if (!data) return;
       broadcast(
         JSON.stringify({
           // Legacy clients keyed on type==="game_settled" still receive
           // both events. Newer code can branch on insert vs update.
           type: "game_settled",
           event: eventName,
-          data: payload.new ?? payload.old,
+          data,
           ts: Date.now(),
         }),
       );
