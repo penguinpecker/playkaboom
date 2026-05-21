@@ -14,6 +14,18 @@ export const GAME_EXPIRY_SLOTS = 300;
 export const APPROX_SLOT_MS = 400;
 export const GAME_EXPIRY_MS = GAME_EXPIRY_SLOTS * APPROX_SLOT_MS;
 
+/**
+ * Slot gate for `close_unsettled_game` — must match
+ * `CLOSE_UNSETTLED_EXPIRY_SLOTS` in `programs/kaboom/src/lib.rs`. Was 600
+ * (~4 min) and dropped to 38 (~15s) in 2026-05-16 so the server settle has
+ * a short grace window while the player can recover their stuck game fast.
+ *
+ * If these drift the web UI tells the player to wait minutes when the
+ * chain already accepts close_unsettled — exactly the 2026-05-21 mobile
+ * bug. Single source of truth here.
+ */
+export const CLOSE_UNSETTLED_EXPIRY_SLOTS = 38;
+
 export const MIN_BET_LAMPORTS = 1_000_000n; // 0.001 SOL
 
 /** Mine count selector options surfaced in the UI.

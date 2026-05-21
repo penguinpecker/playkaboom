@@ -9,7 +9,7 @@ import {
   deriveGamePda,
   serializeIx,
 } from "@playkaboom/sdk";
-import { CleanupInput } from "@playkaboom/shared";
+import { CleanupInput, CLOSE_UNSETTLED_EXPIRY_SLOTS, GAME_EXPIRY_SLOTS } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
@@ -24,8 +24,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Slot timers from the on-chain program (programs/kaboom/src/lib.rs).
-const REFUND_EXPIRED_SLOTS = 300; // refund_expired needs slot >= start + 300
-const CLOSE_UNSETTLED_SLOTS = 600; // close_unsettled_game needs slot >= start + 600
+// Pulled from @playkaboom/shared so any program change auto-propagates.
+const REFUND_EXPIRED_SLOTS = GAME_EXPIRY_SLOTS;
+const CLOSE_UNSETTLED_SLOTS = CLOSE_UNSETTLED_EXPIRY_SLOTS;
 
 export async function POST(req: NextRequest) {
   try {
