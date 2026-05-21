@@ -55,6 +55,40 @@ export const RPC_URL =
         ? "https://api.mainnet-beta.solana.com"
         : "https://api.devnet.solana.com";
 
+/**
+ * WebSocket endpoint for `signatureSubscribe` / `accountSubscribe`.
+ *
+ * Separate from RPC_URL because the same-origin proxy is HTTP-only — Vercel
+ * Serverless Functions don't speak the WS upgrade protocol. Without an
+ * explicit wsEndpoint, web3.js's Connection derives one by swapping
+ * `https://` for `wss://` on RPC_URL, then silently fails to connect to
+ * `wss://<our-domain>/api/rpc/<cluster>`. Every onSignature / onAccountChange
+ * call then sits dead, and the Promise.any race with polling waits the full
+ * 1s polling tick instead of the ~300ms WS notification. Stacked across the
+ * post-cashout chain (cashOut + settle + close + PDA-delete watch), the
+ * Engage lock window blew up from the 2-3s baseline (commit 518135f) to
+ * ~15-20s in production. Restoring WS via the free public endpoint pulls
+ * it back to the original target — subscriptions are read-only, no API key
+ * exposed, and rate limits are per-IP (each user has their own budget).
+ */
+const PUBLIC_WS_URL: Record<"mainnet-beta" | "devnet" | "testnet", string> = {
+  "mainnet-beta": "wss://api.mainnet-beta.solana.com/",
+  devnet: "wss://api.devnet.solana.com/",
+  testnet: "wss://api.testnet.solana.com/",
+};
+
+const DEV_WS_OVERRIDE =
+  process.env.NODE_ENV !== "production" &&
+  process.env.NEXT_PUBLIC_SOLANA_WS &&
+  process.env.NEXT_PUBLIC_SOLANA_WS.length > 0
+    ? process.env.NEXT_PUBLIC_SOLANA_WS
+    : null;
+
+// CLUSTER is narrowed above to the public clusters — localnet falls back to
+// devnet semantics here. Local-validator workflows can set
+// NEXT_PUBLIC_SOLANA_WS=ws://127.0.0.1:8900 to override.
+export const WS_URL = DEV_WS_OVERRIDE !== null ? DEV_WS_OVERRIDE : PUBLIC_WS_URL[CLUSTER];
+
 const RAW_PROGRAM_ID = process.env.NEXT_PUBLIC_PROGRAM_ID;
 export const PROGRAM_ID = RAW_PROGRAM_ID
   ? new PublicKey(RAW_PROGRAM_ID)
