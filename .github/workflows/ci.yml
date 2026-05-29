@@ -48,10 +48,11 @@ jobs:
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
       - name: Install Anchor
         run: cargo install --git https://github.com/coral-xyz/anchor avm --locked && avm install 0.31.1 && avm use 0.31.1
-      # `-- --tools-version v1.54` forwards to cargo-build-sbf, pinning the
-      # platform-tools (cargo 1.89.0) explicitly regardless of the installed
-      # Agave's compiled-in default — belt-and-suspenders for edition2024.
-      - run: anchor build -- --tools-version v1.54
+      # The actual build toolchain is governed by Anchor.toml
+      # `[toolchain] solana_version = "3.1.14"`: Anchor auto-installs that Agave
+      # via agave-install and uses its cargo-build-sbf, whose default
+      # platform-tools is v1.52 (rust/cargo 1.89.0 — parses edition2024).
+      - run: anchor build
       # Pure-Rust unit tests live in programs/kaboom/src/lib.rs `multiplier_tests`.
       # They cover calc_multiplier across a 675-cell fixture shared with the
       # off-chain TS test at tests/sdk/multiplier-fixture.test.ts — TS↔Rust
