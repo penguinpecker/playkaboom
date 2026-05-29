@@ -62,7 +62,15 @@ export function VaultLpPanel() {
   const tvlSol = state?.vaultBalanceSol ?? 0;
   const apyLabel = state?.apy30d == null ? "—" : fmtPct(state.apy30d);
   const healthLabel = state?.healthBps != null ? `${(state.healthBps / 100).toFixed(1)}%` : "—";
+  // When the on-chain per-user cap is 0 the effective-deposit value is a
+  // "no limit" sentinel (~1.15B SOL), not a real ceiling — show "No limit".
+  // If the cap is ever re-enabled (bps != 0) this automatically shows the
+  // real health-scaled number again.
+  const depositCapDisabled = state?.maxUserPositionBps === 0;
   const maxDepositSol = state?.effectiveMaxUserDepositSol ?? 0;
+  const maxDepositLabel = depositCapDisabled
+    ? "No limit"
+    : `${maxDepositSol.toFixed(3)} SOL`;
 
   const positionUnits = position ? BigInt(position.units) : 0n;
   const pendingUnits = position ? BigInt(position.pendingUnits) : 0n;
@@ -138,7 +146,7 @@ export function VaultLpPanel() {
         <Stat label="Health" value={healthLabel} valColor="text-emerald" />
         <Stat
           label="Max single deposit"
-          value={`${maxDepositSol.toFixed(3)} SOL`}
+          value={maxDepositLabel}
           valColor="text-secondary"
         />
         <Stat

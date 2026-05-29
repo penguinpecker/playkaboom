@@ -99,6 +99,9 @@ export async function GET() {
       // Health-factor and effective caps so the frontend can disable buttons.
       healthBps: health,
       minHealthBps: v2.minHealthBps,
+      // 0 ⇒ per-user deposit cap disabled on-chain; the effective-cap value
+      // above is then a "no limit" sentinel, not a real ceiling.
+      maxUserPositionBps: v2.maxUserPositionBps,
       effectiveMaxBetSol: lamportsToSol(
         effectiveMaxBetLamports(vaultAssets, vault.maxBetBps, health),
       ),

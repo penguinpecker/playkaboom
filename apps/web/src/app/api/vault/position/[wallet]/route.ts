@@ -102,8 +102,13 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
     const totalUnitsHeld = pos.units + pos.pendingUnits;
     const indexerStale = totalUnitsHeld > 0n && cumulativeDeposited === 0;
     const pnlLamports = indexerStale ? null : Number(value) - netDeposited;
+    // Percent is return on cost basis (everything ever deposited), NOT on
+    // net-deposited — otherwise an LP who has withdrawn more than they put in
+    // (netDeposited < 0, a realised profit) shows a blank/garbage percent.
     const pnlPercent =
-      indexerStale || netDeposited <= 0 ? null : (pnlLamports! / netDeposited);
+      indexerStale || cumulativeDeposited <= 0
+        ? null
+        : pnlLamports! / cumulativeDeposited;
 
     return NextResponse.json({
       wallet: walletStr,
