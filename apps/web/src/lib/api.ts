@@ -165,6 +165,8 @@ export interface VaultStateResponse {
   effectiveMaxBetSol?: number;
   effectiveMaxPayoutSol?: number;
   effectiveMaxUserDepositSol?: number;
+  /** On-chain per-user cap setting. 0 means the per-user deposit cap is disabled. */
+  maxUserPositionBps?: number;
   withdrawCooldownSlots?: string;
   withdrawCooldownDays?: number;
   minLpDepositLamports?: string;
