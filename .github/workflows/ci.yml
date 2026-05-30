@@ -35,11 +35,23 @@ jobs:
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Solana
+        # Pin Agave v3.1.14 (not the floating `stable` channel). Its bundled
+        # cargo-build-sbf defaults to platform-tools v1.52, which ships
+        # rust/cargo 1.89.0 — new enough to parse the Cargo `edition2024`
+        # feature now required by transitive crates (block-buffer, toml_datetime,
+        # …). The old `stable` install resolved to a cargo 1.79.0 toolchain that
+        # could not, causing the whack-a-mole `feature 'edition2024' is required`
+        # build failures. Anchor 0.31.1 just shells out to cargo-build-sbf, so
+        # the toolchain is governed by the installed Agave, not Anchor.
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.14/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
       - name: Install Anchor
         run: cargo install --git https://github.com/coral-xyz/anchor avm --locked && avm install 0.31.1 && avm use 0.31.1
+      # The actual build toolchain is governed by Anchor.toml
+      # `[toolchain] solana_version = "3.1.14"`: Anchor auto-installs that Agave
+      # via agave-install and uses its cargo-build-sbf, whose default
+      # platform-tools is v1.52 (rust/cargo 1.89.0 — parses edition2024).
       - run: anchor build
       # Pure-Rust unit tests live in programs/kaboom/src/lib.rs `multiplier_tests`.
       # They cover calc_multiplier across a 675-cell fixture shared with the

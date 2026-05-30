@@ -1,5 +1,11 @@
 [toolchain]
 anchor_version = "0.31.1"
+# Pin the Agave/Solana build toolchain. Anchor auto-installs this via
+# agave-install and builds with its cargo-build-sbf. Agave 3.1.14 defaults to
+# platform-tools v1.52 (rust/cargo 1.89.0), which parses the Cargo
+# `edition2024` feature now required by transitive deps; the prior default
+# (2.1.0 -> platform-tools v1.43 -> cargo 1.79.0) could not.
+solana_version = "3.1.14"
 
 [features]
 resolution = true
