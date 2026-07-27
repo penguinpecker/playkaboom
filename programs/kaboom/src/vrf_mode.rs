@@ -145,6 +145,31 @@ impl VrfGame {
     pub const SIZE: usize = 1 + 32 + 32 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 2 + 2 + 8 + (33 * MAX_VRF_REVEALS);
 }
 
+// ─── Helper: how much an ADMIN cleanup path may pay out ──────────────────────
+
+/// Vault assets an owner-gated cleanup may spend, never taking the vault to
+/// exactly zero while LP units exist.
+///
+/// Pricing a new deposit divides by current assets (`deposit_to_units` requires
+/// `vault_assets_pre > 0` whenever `total_units > 0`), so a vault sitting at
+/// zero assets with live units rejects EVERY unit-minting deposit — both
+/// `lp_deposit` and `house_deposit` — until somebody donates through
+/// `fund_vault`. That is recoverable, but it is a trap laid exactly where the
+/// operator is least able to afford confusion: the vault currently holds 779
+/// lamports of assets against 49 units, so the first cleanup refund alone would
+/// land on zero and make the bankroll un-seedable by the intended path.
+///
+/// Player-facing payouts deliberately do NOT use this — underpaying a player to
+/// protect an operator convenience would be the wrong trade.
+fn admin_spendable(vault_info: &AccountInfo, v2: &VaultV2State) -> Result<u64> {
+    let available = vault_assets(vault_info)?;
+    Ok(if v2.total_units > 0 {
+        available.saturating_sub(1)
+    } else {
+        available
+    })
+}
+
 // ─── Helper: per-click fair mine decision ─────────────────────────────────────
 
 /// Until the first mine is hit every mine is still hidden among the unrevealed
@@ -794,7 +819,7 @@ pub fn admin_release_vrf_claim(ctx: Context<AdminReleaseVrfClaim>) -> Result<()>
             v2.total_outstanding_max_payout.saturating_sub(reserved);
     }
     let vault_info = ctx.accounts.vault.to_account_info();
-    let payable = bet.min(vault_assets(&vault_info)?);
+    let payable = bet.min(admin_spendable(&vault_info, &ctx.accounts.v2_state)?);
     if payable > 0 {
         **vault_info.try_borrow_mut_lamports()? = vault_info
             .lamports()
@@ -843,7 +868,7 @@ pub fn admin_close_orphaned_game_v2(ctx: Context<AdminCloseOrphanedGameV2>) -> R
     }
     // Return the bet. Never more — this instruction cannot express a win.
     let vault_info = ctx.accounts.vault.to_account_info();
-    let payable = bet.min(vault_assets(&vault_info)?);
+    let payable = bet.min(admin_spendable(&vault_info, &ctx.accounts.v2_state)?);
     if payable > 0 {
         **vault_info.try_borrow_mut_lamports()? = vault_info
             .lamports()
