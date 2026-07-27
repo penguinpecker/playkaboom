@@ -105,24 +105,46 @@ export const PROGRAM_ID = RAW_PROGRAM_ID
 // ── MagicBlock Ephemeral-Rollup (VRF mode) config ────────────────────────────
 //
 // The ER RPC is a PUBLIC MagicBlock endpoint (no API key), so — unlike the L1
-// RPC — it is used directly, not through the /api/rpc proxy. Overridable via
-// NEXT_PUBLIC_ER_RPC / NEXT_PUBLIC_ER_WS (e.g. a self-hosted validator or the
-// mainnet router). Defaults track MagicBlock's public routers.
-const ER_DEFAULTS: Record<"mainnet-beta" | "devnet" | "testnet", { rpc: string; ws: string }> = {
-  "mainnet-beta": { rpc: "https://mainnet.magicblock.app/", ws: "wss://mainnet.magicblock.app/" },
+// RPC — it is used directly, not through the /api/rpc proxy.
+//
+// ⚠️ THE ENDPOINT AND THE ON-CHAIN PIN MUST NAME THE SAME NODE.
+// `v2_state.vrf_validator` pins the one validator allowed to take delegation of
+// a game, and only that identity can ever commit or undelegate it. If the app
+// talks to a DIFFERENT node than the pin, delegation still SUCCEEDS — the
+// delegation program does not validate the validator at delegate time, it just
+// records it — and the game is then stranded: no validator will clone, commit
+// or undelegate it, so the bet sits locked until the owner-gated 24h release.
+// It fails silently, per game, with real money. Endpoint and pin change TOGETHER.
+//
+// These are regional nodes, NOT routers. `mainnet.magicblock.app` is an
+// unlabelled DNS alias for the Singapore node (`as.magicblock.app`); if
+// MagicBlock ever repoints that alias, a defaulted client would silently start
+// talking to a node that is not the pinned one. So on mainnet the endpoint must
+// be set EXPLICITLY — there is deliberately no default to fall back on.
+// Current mainnet roster (from `getRoutes` on https://router.magicblock.app):
+//   MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57 -> https://as.magicblock.app/          (Singapore)
+//   MTEWGuqxUpYZGFJQcp8tLN7x5v9BSeoFHYWQQ3n3xzo -> https://mainnet-tee.magicblock.app/ (Singapore, TEE-attested)
+//   MEUG… -> EU, MUS3… -> US
+const ER_DEFAULTS: Record<"devnet" | "testnet", { rpc: string; ws: string }> = {
   devnet: { rpc: "https://devnet.magicblock.app/", ws: "wss://devnet.magicblock.app/" },
   testnet: { rpc: "https://devnet.magicblock.app/", ws: "wss://devnet.magicblock.app/" },
 };
 
-export const ER_RPC_URL =
-  process.env.NEXT_PUBLIC_ER_RPC && process.env.NEXT_PUBLIC_ER_RPC.length > 0
-    ? process.env.NEXT_PUBLIC_ER_RPC
-    : ER_DEFAULTS[CLUSTER].rpc;
+/** Mainnet has no default: the endpoint must be pinned alongside vrf_validator. */
+function erEndpoint(kind: "rpc" | "ws"): string {
+  const explicit = kind === "rpc" ? process.env.NEXT_PUBLIC_ER_RPC : process.env.NEXT_PUBLIC_ER_WS;
+  if (explicit && explicit.length > 0) return explicit;
+  if (CLUSTER === "mainnet-beta") {
+    // Empty string rather than a throw: this module is imported during the
+    // build. VRF_MODE_ENABLED below is what actually gates use, and an unset
+    // endpoint makes the mode unusable rather than silently misrouted.
+    return "";
+  }
+  return ER_DEFAULTS[CLUSTER as "devnet" | "testnet"][kind];
+}
 
-export const ER_WS_URL =
-  process.env.NEXT_PUBLIC_ER_WS && process.env.NEXT_PUBLIC_ER_WS.length > 0
-    ? process.env.NEXT_PUBLIC_ER_WS
-    : ER_DEFAULTS[CLUSTER].ws;
+export const ER_RPC_URL = erEndpoint("rpc");
+export const ER_WS_URL = erEndpoint("ws");
 
 /**
  * Ephemeral VRF oracle queue. This is a PROGRAM-WIDE MagicBlock account, not
@@ -147,7 +169,17 @@ export const VRF_QUEUE: PublicKey = new PublicKey(
  * existing commit-reveal flow only. Pairs with the on-chain `vrf_mode_enabled`
  * flag and the backend routing — any of the three being off disables VRF.
  */
-export const VRF_MODE_ENABLED = process.env.NEXT_PUBLIC_VRF_MODE_ENABLED === "true";
+/**
+ * Client-side VRF mode switch. Requires an explicit ER endpoint too: without
+ * one the app cannot reach the rollup, and starting a game in that state would
+ * lock a bet with no way to play it out. Both must be set deliberately.
+ *
+ * This is a UI-routing flag only — the server flag VRF_MODE_ENABLED gates the
+ * money routes, and the on-chain vrf_validator / vrf_max_payout_bps gate the
+ * program itself.
+ */
+export const VRF_MODE_ENABLED =
+  process.env.NEXT_PUBLIC_VRF_MODE_ENABLED === "true" && ER_RPC_URL.length > 0;
 
 export const txExplorer = (sig: string) => EXPLORERS[CLUSTER](sig);
 export const accountExplorer = (addr: string) => ACCOUNT_EXPLORERS[CLUSTER](addr);
