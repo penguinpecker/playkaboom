@@ -2664,7 +2664,15 @@ pub struct CloseLpPosition<'info> {
 
 #[derive(Accounts)]
 pub struct HouseDepositCtx<'info> {
+    // `mut` is required: the handler CPIs system_program::transfer INTO this
+    // account. Without it the IDL advertises the vault as read-only, so any
+    // client built from the IDL (or Anchor's own .accounts()) produces a
+    // transaction the runtime rejects with a privilege-escalation error —
+    // the account list has to be hand-corrected to work at all. Since
+    // house_deposit is how the bankroll is seeded, that footgun sits on the
+    // single most consequential money operation the operator performs.
     #[account(
+        mut,
         seeds = [VAULT_SEED],
         bump = vault.bump,
         constraint = vault.owner == owner.key() @ KaboomError::Unauthorized,
