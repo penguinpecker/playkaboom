@@ -21,6 +21,8 @@ idl-build = ["anchor-lang/idl-build"]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 sha2 = "0.10"
 solana-security-txt = "1.1.1"
+# MagicBlock per-click VRF-in-ER mode (additive; gated). anchor-compat keeps us on 0.31.1.
+ephemeral-rollups-sdk = { version = "0.15.5", features = ["anchor-compat", "vrf"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

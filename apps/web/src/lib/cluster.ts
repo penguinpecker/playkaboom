@@ -102,6 +102,53 @@ export const PROGRAM_ID = RAW_PROGRAM_ID
   ? new PublicKey(RAW_PROGRAM_ID)
   : new PublicKey("Kab1TestProgam11111111111111111111111111111");
 
+// ── MagicBlock Ephemeral-Rollup (VRF mode) config ────────────────────────────
+//
+// The ER RPC is a PUBLIC MagicBlock endpoint (no API key), so — unlike the L1
+// RPC — it is used directly, not through the /api/rpc proxy. Overridable via
+// NEXT_PUBLIC_ER_RPC / NEXT_PUBLIC_ER_WS (e.g. a self-hosted validator or the
+// mainnet router). Defaults track MagicBlock's public routers.
+const ER_DEFAULTS: Record<"mainnet-beta" | "devnet" | "testnet", { rpc: string; ws: string }> = {
+  "mainnet-beta": { rpc: "https://mainnet.magicblock.app/", ws: "wss://mainnet.magicblock.app/" },
+  devnet: { rpc: "https://devnet.magicblock.app/", ws: "wss://devnet.magicblock.app/" },
+  testnet: { rpc: "https://devnet.magicblock.app/", ws: "wss://devnet.magicblock.app/" },
+};
+
+export const ER_RPC_URL =
+  process.env.NEXT_PUBLIC_ER_RPC && process.env.NEXT_PUBLIC_ER_RPC.length > 0
+    ? process.env.NEXT_PUBLIC_ER_RPC
+    : ER_DEFAULTS[CLUSTER].rpc;
+
+export const ER_WS_URL =
+  process.env.NEXT_PUBLIC_ER_WS && process.env.NEXT_PUBLIC_ER_WS.length > 0
+    ? process.env.NEXT_PUBLIC_ER_WS
+    : ER_DEFAULTS[CLUSTER].ws;
+
+/**
+ * Ephemeral VRF oracle queue. This is a PROGRAM-WIDE MagicBlock account, not
+ * cluster-specific — the same address is live on both devnet and mainnet
+ * (verified on-chain 2026-07-18: owned by the delegation program on mainnet).
+ * Overridable via NEXT_PUBLIC_VRF_QUEUE only if MagicBlock rotates it.
+ *
+ * ⚠️ The program now PINS this same address on chain (VRF_ORACLE_QUEUE in
+ * vrf_mode.rs) so a game cannot be pointed at an attacker-run queue. Overriding
+ * it here without shipping a matching program upgrade makes every reveal fail.
+ * Keep the two in lockstep.
+ */
+const EPHEMERAL_VRF_QUEUE = "5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc";
+export const VRF_QUEUE: PublicKey = new PublicKey(
+  process.env.NEXT_PUBLIC_VRF_QUEUE && process.env.NEXT_PUBLIC_VRF_QUEUE.length > 0
+    ? process.env.NEXT_PUBLIC_VRF_QUEUE
+    : EPHEMERAL_VRF_QUEUE,
+);
+
+/**
+ * Client-side kill switch for the VRF game mode. When false the app drives the
+ * existing commit-reveal flow only. Pairs with the on-chain `vrf_mode_enabled`
+ * flag and the backend routing — any of the three being off disables VRF.
+ */
+export const VRF_MODE_ENABLED = process.env.NEXT_PUBLIC_VRF_MODE_ENABLED === "true";
+
 export const txExplorer = (sig: string) => EXPLORERS[CLUSTER](sig);
 export const accountExplorer = (addr: string) => ACCOUNT_EXPLORERS[CLUSTER](addr);
 

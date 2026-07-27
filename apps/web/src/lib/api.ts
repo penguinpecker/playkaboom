@@ -118,6 +118,29 @@ export async function apiSettle(
   return post("/api/settle", input);
 }
 
+// ── VRF mode ──────────────────────────────────────────────────────────────────
+// NOTE: there is no session-funding helper. The per-game session key is funded
+// by the player inside the start transaction (lib/vrf/client.ts). The former
+// operator-sponsored endpoint was a replayable drain on the house wallet and is
+// now disabled server-side.
+
+/** Permissionless house-driven settle_vrf after the ER commits the game. */
+export interface VrfSettleResponse {
+  signature: string;
+  status: "Won" | "Lost";
+}
+export async function apiVrfSettle(input: { player: string }): Promise<VrfSettleResponse> {
+  return post("/api/vrf/settle", input);
+}
+
+/** House-driven refund_stalled_vrf for a stuck ER game. */
+export interface VrfRefundResponse {
+  signature: string;
+}
+export async function apiVrfRefund(input: { player: string }): Promise<VrfRefundResponse> {
+  return post("/api/vrf/refund", input);
+}
+
 export type CleanupResponse =
   | { active: false }
   | {

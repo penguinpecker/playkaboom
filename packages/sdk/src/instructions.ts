@@ -471,6 +471,22 @@ export interface UpdateV2ConfigArgs {
   minHealthBps?: number;
   withdrawCooldownSlots?: bigint;
   minLpDeposit?: bigint;
+  /** On/off switch for the per-click VRF game mode (carved from _reserved). */
+  vrfModeEnabled?: boolean;
+  /**
+   * The one rollup validator allowed to take delegation of reveal state.
+   * All-zeros = unset = VRF mode hard-disabled (this is the fail-closed launch
+   * gate; `vrfModeEnabled` alone is NOT a reliable off signal — see the field
+   * docs on VaultV2State).
+   */
+  vrfValidator?: PublicKey;
+  /**
+   * VRF-only payout ceiling in bps of vault assets, applied on top of
+   * maxPayoutBps (tighter wins). 0 = unset = VRF mode hard-disabled. This is
+   * the aggregate bound on a forged-outcome attack — set it well below the
+   * vault-wide ceiling while the mode is young.
+   */
+  vrfMaxPayoutBps?: number;
 }
 
 export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstruction {
@@ -482,6 +498,11 @@ export function buildUpdateV2Config(args: UpdateV2ConfigArgs): TransactionInstru
   parts.push(encodeOption(args.minHealthBps, (v) => writeU16(v)));
   parts.push(encodeOption(args.withdrawCooldownSlots, (v) => writeU64(v)));
   parts.push(encodeOption(args.minLpDeposit, (v) => writeU64(v)));
+  parts.push(encodeOption(args.vrfModeEnabled, (v) => Buffer.from([v ? 1 : 0])));
+  // Pubkey::default() (all zeros) clears the pin, which hard-disables VRF mode.
+  parts.push(encodeOption(args.vrfValidator, (v) => Buffer.from(v.toBytes())));
+  // 0 also hard-disables VRF mode; set it together with vrfValidator.
+  parts.push(encodeOption(args.vrfMaxPayoutBps, (v) => writeU16(v)));
   return new TransactionInstruction({
     programId: args.ctx.programId,
     keys: [readonly(vaultPda), writable(v2StatePda), readonly(args.owner, true)],

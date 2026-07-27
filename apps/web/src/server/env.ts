@@ -107,6 +107,19 @@ export function solanaRpc(): string {
   return process.env.SOLANA_RPC ?? "https://api.devnet.solana.com";
 }
 
+/**
+ * SERVER-side kill switch for the VRF game mode.
+ *
+ * Deliberately separate from the client's NEXT_PUBLIC_VRF_MODE_ENABLED, which
+ * is inlined at build time and only chooses which hook the UI calls — it does
+ * not stop anyone from calling the money routes directly. This one does, and it
+ * flips without a redeploy. Defaults to OFF: the mode must be switched on
+ * explicitly, never by omission.
+ */
+export function vrfModeEnabled(): boolean {
+  return process.env.VRF_MODE_ENABLED === "true";
+}
+
 export function logLevel(): string {
   return process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "info" : "debug");
 }
