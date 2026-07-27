@@ -3245,6 +3245,26 @@ mod multiplier_tests {
         assert_eq!(crate::vrf_mode::VrfClaim::SIZE, 32 + 8 + 8 + 1 + 2 + 8 + 1 + 1);
     }
 
+    /// A vault at exactly zero assets with live LP units cannot price a new
+    /// deposit, so every unit-minting deposit reverts until someone donates via
+    /// `fund_vault`. The owner-gated cleanup paths must therefore never spend
+    /// the vault down to zero. This pins the arithmetic behind that guard.
+    #[test]
+    fn zero_assets_with_live_units_blocks_deposits() {
+        // The state the guard exists to avoid.
+        assert!(deposit_to_units(1_000_000_000, 0, 49).is_err());
+        // One lamport is enough to keep the door open.
+        assert!(deposit_to_units(1_000_000_000, 1, 49).is_ok());
+        // A vault with no units yet is unaffected — it mints 1:1.
+        assert_eq!(deposit_to_units(1_000_000_000, 0, 0).unwrap(), 1_000_000_000u128);
+        // Live mainnet shape: 779 lamports of assets against 49 units. A full
+        // 0.001 SOL refund would land exactly on zero, which is why the admin
+        // paths cap at assets-1 rather than assets.
+        let live_assets: u64 = 779;
+        assert_eq!(live_assets.saturating_sub(1_000_000), 0);
+        assert!(deposit_to_units(3_000_000_000, live_assets.saturating_sub(1).max(1), 49).is_ok());
+    }
+
     /// `decide_mine` must stay exactly uniform: the multiplier prices
     /// P(mine) = mines / remaining, so any bias here is a silent edge change.
     #[test]
