@@ -45,7 +45,7 @@ use crate::{
     MIN_MINES, REFERRAL_BRONZE_BPS, REFERRAL_GOLD_BPS, REFERRAL_SILVER_BPS, REFERRAL_SEED,
     GOLD_VOLUME_LAMPORTS, SILVER_VOLUME_LAMPORTS, VAULT_SEED, VAULT_V2_SEED,
 };
-use crate::{GameSessionV2, PlayerStats, ReferralAccount, GAME_V2_SEED, STATS_SEED};
+use crate::{PlayerStats, ReferralAccount, GAME_V2_SEED, STATS_SEED};
 
 // ─── Seeds / constants ───────────────────────────────────────────────────────
 
@@ -83,6 +83,18 @@ pub const VRF_GAME_PENDING_OFFSET: usize = 79;
 const VRF_GAME_MIN_RAW_LEN: usize = VRF_GAME_PENDING_OFFSET + 1;
 
 pub const MAX_VRF_REVEALS: usize = 16;
+
+/// Raw offsets into a `GameSessionV2` (the deleted ER-era account), used because
+/// one such account is still delegated and so cannot be deserialized as ours.
+/// disc 0..8 | player 8..40 | bump 40 | status 41 | bet 42..50 | mine_count 50 |
+/// commitment 51..83 | masks 83..87 | safe 87 | multiplier 88..96 |
+/// start_slot 96..104 | created_at 104..112 | settled 112 | layout 113..115 |
+/// salt 115..147 | version 147 | max_payout 148..156
+pub const GAME_V2_BET_OFFSET: usize = 42;
+pub const GAME_V2_SETTLED_OFFSET: usize = 112;
+pub const GAME_V2_MAX_PAYOUT_OFFSET: usize = 148;
+/// sha256("account:GameSessionV2")[..8]
+pub const GAME_V2_DISCRIMINATOR: [u8; 8] = [0x64, 0x0f, 0xad, 0x57, 0x58, 0xaf, 0xa9, 0x64];
 
 /// MagicBlock ephemeral-VRF oracle queue. Program-wide constant, verified live
 /// on mainnet (owned by the delegation program) and identical on devnet.
@@ -857,10 +869,37 @@ pub fn admin_release_vrf_claim(ctx: Context<AdminReleaseVrfClaim>) -> Result<()>
 /// This is the safe alternative: read-only on the game, owner-signed, and
 /// deliberately unable to pay out more than the recorded bet.
 pub fn admin_close_orphaned_game_v2(ctx: Context<AdminCloseOrphanedGameV2>) -> Result<()> {
-    let game = &ctx.accounts.game;
-    require!(!game.settled, KaboomError::GameAlreadySettled);
-
-    let (bet, max_payout) = (game.bet, game.max_payout);
+    // Read raw rather than as a typed account, because one of these is still
+    // DELEGATED to the rollup and is therefore owned by the delegation program,
+    // not by us. A typed account would reject it on the owner check — and since
+    // this upgrade deletes the only instructions that could ever have brought it
+    // back, its obligation would be locked out of the bankroll permanently.
+    // These fields are written once at game start and never change, so a stale
+    // delegated copy is still authoritative for them.
+    let game_info = ctx.accounts.game.to_account_info();
+    let (bet, max_payout, settled) = {
+        let data = game_info.try_borrow_data()?;
+        require!(
+            data.len() >= GAME_V2_MAX_PAYOUT_OFFSET + 8,
+            KaboomError::BadGameAccount
+        );
+        require!(
+            data[..8] == GAME_V2_DISCRIMINATOR,
+            KaboomError::BadGameAccount
+        );
+        let player_bytes = ctx.accounts.player.key().to_bytes();
+        require!(data[8..40] == player_bytes[..], KaboomError::Unauthorized);
+        (
+            u64::from_le_bytes(data[GAME_V2_BET_OFFSET..GAME_V2_BET_OFFSET + 8].try_into().unwrap()),
+            u64::from_le_bytes(
+                data[GAME_V2_MAX_PAYOUT_OFFSET..GAME_V2_MAX_PAYOUT_OFFSET + 8]
+                    .try_into()
+                    .unwrap(),
+            ),
+            data[GAME_V2_SETTLED_OFFSET] != 0,
+        )
+    };
+    require!(!settled, KaboomError::GameAlreadySettled);
     {
         let v2 = &mut ctx.accounts.v2_state;
         v2.total_outstanding_max_payout =
@@ -881,7 +920,20 @@ pub fn admin_close_orphaned_game_v2(ctx: Context<AdminCloseOrphanedGameV2>) -> R
             .ok_or(KaboomError::MathOverflow)?;
         **player_info.try_borrow_mut_lamports()? = new_bal;
     }
-    // The game account closes to the player via `close = player`, returning rent.
+    // Close it only if it is ours. A still-delegated one stays where it is — its
+    // rent is the delegation program's to return — but the obligation above is
+    // released either way, which is the part that gates the bankroll.
+    if game_info.owner == &crate::ID {
+        let rent = game_info.lamports();
+        **game_info.try_borrow_mut_lamports()? = 0;
+        game_info.try_borrow_mut_data()?.fill(0);
+        let player_info = ctx.accounts.player.to_account_info();
+        let new_bal = player_info
+            .lamports()
+            .checked_add(rent)
+            .ok_or(KaboomError::MathOverflow)?;
+        **player_info.try_borrow_mut_lamports()? = new_bal;
+    }
     Ok(())
 }
 
@@ -1065,14 +1117,13 @@ pub struct AdminCloseOrphanedGameV2<'info> {
     /// CHECK: refunded party; validated via game.player == player.key().
     #[account(mut)]
     pub player: AccountInfo<'info>,
-    #[account(
-        mut,
-        close = player,
-        seeds = [GAME_V2_SEED, player.key().as_ref()],
-        bump = game.bump,
-        constraint = game.player == player.key() @ KaboomError::Unauthorized,
-    )]
-    pub game: Box<Account<'info, GameSessionV2>>,
+    /// CHECK: read raw and validated in the handler (discriminator + player).
+    /// Deliberately untyped: one of these is still delegated, so it is owned by
+    /// the delegation program and a typed account would reject it — stranding
+    /// its obligation forever once the ER instructions are gone. Closed in the
+    /// handler only when it is actually ours.
+    #[account(mut, seeds = [GAME_V2_SEED, player.key().as_ref()], bump)]
+    pub game: UncheckedAccount<'info>,
     #[account(mut, seeds = [VAULT_SEED], bump = vault.bump)]
     pub vault: Box<Account<'info, Vault>>,
     #[account(mut, seeds = [VAULT_V2_SEED], bump = v2_state.bump)]
