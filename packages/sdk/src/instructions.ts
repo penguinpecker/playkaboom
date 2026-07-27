@@ -599,7 +599,11 @@ export function buildHouseDeposit(args: HouseDepositArgs): TransactionInstructio
   return new TransactionInstruction({
     programId: args.ctx.programId,
     keys: [
-      readonly(vaultPda),
+      // Writable: the handler transfers lamports INTO the vault. This mirrored
+      // the old IDL, which advertised it read-only because the on-chain context
+      // was missing `mut` — the resulting transaction is rejected outright with
+      // a privilege-escalation error. Both sides are fixed together.
+      writable(vaultPda),
       writable(v2StatePda),
       writable(args.owner, true),
       readonly(SystemProgram.programId),
