@@ -12,7 +12,11 @@
  *   PROGRAM         9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh
  *   DEPLOYER        keypairs/mainnet-deployer.json
  *   TURNKEY HOUSE   7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp
- *   RPC             solana-mainnet.g.alchemy.com  (Alchemy)
+ *
+ * The RPC endpoint is the ONE input that is deliberately NOT hard-coded: it
+ * carries an API key, and this repo is public. Supply it via SOLANA_MAINNET_RPC.
+ * Pinning the addresses above is what makes this script auditable — the RPC is
+ * not a trust input, only a transport.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -26,7 +30,14 @@ import { buildInitializeVault, decodeVault, deriveVaultPda } from "@playkaboom/s
 
 const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 const TURNKEY_HOUSE = new PublicKey("7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp");
-const RPC = "https://solana-mainnet.g.alchemy.com/v2/-j7ptOh-PDq8Dzh8PqnQ-";
+const RPC = process.env.SOLANA_MAINNET_RPC
+  ?? (() => {
+    throw new Error(
+      "SOLANA_MAINNET_RPC is not set. This used to be a hardcoded Alchemy URL " +
+      "with the key inline — in a PUBLIC repo, and still reachable in git history. " +
+      "Export the endpoint instead: SOLANA_MAINNET_RPC=https://... (see docs/security/secrets.md)."
+    );
+  })();
 const DEPLOYER_PATH = "keypairs/mainnet-deployer.json";
 
 function loadKeypair(path: string): Keypair {

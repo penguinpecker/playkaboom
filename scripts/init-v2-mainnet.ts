@@ -20,7 +20,14 @@ import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { buildInitializeV2, deriveV2StatePda, deriveVaultPda } from "@playkaboom/sdk";
 
 const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
-const RPC = "https://solana-mainnet.g.alchemy.com/v2/-j7ptOh-PDq8Dzh8PqnQ-";
+const RPC = process.env.SOLANA_MAINNET_RPC
+  ?? (() => {
+    throw new Error(
+      "SOLANA_MAINNET_RPC is not set. This used to be a hardcoded Alchemy URL " +
+      "with the key inline — in a PUBLIC repo, and still reachable in git history. " +
+      "Export the endpoint instead: SOLANA_MAINNET_RPC=https://... (see docs/security/secrets.md)."
+    );
+  })();
 const DEPLOYER_PATH = "keypairs/mainnet-deployer.json";
 
 function loadKeypair(path: string): Keypair {

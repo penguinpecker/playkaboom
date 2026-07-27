@@ -35,15 +35,36 @@ ships to every browser**. Do not put anything sensitive here.
 | `NEXT_PUBLIC_PROGRAM_ID` | Anchor program ID | Public on-chain account |
 | `NEXT_PUBLIC_SOLANA_CLUSTER` | "devnet" / "mainnet-beta" | Trivial |
 
-## Known issue: Alchemy API key in client bundle
+## Known issue: Alchemy API key exposed (ROTATE — 2026-07-28)
 
-`NEXT_PUBLIC_SOLANA_RPC` currently embeds `https://solana-devnet.g.alchemy.com/v2/-j7ptOh-PDq8Dzh8PqnQ-`
-in the client bundle. Anyone visiting the site can extract the key and
-spend our Alchemy quota.
+One Alchemy key serves BOTH the devnet and mainnet endpoints, and it is
+exposed in more places than this doc originally recorded:
 
-**Severity**: medium — quota drain (cost / DoS), not data exfiltration.
-The endpoint is read-only RPC; nothing on Alchemy is account-scoped beyond
-quota.
+1. **This public repo, in tracked source.** It was hard-coded as
+   `const RPC = "https://solana-mainnet.g.alchemy.com/v2/<KEY>"` in
+   `scripts/init-vault-mainnet.ts`, `scripts/init-v2-mainnet.ts` and
+   `scripts/rotate-to-squads-mainnet.ts`. Those now read
+   `SOLANA_MAINNET_RPC` from the environment instead.
+2. **This document**, which previously printed the key in full.
+3. **The client bundle**, via `NEXT_PUBLIC_SOLANA_RPC` — anyone visiting the
+   site can extract it.
+4. **Git history.** Present in at least commits `1611831` and `9b04aa3`, both
+   pushed to a repo that is PUBLIC on GitHub.
+
+**Point 4 is the one that matters: removing the key from the working tree does
+NOT un-expose it.** Anyone can read it out of history. Rotation in the Alchemy
+dashboard is the only real fix — treat the current key as compromised.
+
+**Severity**: medium — quota drain (cost / denial of service), not data
+exfiltration. The endpoint is read-only RPC and nothing on Alchemy is
+account-scoped beyond quota. It is upgraded from "known issue" to "rotate now"
+because a shared/throttled endpoint is also an operational risk: a mainnet
+program deploy writes ~1,000 transactions, and a stall mid-upload strands
+~7.2 SOL of buffer rent until manually reclaimed.
+
+**After rotating**, set the new value in: Vercel (`SOLANA_RPC`, marked
+Sensitive), the Railway indexer, and your local shell for the scripts above.
+Do not paste it back into any tracked file.
 
 **Fix (planned)**: proxy reads through `/api/rpc/devnet` so the key only
 exists server-side. Implementation:
