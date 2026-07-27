@@ -297,9 +297,23 @@ pub fn start_game_vrf(
 /// L1 -> ER: delegate the reveal-state PDA to the rollup. Player signs.
 ///
 /// The target validator is taken from on-chain owner-set config, NEVER from the
-/// caller. Leaving it caller-supplied (or `None`) would let any DLP-registered
-/// validator take custody of the reveal state — and whoever holds it is the
-/// party that writes the committed result `settle_vrf` pays out on.
+/// caller — whoever holds the delegation is the party that writes the committed
+/// result `settle_vrf` pays out on, so it must not be caller-controlled.
+///
+/// Precisely what the alternatives do (the delegation program's own source, not
+/// inference): passing `None` does NOT mean "any validator" — the processor
+/// substitutes its hardcoded `DEFAULT_VALIDATOR_IDENTITY`, which today is the
+/// same MAS1 node we pin. True any-validator mode is a SEPARATE instruction
+/// (`DelegateWithAnyValidator`) that writes the system program as authority; we
+/// never call it. So the practical difference is that an explicit pin keeps the
+/// choice ours rather than tracking whatever MagicBlock changes its default to.
+///
+/// ⚠️ The delegation program does NOT validate this value at delegate time — it
+/// records whatever it is handed. Only commit and undelegate check it, and both
+/// require that identity to SIGN. A wrong pin therefore fails SILENTLY: the
+/// delegation succeeds and the game becomes unreachable, with the bet locked
+/// until `admin_release_vrf_claim`. The pin and the ER endpoint the app talks to
+/// must always name the same node.
 pub fn delegate_vrf(ctx: Context<DelegateVrf>) -> Result<()> {
     let pinned = ctx.accounts.v2_state.vrf_validator;
     require!(pinned != Pubkey::default(), KaboomError::VrfValidatorNotSet);
