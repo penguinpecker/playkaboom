@@ -5,7 +5,9 @@
 // MUST stay in the EXACT order of `pub enum KaboomError` in
 // programs/kaboom/src/lib.rs (line ~2272). Anchor assigns user error codes
 // as `6000 + index`; an out-of-order entry here decodes the wrong name.
-// Last cross-checked with on-chain enum on 2026-05-11.
+// Last cross-checked against target/idl/kaboom.json on 2026-07-28 (55 entries,
+// codes 6000-6054). Verify with a diff against the IDL's `errors` array after
+// any change to the enum — a missing entry silently shifts every later name.
 export const KABOOM_ERROR_NAMES = [
   "InvalidMineCount",
   "InvalidTileIndex",
@@ -49,6 +51,21 @@ export const KABOOM_ERROR_NAMES = [
   "InsufficientUnits",
   "InsufficientLiquidity",
   "LpPositionNotEmpty",
+  "NoOperatorUnitsToUnlock",
+  // ─── VRF mode ───────────────────────────────────────────────────────────
+  "VrfModeDisabled",
+  "BadSessionKey",
+  "RevealPending",
+  "NoRevealPending",
+  "TooManyReveals",
+  "ReplayMismatch",
+  "NotStalledYet",
+  "BadGameAccount",
+  "GameAlreadyResolved",
+  "PayoutExceedsReserved",
+  "GameStillDelegated",
+  "VrfValidatorNotSet",
+  "WrongVrfValidator",
 ] as const;
 
 export type KaboomErrorName = (typeof KABOOM_ERROR_NAMES)[number];

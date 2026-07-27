@@ -6,3 +6,4 @@ export * from "./errors";
 export * from "./verify";
 export * from "./client";
 export * from "./events";
+export * from "./vrf";

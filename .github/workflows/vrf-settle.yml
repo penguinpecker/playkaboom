@@ -1,0 +1,38 @@
+name: VRF settle worker
+# Polls /api/cron/vrf-settle every 5 minutes. The endpoint scans program-owned
+# VrfGame accounts and settles any that committed a terminal status — the
+# fallback for players who disconnect before their own client drives settle.
+# Settled games close their PDAs, so a settled game vanishes from the scan and
+# no dedupe table is needed. Idempotent; returns immediately when VRF mode is
+# off (VRF_MODE_ENABLED unset), so this is inert until the mode is enabled.
+#
+# Runs here rather than as a vercel.json cron: the Vercel plan for this project
+# caps crons at once-daily (minute cadence is Pro-only), and a sub-daily entry
+# in vercel.json is rejected at deploy time — which would block deploys of the
+# LIVE commit-reveal game. Same reason index-events and vault-health run
+# externally. See commit 3fe0ab2.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  settle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Hit settle worker
+        env:
+          CRON_TICK_SECRET: ${{ secrets.CRON_TICK_SECRET }}
+        run: |
+          set -eu
+          if [ -z "${CRON_TICK_SECRET:-}" ]; then
+            echo "CRON_TICK_SECRET secret not configured" >&2
+            exit 1
+          fi
+          response=$(curl -sS -w "\nHTTP %{http_code}" \
+            -H "Authorization: Bearer $CRON_TICK_SECRET" \
+            https://www.playkaboom.gg/api/cron/vrf-settle)
+          echo "$response"
+          echo "$response" | tail -n1 | grep -q "HTTP 200"

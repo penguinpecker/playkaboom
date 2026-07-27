@@ -26,7 +26,8 @@ import { apiCleanup, apiCommit, apiReveal, apiSettle, ApiClientError } from "@/l
 import { getPendingReferrer, clearPendingReferrer } from "./use-referral";
 import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
-import { PROGRAM_ID } from "@/lib/cluster";
+import { PROGRAM_ID, VRF_MODE_ENABLED } from "@/lib/cluster";
+import { useVrfGame } from "./use-vrf-game";
 import { decodeProgramError } from "@/lib/program-errors";
 import { awaitAccountChangeWs, awaitSigConfirmedWs } from "@/lib/ws-confirm";
 import { useHouseEdgeBps } from "@/hooks/useContracts";
@@ -70,6 +71,10 @@ export function useGameActions(): ActionsResult {
 
   const wallet = wallets[0];
   const walletAddress = wallet?.address;
+
+  // VRF (rollup) game mode. Hook is always called (React rules); its actions
+  // only replace the commit-reveal ones in the return below when the flag is on.
+  const vrf = useVrfGame();
 
   // Sign + broadcast a player tx, returning the signature AND a
   // confirmation promise. Caller updates UI on `sig` immediately
@@ -790,11 +795,11 @@ export function useGameActions(): ActionsResult {
   return {
     authenticated,
     walletAddress,
-    startGame,
-    revealTile,
-    cashOut,
-    resetGame: store.reset,
-    cleanupStuck,
+    startGame: VRF_MODE_ENABLED ? vrf.startGame : startGame,
+    revealTile: VRF_MODE_ENABLED ? vrf.revealTile : revealTile,
+    cashOut: VRF_MODE_ENABLED ? vrf.cashOut : cashOut,
+    resetGame: VRF_MODE_ENABLED ? vrf.resetGame : store.reset,
+    cleanupStuck: VRF_MODE_ENABLED ? vrf.cleanupStuck : cleanupStuck,
     login,
     logout,
   };

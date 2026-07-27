@@ -21,6 +21,15 @@ use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use sha2::{Digest, Sha256};
 
+// MagicBlock per-click VRF-in-ER game mode (additive, gated). Shares this
+// program's Vault bankroll, reservation accounting, multiplier math, treasury
+// split, and referral rakeback. See vrf_mode.rs.
+use ephemeral_rollups_sdk::anchor::ephemeral;
+mod vrf_mode;
+// Bring the VRF-mode Accounts structs (+ their generated client-account modules)
+// to the crate root so the `#[program]` macro resolves bare `Context<...>` types.
+use vrf_mode::*;
+
 declare_id!("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 
 #[cfg(not(feature = "no-entrypoint"))]
@@ -121,11 +130,15 @@ pub const VAULT_SEED: &[u8] = b"kaboom_vault";
 pub const VAULT_V2_SEED: &[u8] = b"kaboom_v2_state";
 pub const LP_SEED: &[u8] = b"kaboom_lp";
 pub const GAME_SEED: &[u8] = b"kaboom_game";
+/// Seed of the deleted ER-era game account. Retained only so
+/// `admin_close_orphaned_game_v2` can address the accounts left on mainnet.
+pub const GAME_V2_SEED: &[u8] = b"game_v2";
 pub const STATS_SEED: &[u8] = b"kaboom_stats";
 pub const REFERRAL_SEED: &[u8] = b"kaboom_referral";
 
 // ─── Program ─────────────────────────────────────────────────────────────────
 
+#[ephemeral]
 #[program]
 pub mod kaboom {
     use super::*;
@@ -1342,8 +1355,24 @@ pub mod kaboom {
         min_health_bps: Option<u16>,
         withdraw_cooldown_slots: Option<u64>,
         min_lp_deposit: Option<u64>,
+        vrf_mode_enabled: Option<bool>,
+        vrf_validator: Option<Pubkey>,
+        vrf_max_payout_bps: Option<u16>,
     ) -> Result<()> {
         let v2 = &mut ctx.accounts.v2_state;
+        if let Some(v) = vrf_mode_enabled {
+            v2.vrf_mode_enabled = v;
+        }
+        // Setting this to Pubkey::default() is the on-chain kill switch for VRF
+        // mode (fail-closed); setting a real key is the launch switch.
+        if let Some(v) = vrf_validator {
+            v2.vrf_validator = v;
+        }
+        // 0 also hard-disables VRF mode. Pair it with vrf_validator.
+        if let Some(v) = vrf_max_payout_bps {
+            require!(v <= BPS as u16, KaboomError::InvalidConfig);
+            v2.vrf_max_payout_bps = v;
+        }
         if let Some(v) = min_house_share_bps {
             require!(v <= BPS as u16, KaboomError::InvalidConfig);
             v2.min_house_share_bps = v;
@@ -1698,6 +1727,62 @@ pub mod kaboom {
         Ok(())
     }
 
+    // ─── MagicBlock per-click VRF mode (additive; impls in vrf_mode.rs) ───────
+
+    pub fn start_game_vrf(
+        ctx: Context<StartGameVrf>,
+        mine_count: u8,
+        bet: u64,
+        session_key: Pubkey,
+    ) -> Result<()> {
+        vrf_mode::start_game_vrf(ctx, mine_count, bet, session_key)
+    }
+
+    pub fn delegate_vrf(ctx: Context<DelegateVrf>) -> Result<()> {
+        vrf_mode::delegate_vrf(ctx)
+    }
+
+    pub fn reveal_request_vrf(
+        ctx: Context<RevealRequestVrf>,
+        tile_index: u8,
+        client_seed: u8,
+    ) -> Result<()> {
+        vrf_mode::reveal_request_vrf(ctx, tile_index, client_seed)
+    }
+
+    pub fn reveal_callback_vrf(
+        ctx: Context<RevealCallbackVrf>,
+        randomness: [u8; 32],
+    ) -> Result<()> {
+        vrf_mode::reveal_callback_vrf(ctx, randomness)
+    }
+
+    pub fn cash_out_vrf(ctx: Context<CashOutVrf>) -> Result<()> {
+        vrf_mode::cash_out_vrf(ctx)
+    }
+
+    pub fn settle_and_undelegate_vrf(ctx: Context<SettleAndUndelegateVrf>) -> Result<()> {
+        vrf_mode::settle_and_undelegate_vrf(ctx)
+    }
+
+    pub fn settle_vrf<'info>(
+        ctx: Context<'_, '_, 'info, 'info, SettleVrf<'info>>,
+    ) -> Result<()> {
+        vrf_mode::settle_vrf(ctx)
+    }
+
+    pub fn refund_stalled_vrf(ctx: Context<RefundStalledVrf>) -> Result<()> {
+        vrf_mode::refund_stalled_vrf(ctx)
+    }
+
+    pub fn admin_release_vrf_claim(ctx: Context<AdminReleaseVrfClaim>) -> Result<()> {
+        vrf_mode::admin_release_vrf_claim(ctx)
+    }
+
+    pub fn admin_close_orphaned_game_v2(ctx: Context<AdminCloseOrphanedGameV2>) -> Result<()> {
+        vrf_mode::admin_close_orphaned_game_v2(ctx)
+    }
+
 }
 
 // ─── Multiplier ──────────────────────────────────────────────────────────────
@@ -1945,7 +2030,46 @@ pub struct VaultV2State {
     pub withdraw_cooldown_slots: u64,
     pub min_lp_deposit: u64,
 
-    pub _reserved: [u8; 64],
+    /// Owner-gated on/off switch for the per-click VRF game mode. Carved from
+    /// the former `_reserved: [u8; 64]`, so no realloc is needed. See vrf_mode.rs.
+    ///
+    /// ⚠️ This byte is NOT reliably zero on existing accounts. On mainnet it
+    /// already reads 1: this slot previously held `er_enabled` in the deployed
+    /// (pre-removal) build, and a Squads `update_v2_config` reusing argument 6
+    /// set it. Treat a live value as UNKNOWN, never as false. The real launch
+    /// gate is `vrf_validator` below, which is verified zero on mainnet.
+    pub vrf_mode_enabled: bool,
+    /// The ONE MagicBlock ER validator allowed to take delegation of a reveal
+    /// PDA (and therefore the only party that can commit ER state back to L1).
+    /// `Pubkey::default()` = unset = VRF mode is HARD OFF (fail-closed): both
+    /// `start_game_vrf` and `delegate_vrf` reject. Owner-settable only.
+    ///
+    /// Without this, `DelegateConfig.validator = None` lets ANY DLP-registered
+    /// validator claim the account, so the trust set would be MagicBlock's whole
+    /// validator registry rather than one operator-chosen identity.
+    ///
+    /// Byte range verified all-zero on the live mainnet account before reuse
+    /// (the `vrf_mode_enabled` incident above is exactly why we check first).
+    pub vrf_validator: Pubkey,
+    /// Payout ceiling for VRF games ONLY, in bps of vault assets, applied on top
+    /// of `vault.max_payout_bps` (the tighter of the two wins).
+    ///
+    /// Why VRF needs its own, tighter ceiling: settle_vrf verifies no oracle
+    /// proof over the recorded randomness, so whoever writes the committed
+    /// rollup state picks outcomes. The per-game payout cap bounds one forged
+    /// win to what that game reserved — but `reserved` scales with
+    /// max_payout_bps, which is 5000 (50% of assets) on the live vault, and
+    /// forging repeats. This field is what turns "half the bankroll per game"
+    /// into a bounded trickle while the mode is young.
+    ///
+    /// 0 = unset = VRF mode HARD OFF, same fail-closed contract as
+    /// `vrf_validator`. Both are set together in one owner transaction, so
+    /// requiring it costs no extra ceremony but makes the economic bound a
+    /// deliberate decision rather than an inherited default.
+    ///
+    /// Byte range verified all-zero on the live mainnet account before reuse.
+    pub vrf_max_payout_bps: u16,
+    pub _reserved: [u8; 29],
 }
 
 impl VaultV2State {
@@ -2015,6 +2139,52 @@ impl GameSession {
         + 8 + 8 + 8
         + 1 + 2 + 32
         + 1 + 8 + 24;
+}
+
+/// ER-era game account, retained as a DATA DEFINITION ONLY.
+///
+/// The MagicBlock ER instructions that created and drove these
+/// (`start_game_er` / `delegate_game` / `reveal_tile_er` / `settle_game_er`)
+/// are deleted — they carried auth and commitment-hash bugs that could have
+/// drained the vault had ER routing ever been switched on. Removing the type
+/// outright would have permanently orphaned the accounts still on mainnet,
+/// stranding their bets, their rent, and their share of
+/// `total_outstanding_max_payout`. The layout is kept byte-identical to the
+/// deployed program purely so `admin_close_orphaned_game_v2` can read and
+/// close them. Do not add new handlers against this type.
+#[account]
+pub struct GameSessionV2 {
+    pub player: Pubkey,
+    pub bump: u8,
+    pub status: GameStatus,
+    pub bet: u64,
+    pub mine_count: u8,
+    pub commitment: [u8; 32],
+    pub revealed_mask: u16,
+    pub revealed_safe_mask: u16,
+    pub safe_reveals: u8,
+    pub multiplier_bps: u64,
+    pub start_slot: u64,
+    pub created_at: i64,
+    pub settled: bool,
+    pub mine_layout: u16,
+    pub salt: [u8; 32],
+    pub version: u8,
+    pub max_payout: u64,
+    pub session_key: Option<Pubkey>,
+    pub _reserved: [u8; 32],
+}
+
+impl GameSessionV2 {
+    pub const SPACE: usize = 8
+        + 32 + 1 + 1
+        + 8 + 1 + 32
+        + 2 + 2 + 1
+        + 8 + 8 + 8
+        + 1 + 2 + 32
+        + 1 + 8
+        + 1 + 32
+        + 32;
 }
 
 /// Per-player lifetime stats. Source of truth for leaderboards.
@@ -2616,6 +2786,33 @@ pub enum KaboomError {
     LpPositionNotEmpty,
     #[msg("Operator units (seed + house + house_pending) are already zero; nothing to unlock.")]
     NoOperatorUnitsToUnlock,
+    // ─── VRF mode ───────────────────────────────────────────────────────────
+    #[msg("VRF game mode is disabled.")]
+    VrfModeDisabled,
+    #[msg("Signer is not the authorized session key.")]
+    BadSessionKey,
+    #[msg("A reveal is already pending.")]
+    RevealPending,
+    #[msg("No reveal is pending.")]
+    NoRevealPending,
+    #[msg("Too many reveals for this game.")]
+    TooManyReveals,
+    #[msg("Committed game state does not match the randomness replay.")]
+    ReplayMismatch,
+    #[msg("Game is not stalled yet.")]
+    NotStalledYet,
+    #[msg("Malformed game account.")]
+    BadGameAccount,
+    #[msg("Game already resolved; cannot refund.")]
+    GameAlreadyResolved,
+    #[msg("Payout exceeds the worst case reserved for this game.")]
+    PayoutExceedsReserved,
+    #[msg("Game is still delegated to the rollup; its L1 state is not final.")]
+    GameStillDelegated,
+    #[msg("No VRF validator is pinned; VRF mode is hard-disabled.")]
+    VrfValidatorNotSet,
+    #[msg("Delegation must go to the pinned VRF validator.")]
+    WrongVrfValidator,
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────
@@ -2990,5 +3187,73 @@ mod multiplier_tests {
         // (within rounding) — exercises the u128 intermediate without overflow.
         let r = mul_div_floor(u64::MAX / 2, 5000, BPS).unwrap();
         assert!(r > 0 && r < u64::MAX);
+    }
+
+    // ─── VRF mode invariants ──────────────────────────────────────────────────
+
+    /// The payout cap in `settle_vrf` is only correct if no legitimate outcome
+    /// can ever pay more than the worst case reserved at start. Exhaustive over
+    /// every reachable (mine_count, safe_reveals) pair: if this ever failed, the
+    /// cap would reject real wins instead of only forged ones.
+    #[test]
+    fn vrf_payout_never_exceeds_reserved() {
+        let bet: u64 = 1_000_000_000;
+        for mines in MIN_MINES..=MAX_MINES {
+            for edge in [0u16, 200, 500] {
+                let reserved = worst_case_payout(bet, mines, edge).unwrap();
+                for safe in 0..=(GRID_SIZE - mines) {
+                    if safe == 0 {
+                        continue; // no payout without at least one safe reveal
+                    }
+                    let mult = calc_multiplier(safe, mines, edge).unwrap();
+                    let payout = mul_div_floor(bet, mult, BPS).unwrap();
+                    assert!(
+                        payout <= reserved,
+                        "mines={mines} safe={safe} edge={edge}: payout {payout} > reserved {reserved}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The forged-commit ceiling the cap is defending against. A full clear at
+    /// zero edge is ~12,870x the bet — orders of magnitude above what a real
+    /// game with a real mine count reserves — so binding mine_count/edge to the
+    /// L1 claim AND capping at `reserved` are both load-bearing.
+    #[test]
+    fn vrf_forged_full_clear_is_far_above_a_real_reservation() {
+        let bet: u64 = 1_000_000;
+        let forged = mul_div_floor(bet, calc_multiplier(8, 8, 0).unwrap(), BPS).unwrap();
+        let real_1_mine = worst_case_payout(bet, 1, 200).unwrap();
+        assert!(forged > real_1_mine * 800, "forged {forged} vs reserved {real_1_mine}");
+    }
+
+    /// `VrfClaim::SIZE` must match the field layout exactly — an undersized
+    /// account silently truncates on write.
+    #[test]
+    fn vrf_claim_size_matches_fields() {
+        // player(32) + bet(8) + reserved(8) + mine_count(1) + house_edge_bps(2)
+        // + start_slot(8) + settled(1) + bump(1)
+        assert_eq!(crate::vrf_mode::VrfClaim::SIZE, 32 + 8 + 8 + 1 + 2 + 8 + 1 + 1);
+    }
+
+    /// `decide_mine` must stay exactly uniform: the multiplier prices
+    /// P(mine) = mines / remaining, so any bias here is a silent edge change.
+    #[test]
+    fn vrf_decide_mine_is_uniform_over_each_period() {
+        for mines in 1u8..=15 {
+            for safe in 0u8..(GRID_SIZE - mines) {
+                let remaining = (GRID_SIZE - safe) as u64;
+                let mut hits = 0u64;
+                for x in 0..remaining {
+                    let mut r = [0u8; 32];
+                    r[0..8].copy_from_slice(&x.to_le_bytes());
+                    if crate::vrf_mode::decide_mine(&r, safe, mines) {
+                        hits += 1;
+                    }
+                }
+                assert_eq!(hits, mines as u64, "mines={mines} safe={safe}");
+            }
+        }
     }
 }
