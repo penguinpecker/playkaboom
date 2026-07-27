@@ -680,7 +680,7 @@ Bug list, in the order they surfaced:
    that returns env binding view + per-step auth failure reason.
 
 4. PRIVY_APP_SECRET was wrong in env.  Commit 6efd9b5 (env-only).
-   Old secret: 5mrFAm…JQRWKk4D5 (88 chars). New (correct) secret:
+   Old secret: <redacted-privy-app-secret> (88 chars). New (correct) secret:
    <redacted-privy-app-secret> (105 chars). Updated
    in Vercel `production` + `development` and apps/web/.env.local.
    Verified pair valid via direct PrivyClient.getUserById probe — Privy
@@ -1124,7 +1124,7 @@ ENV VARS — 20 total, ALL marked Sensitive:
   show type="sensitive". Mainnet-specific overrides applied during
   cutover:
     NEXT_PUBLIC_SOLANA_CLUSTER  = mainnet-beta
-    NEXT_PUBLIC_SOLANA_RPC      = Alchemy mainnet (same -j7ptOh-… key
+    NEXT_PUBLIC_SOLANA_RPC      = Alchemy mainnet (same <redacted-alchemy-key> key
                                                     that worked on devnet)
     SOLANA_RPC                  = same as above
     SOLANA_WS                   = wss://solana-mainnet.g.alchemy.com/...
