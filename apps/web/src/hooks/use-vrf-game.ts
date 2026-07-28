@@ -101,14 +101,28 @@ export function useVrfGame(): VrfActions {
     }
   }, [sessionStorageKey]);
 
-  // Dedicated ER connection (public MagicBlock endpoint, no proxy).
+  // Dedicated rollup connection (public MagicBlock node, no proxy).
+  //
+  // Null when no endpoint is configured. On mainnet there is deliberately no
+  // default — the endpoint must name the same node as the on-chain
+  // vrf_validator pin — so this is the normal state until the mode is armed.
+  // Constructing a Connection from an empty string throws, and because this
+  // hook runs during prerender that would fail the whole build.
   const erConn = useMemo(
-    () => new Connection(ER_RPC_URL, { wsEndpoint: ER_WS_URL, commitment: "confirmed" }),
+    () =>
+      ER_RPC_URL
+        ? new Connection(ER_RPC_URL, {
+            wsEndpoint: ER_WS_URL || undefined,
+            commitment: "confirmed",
+          })
+        : null,
     [],
   );
 
+  // No rollup endpoint means the mode cannot function, so every action below
+  // no-ops rather than locking a bet in a game that can never be played out.
   const cfg: VrfEngineConfig | null = useMemo(() => {
-    if (!VRF_QUEUE) return null;
+    if (!erConn) return null;
     return { l1: connection, er: erConn, programId: PROGRAM_ID, oracleQueue: VRF_QUEUE };
   }, [connection, erConn]);
 
