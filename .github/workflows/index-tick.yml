@@ -1,0 +1,48 @@
+name: Indexer tick
+# Routine, non-destructive indexer poll: GET /api/cron/index-events with NO
+# ?reset param, authorised with CRON_TICK_SECRET (the read-only secret).
+#
+# WHY THIS EXISTS: the Railway relay that used to poll this endpoint every 60s
+# has been deleted — playkaboom-realtime-production.up.railway.app now returns a
+# platform-level 404 with x-railway-fallback, i.e. no service is bound. That
+# left nothing ticking the indexer at all. index-events.yml cannot be scheduled
+# in its place: it now carries only the DESTRUCTIVE reset path and requires a
+# `confirm` input, so putting a cron on it would schedule a reset.
+#
+# CAVEAT, recorded honestly: GitHub Actions free-tier scheduling is unreliable —
+# the 2026-05-09 note in index-events.yml records it firing every 1-3h instead
+# of the requested 5min, which is exactly why the work moved to Railway. Treat
+# this as a backstop that bounds how far behind the mirror can drift, NOT as a
+# restoration of 60-second freshness. Redeploying apps/realtime is the real fix.
+#
+# Inline ingestion from /api/settle, /api/reveal and /api/ingest still covers
+# the live path; this catches what those miss.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: indexer-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Poll indexer
+        env:
+          CRON_TICK_SECRET: ${{ secrets.CRON_TICK_SECRET }}
+        run: |
+          set -eu
+          if [ -z "${CRON_TICK_SECRET:-}" ]; then
+            echo "CRON_TICK_SECRET secret not configured" >&2
+            exit 1
+          fi
+          response=$(curl -sS -m 60 -w "\nHTTP %{http_code}" \
+            -H "Authorization: Bearer $CRON_TICK_SECRET" \
+            https://www.playkaboom.gg/api/cron/index-events)
+          echo "$response"
+          echo "$response" | tail -n1 | grep -q "HTTP 200"
