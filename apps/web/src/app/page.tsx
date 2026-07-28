@@ -383,9 +383,16 @@ function ReactiveModules() {
       icon: "shield",
       badge: "LIVE",
       badgeColor: "bg-emerald/20 text-emerald border-emerald/30",
-      desc: "Watches vault health & game outcomes. Auto-pauses if reserves drop below the safety threshold.",
-      stat: "AUTO-PAUSE",
-      statSub: "if health < 50%",
+      // Was "Auto-pauses if reserves drop below the safety threshold" / "AUTO-PAUSE".
+      // That mechanism does not exist: the health cron only sends alerts, and
+      // vault.paused is writable exclusively by the owner-gated update_vault,
+      // i.e. a Squads 2-of-2 vote. What IS automatic and on-chain is the health
+      // floor — the program itself refuses to open a game the vault cannot
+      // cover, which is a stronger guarantee than a pause and is enforced by
+      // the program rather than by an operator.
+      desc: "The program refuses any bet the vault cannot cover — enforced on-chain every game, not by an operator. Health is monitored continuously and alerts on-call.",
+      stat: "HEALTH FLOOR",
+      statSub: "enforced on-chain",
       gradient: "from-primary/10 via-surface-container to-emerald/5",
       ring: "border-emerald/20 hover:border-emerald/40",
     },

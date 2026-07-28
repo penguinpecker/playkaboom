@@ -132,18 +132,52 @@ export function VaultLpPanel() {
           <h2 className="font-headline text-2xl font-black italic tracking-tighter text-on-surface mt-1">
             DEPOSIT, EARN, <span className="text-primary">SHARE THE HOUSE EDGE</span>
           </h2>
+          {/* The edge is split on every settle: treasury_split_bps of it goes to
+              the treasury, the remainder accrues to LPs. Saying "share the house
+              edge" without stating the split overstates what a depositor
+              receives, so state it. */}
+          <p className="font-mono text-[10px] text-on-surface-variant/60 mt-1 max-w-md leading-tight">
+            LPs earn the house edge on every settled game, less the treasury
+            share and any referral rakeback — and take the losses when players
+            win. Returns are not guaranteed.
+          </p>
         </div>
         <div className="text-right">
           <div className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant">
-            APY (30d)
+            Realised return (30d)
           </div>
-          <div className="font-headline text-3xl font-bold text-emerald">{apyLabel}</div>
+          <div
+            className={`font-headline text-3xl font-bold ${
+              state?.apy30d == null
+                ? "text-on-surface-variant/50"
+                : state.apy30d >= 0
+                  ? "text-emerald"
+                  : "text-error"
+            }`}
+          >
+            {apyLabel}
+          </div>
+          <p className="font-mono text-[9px] text-on-surface-variant/50 mt-1 max-w-[15rem] ml-auto leading-tight">
+            Change in vault value per unit over the window, annualised. Past
+            performance, not a projection or a promise — it includes operator
+            deposits and swings hard at low volume.
+          </p>
         </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
         <Stat label="TVL" value={`${tvlSol.toFixed(3)} SOL`} valColor="text-primary" />
-        <Stat label="Health" value={healthLabel} valColor="text-emerald" />
+        <Stat
+          label="Health"
+          value={healthLabel}
+          valColor={
+            state?.healthBps == null
+              ? "text-on-surface-variant/50"
+              : state.healthBps >= (state.minHealthBps ?? 1000)
+                ? "text-emerald"
+                : "text-error"
+          }
+        />
         <Stat
           label="Max single deposit"
           value={maxDepositLabel}

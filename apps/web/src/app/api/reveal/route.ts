@@ -11,6 +11,7 @@ import { GRID_SIZE, RevealTileInput } from "@playkaboom/shared";
 import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { checkTile, saltBuffer } from "@/server/game";
+import { fetchPlayerReferrer } from "@/server/player";
 import { encryptSession } from "@/server/session";
 import { loadSession, saveSession, deleteSession } from "@/server/session-store";
 import { OnChainError, requireActiveGame, sendHouseTx } from "@/server/solana";
@@ -101,6 +102,15 @@ export async function POST(req: NextRequest) {
 
     if (isMine) {
       // Atomic reveal + settle so the player can never see "lost but unsettled".
+      //
+      // The referrer MUST be passed here, exactly as the cash-out path does.
+      // settle_game credits referral rakeback on losses as well as wins — the
+      // on-chain code is outcome-agnostic — but it can only do so when the
+      // ReferralAccount is supplied as a remaining account. Omitting it here
+      // silently skipped the credit on every losing game, so referrers were
+      // paid on roughly half the volume their referees actually wagered while
+      // the site advertised "every game they play credits you".
+      const referrer = await fetchPlayerReferrer(playerPk);
       const settleIx = buildSettleGame({
         ctx,
         player: playerPk,
@@ -108,6 +118,7 @@ export async function POST(req: NextRequest) {
         treasury: treasuryPubkey(),
         mineLayout: updated.mineLayout,
         salt: saltBuffer(updated),
+        referrer: referrer ?? undefined,
       });
       signature = await sendHouseTx([revealIx, settleIx]);
       closeInstruction = serializeIx(buildCloseGame({ ctx, player: playerPk }));
