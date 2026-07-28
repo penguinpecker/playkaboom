@@ -170,7 +170,14 @@ export default function ReferralsPage() {
 
   const tierBps =
     tier === 2 ? REFERRAL_GOLD_BPS : tier === 1 ? REFERRAL_SILVER_BPS : REFERRAL_BRONZE_BPS;
-  const tierEdgePct = (tierBps / 200) * 100; // bps over 2% house edge
+  // Quote the rate as a share of the BET, which is what the program actually
+  // guarantees: settle_game credits mul_div_floor(bet, tier_bps, 10_000).
+  // The old copy divided by a hardcoded 200 to express it as a share of the
+  // house edge — true only while house_edge_bps happens to be 200, and
+  // update_vault permits up to 1000, at which point the advertised figure
+  // would have been silently wrong by 5x. The edge is not read on this page,
+  // so it is not claimed here.
+  const tierPctOfBet = tierBps / 100;
 
   const nextThreshold =
     tier === 0
@@ -213,7 +220,7 @@ export default function ReferralsPage() {
             EARN <span className="text-primary italic">RAKEBACK</span>
           </h1>
           <p className="font-body text-sm text-on-surface-variant mt-2 max-w-xl">
-            25–35% of every house edge from players you bring in. Paid into your on-chain ReferralAccount, claim anytime.
+            0.50–0.70% of every bet your referrals place — win or lose. Paid into your on-chain ReferralAccount, claim anytime.
           </p>
         </div>
       </div>
@@ -340,21 +347,21 @@ export default function ReferralsPage() {
               <div className="grid grid-cols-3 gap-2 mt-6">
                 <TierBox
                   label="BRONZE"
-                  rate="25% / edge"
+                  rate="0.50% / bet"
                   threshold="0+ SOL"
                   active={tier === 0}
                   reached={tier >= 0}
                 />
                 <TierBox
                   label="SILVER"
-                  rate="30% / edge"
+                  rate="0.60% / bet"
                   threshold="10+ SOL"
                   active={tier === 1}
                   reached={tier >= 1}
                 />
                 <TierBox
                   label="GOLD"
-                  rate="35% / edge"
+                  rate="0.70% / bet"
                   threshold="100+ SOL"
                   active={tier === 2}
                   reached={tier >= 2}
@@ -367,7 +374,7 @@ export default function ReferralsPage() {
                     Current rate
                   </div>
                   <div className="font-headline font-bold text-emerald text-lg">
-                    {(tierBps / 100).toFixed(2)}% of every bet ({tierEdgePct.toFixed(0)}% of edge)
+                    {tierPctOfBet.toFixed(2)}% of every bet
                   </div>
                 </div>
                 <button
@@ -413,7 +420,7 @@ export default function ReferralsPage() {
                 <ol className="text-xs text-on-surface-variant space-y-2 list-decimal list-inside">
                   <li>Share your link.</li>
                   <li>Friend connects and accepts (one-time, on-chain).</li>
-                  <li>Every game they play credits you {tierEdgePct.toFixed(0)}% of the house edge.</li>
+                  <li>Every settled game they play — win or lose — credits you {tierPctOfBet.toFixed(2)}% of their bet.</li>
                   <li>Cuts accrue in your ReferralAccount PDA — claim anytime.</li>
                   <li>Hit volume thresholds to upgrade tier.</li>
                 </ol>

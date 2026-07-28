@@ -67,3 +67,13 @@ supabase/.branches/
 .contentlayer
 storybook-static
 .vercel.old-account/
+
+# Local-only operator logs. These accumulate raw ops detail — addresses,
+# balances, incident notes, env-var names — and have historically carried
+# secret FRAGMENTS (an Alchemy key prefix and a superseded Privy secret were
+# scrubbed from records.txt on 2026-07-28). They are working notes, not
+# product, and must never reach a public repo. Untracked deliberately: keep
+# them on disk, never commit them.
+records.txt
+learnings.txt
+script.txt
