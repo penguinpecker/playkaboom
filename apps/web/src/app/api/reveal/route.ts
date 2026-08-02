@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import {
   buildCloseGame,
+  decodeGameSession,
   buildRevealTile,
   buildSettleGame,
   deriveGamePda,
@@ -62,6 +63,36 @@ export async function POST(req: NextRequest) {
     if (!onChainGame) {
       await deleteSession(body.player);
       throw new ApiError(409, "Game session no longer active — start a new round.", {
+        needsCleanup: true,
+      });
+    }
+
+    // BIND THE TOKEN TO THIS EXACT GAME. Existence is not identity.
+    //
+    // Without this the only check on a caller-supplied gameToken is
+    // `decoded.player === player` (server/session-store.ts), so a token kept
+    // from ANY earlier round of the same wallet is accepted against a brand
+    // new game. checkTile then answers from the OLD mine layout and the house
+    // signs reveal_tile(is_mine) for it — and the program cannot catch this,
+    // because `is_mine` is an INSTRUCTION PARAMETER (lib.rs:375) with no
+    // layout to validate against until settle. cash_out pays
+    // bet x multiplier_bps with no commitment check at all, so a player who
+    // replays a token whose layout happens to mark a tile safe can farm
+    // "safe" reveals against a game whose real layout says otherwise and cash
+    // out a near-certain win. That is an unbounded vault drain.
+    //
+    // The commitment is the game's identity: it is fixed at start_game and
+    // unique per round. Comparing it is exactly what
+    // /api/admin/release-stuck-obligations already does before it trusts a
+    // session, and it is what this hot path was missing.
+    const onChainCommitment = Buffer.from(
+      decodeGameSession(onChainGame.data as Buffer).commitment,
+    ).toString("hex");
+    if (session.commitment !== onChainCommitment) {
+      // Do NOT delete the server-side session: the on-chain game is real and
+      // may still be playable with the CORRECT token. Only the caller's token
+      // is wrong.
+      throw new ApiError(409, "That game token is for a different round — start a new round.", {
         needsCleanup: true,
       });
     }

@@ -5,9 +5,10 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets as useWallets } from "@privy-io/react-auth/solana";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useGame } from "@/hooks/useGame";
-import { useVaultCapacity } from "@/hooks/useContracts";
+import { useVaultCapacity, useMaxBetByMineCount } from "@/hooks/useContracts";
 import { usePythSolUsd, formatUsd, solToUsd } from "@/hooks/use-pyth";
 import { GAME_CONFIG } from "@/lib/chain";
+import { VRF_MODE_ENABLED } from "@/lib/cluster";
 import { useToast } from "@/components/providers/toast";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
 
@@ -27,10 +28,66 @@ interface Props {
   stuckInfo?: StuckGameInfo;
 }
 
+/**
+ * Lamports a VRF round needs UP FRONT, on top of the bet.
+ *
+ * Starting a game is ONE atomic transaction, so all of this must be affordable
+ * at the same instant:
+ *
+ *   VrfClaim rent         1,371,120
+ *   VrfGame rent          5,213,040
+ *   session key funding   2,000,000   (swept back at settle)
+ *   delegation accounts   3,206,600   (~2,901,600 returned on undelegate)
+ *   tx fee                    5,000
+ *   ─────────────────────────────────
+ *                        11,795,760   = 0.011796 SOL
+ *
+ * MEASURED, NOT ESTIMATED. An earlier version of this constant used 1,642,560
+ * for the delegation cost because that was the number in the failure message —
+ * but that is only the LAST transfer that ran out of money, not the total. The
+ * delegation program had already spent 1,559,040 creating its buffer and
+ * record accounts before that transfer. Taking the figure from the symptom
+ * under-counted the requirement by 1.56M lamports and the gate let through a
+ * bet that could not possibly land. The value below is derived from real
+ * DelegateVrf balance deltas (-3,206,600 on every observed round).
+ *
+ * Nearly all of it returns when the round closes; the wallet just has to hold
+ * it at the moment of the bet.
+ */
+const VRF_STARTUP_OVERHEAD_SOL = 11_795_760 / 1_000_000_000;
+
 const fmtSeconds = (s: number) => {
   if (s <= 0) return "now";
   if (s < 60) return `${s}s`;
   return `${Math.ceil(s / 60)}m`;
+};
+
+/**
+ * Snap a SOL amount DOWN to a human-readable step.
+ *
+ * The raw cap is a health-scaled fraction of vault assets, so it lands on
+ * values like 0.0046192… — technically valid, unreadable, and impossible to
+ * type back in. Always rounds DOWN: rounding up would push the bet over the
+ * on-chain cap and fail the very check this is derived from.
+ */
+export function snapDownToNiceBet(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  const step = v < 0.01 ? 0.001 : v < 0.1 ? 0.005 : v < 1 ? 0.01 : 0.1;
+  // +1e-9 absorbs float dust so 0.004999999 doesn't snap down to 0.004.
+  const snapped = Math.floor(v / step + 1e-9) * step;
+  return Number(snapped.toFixed(6));
+}
+
+/**
+ * Format a ceiling by FLOORING, never rounding. `toFixed` rounds, so a cap of
+ * 0.00462 rendered at 3dp reads "0.005" — a number strictly above the limit,
+ * which is worse than useless on a field labelled "max".
+ */
+const fmtCap = (v: number) => {
+  if (v <= 0) return "0";
+  const dp = v < 0.01 ? 4 : 3;
+  const p = 10 ** dp;
+  return (Math.floor(v * p) / p).toFixed(dp);
 };
 
 export function BetControls({ stuckInfo }: Props = {}) {
@@ -46,8 +103,16 @@ export function BetControls({ stuckInfo }: Props = {}) {
   // useVaultMaxBet which only knows about maxBetBps and not the
   // worst-case payout the player might trigger.
   const capacity = useVaultCapacity(state.bet, state.mineCount);
+  // Max bet per density, so a mine count the vault can't cover at ANY legal
+  // bet is greyed out instead of failing on-chain after the player commits.
+  const maxBetByMines = useMaxBetByMineCount(GAME_CONFIG.MINE_OPTIONS);
+  const MIN_BET_SOL = 0.001;
   const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
+  // Only VRF carries the rollup overhead; commit-reveal funds far less up front.
+  const startupOverheadSol = VRF_MODE_ENABLED ? VRF_STARTUP_OVERHEAD_SOL : 0;
+  const affordableBet = Math.max(0, walletBalance - startupOverheadSol);
+  const cannotAffordStartup = walletBalance > 0 && affordableBet < MIN_BET_SOL;
   // Dynamic busy timer (replaces the fixed 5s ENGAGE_LOCKOUT countdown).
   // Captures wall-clock at the moment the busy state begins; ticks every
   // 200ms while busy; clears the moment status/pendingClose resolves.
@@ -59,14 +124,18 @@ export function BetControls({ stuckInfo }: Props = {}) {
   const isPlaying = state.status === "playing";
   const isStarting = state.status === "starting";
   const isCashing = state.status === "cashing";
+  // A VRF draw in flight is a LIVE round. Leaving it out of the mid-round set
+  // unlocked the bet/mine inputs and swapped Cash Out back to Engage while the
+  // player had money on the board.
+  const isRevealing = state.status === "revealing";
   const isPendingClose = state.pendingClose;
   // Mid-round: bet panel is read-only and re-betting is impossible until
   // the round ends, so any vault-capacity warning is irrelevant noise that
   // makes the player think their in-flight game is at risk. Suppress all
   // capacity-derived UI signals for the duration of the round.
-  const inLiveRound = isPlaying || isStarting || isCashing;
+  const inLiveRound = isPlaying || isStarting || isCashing || isRevealing;
   const safeTilesTotal = GAME_CONFIG.GRID_SIZE - state.mineCount;
-  const progress = isPlaying ? Math.round((state.safeTiles.size / safeTilesTotal) * 100) : 0;
+  const progress = isPlaying || isRevealing ? Math.round((state.safeTiles.size / safeTilesTotal) * 100) : 0;
   const maxBet = capacity.maxBetSol;
   const wouldExceedLiquidity = !inLiveRound && capacity.reason === "exceeds_cap";
   const vaultUnavailable =
@@ -79,6 +148,10 @@ export function BetControls({ stuckInfo }: Props = {}) {
   // entirely while the player is in a live round (see inLiveRound above).
   const blockReason: string | null = inLiveRound
     ? null
+    : cannotAffordStartup
+      ? `A round needs ~${startupOverheadSol.toFixed(4)} SOL of refundable rent + gas on top of your bet, and it must be in the wallet up front. You have ${walletBalance.toFixed(4)} SOL — top up to about ${(startupOverheadSol + MIN_BET_SOL).toFixed(3)} SOL to play. Nearly all of it comes back when the round closes.`
+      : state.bet > affordableBet
+        ? `Bet + ~${startupOverheadSol.toFixed(4)} SOL of refundable rent exceeds your balance. Most you can bet right now is ${affordableBet.toFixed(4)} SOL.`
     : capacity.reason === "paused"
       ? "Vault paused. Gameplay is temporarily disabled."
       : capacity.reason === "obligations_full"
@@ -86,7 +159,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
         : capacity.reason === "vault_empty"
           ? "Vault is empty. Liquidity needs to be deposited before games can run."
           : capacity.reason === "exceeds_cap"
-            ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${maxBet.toFixed(3)} SOL.`
+            ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${fmtCap(maxBet)} SOL.`
             : null;
   // The lock is "true" while ANY of: starting (commit→sign→confirm in
   // flight), cashing (cashOut tx in flight), or pendingClose (background
@@ -230,8 +303,13 @@ export function BetControls({ stuckInfo }: Props = {}) {
       toast("Finalizing previous round — try again in a second.", "amber");
       return;
     }
-    if (state.bet > walletBalance) {
-      toast(`Bet exceeds wallet balance (${walletBalance.toFixed(4)} SOL).`, "error");
+    if (state.bet + startupOverheadSol > walletBalance) {
+      toast(
+        cannotAffordStartup
+          ? `A round needs ~${startupOverheadSol.toFixed(4)} SOL of refundable rent and gas on top of the bet. You have ${walletBalance.toFixed(4)} SOL — top up to about ${(startupOverheadSol + MIN_BET_SOL).toFixed(3)} SOL to play.`
+          : `Bet + ~${startupOverheadSol.toFixed(4)} SOL of refundable rent exceeds your ${walletBalance.toFixed(4)} SOL balance. Max bet right now is ${affordableBet.toFixed(4)} SOL.`,
+        "error",
+      );
       return;
     }
     if (state.bet > maxBet) {
@@ -306,7 +384,13 @@ export function BetControls({ stuckInfo }: Props = {}) {
                   1/2
                 </button>
                 <button
-                  onClick={() => setBet(Math.min(maxBet, state.bet * 2))}
+                  onClick={() =>
+                    setBet(
+                      state.bet * 2 <= maxBet
+                        ? Number((state.bet * 2).toFixed(6))
+                        : Math.max(0.001, snapDownToNiceBet(maxBet)),
+                    )
+                  }
                   disabled={isPlaying || isStarting}
                   className="bg-surface-container-highest px-3 py-1 text-[10px] font-headline font-bold text-on-surface hover:bg-primary/20 transition-colors disabled:opacity-30"
                 >
@@ -320,16 +404,33 @@ export function BetControls({ stuckInfo }: Props = {}) {
                     // 3-PDA rent inits a first-game flow can require; 10%
                     // scales with the player's balance so it's tight on
                     // funded wallets and still safe on small ones.
-                    const ceiling = Math.min(maxBet, walletBalance * 0.9);
-                    const safe = Math.max(0.001, ceiling);
-                    // FLOOR to 6dp (1000-lamport precision). toFixed(6)
-                    // rounds, which on borderline maxBet values (e.g.
-                    // 0.0105695 → "0.010570") pushes the bet a fraction-
-                    // of-a-lamport OVER the cap and re-fires "CANNOT BET"
-                    // immediately after the click. Flooring is always safe.
-                    setBet(Math.floor(safe * 1_000_000) / 1_000_000);
+                    // Subtract the startup overhead FIRST — 90% of the raw balance is
+                    // meaningless when 0.0102 SOL of it is spoken for before the bet.
+                    const ceiling = Math.min(maxBet, affordableBet);
+                    // MAX MUST NEVER PRODUCE A BET THE PROGRAM WILL REJECT.
+                    //
+                    // The old fallback did Math.max(0.001, ceiling) when the
+                    // cap sat below the minimum bet — handing the player 0.001
+                    // against a 0.0001 ceiling and firing "bet exceeds vault
+                    // capacity" the instant they clicked it. At that point the
+                    // mine count is simply unplayable on the current bankroll
+                    // and there is no valid number to offer, so say that
+                    // instead of inventing one.
+                    if (ceiling < MIN_BET_SOL) {
+                      toast(
+                        `${state.mineCount} mines needs more bankroll than the vault has — max is ${fmtCap(
+                          ceiling,
+                        )} SOL, below the ${MIN_BET_SOL} minimum. Try fewer mines.`,
+                        "amber",
+                      );
+                      return;
+                    }
+                    // Snap DOWN to a readable step (0.004, not 0.0046192…).
+                    // Never up: the ceiling IS the on-chain cap, so rounding up
+                    // re-fires "CANNOT BET" on the very next render.
+                    setBet(Math.max(MIN_BET_SOL, snapDownToNiceBet(ceiling)));
                   }}
-                  disabled={isPlaying || isStarting || walletBalance <= 0 || maxBet <= 0}
+                  disabled={isPlaying || isStarting || walletBalance <= 0 || maxBet < MIN_BET_SOL}
                   className="bg-surface-container-highest px-3 py-1 text-[10px] font-headline font-bold text-primary hover:bg-primary/20 transition-colors disabled:opacity-30"
                 >
                   MAX
@@ -352,7 +453,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
                     ≈ {formatUsd(solToUsd(state.bet, pyth))}
                   </span>
                 )}
-                Max safe bet: <span className={wouldExceedLiquidity ? "text-error" : "text-on-surface-variant"}>{maxBet.toFixed(3)} SOL</span>
+                Max safe bet: <span className={wouldExceedLiquidity ? "text-error" : "text-on-surface-variant"}>{fmtCap(Math.min(maxBet, affordableBet))} SOL</span>
               </span>
             </div>
             {/* Worst-case payout preview — only when the bet is set and the
@@ -384,25 +485,43 @@ export function BetControls({ stuckInfo }: Props = {}) {
               Mine Density
             </label>
             <div className="grid grid-cols-5 gap-2">
-              {GAME_CONFIG.MINE_OPTIONS.map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setMineCount(n)}
-                  disabled={isPlaying || isStarting}
-                  className={`bg-surface-container-highest py-2 font-headline font-bold text-xs transition-all disabled:opacity-30 ${
-                    n === state.mineCount
-                      ? "text-on-surface border border-primary/40"
-                      : "text-on-surface-variant hover:text-on-surface"
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
+              {GAME_CONFIG.MINE_OPTIONS.map((n) => {
+                // Unplayable = the vault cannot cover the worst case even at
+                // the minimum bet. Never disable the density already in play.
+                const capForN = maxBetByMines[n] ?? 0;
+                const unplayable =
+                  !inLiveRound && capForN > 0 && capForN < MIN_BET_SOL && n !== state.mineCount;
+                return (
+                  <button
+                    key={n}
+                    onClick={() => setMineCount(n)}
+                    disabled={isPlaying || isStarting || unplayable}
+                    title={
+                      unplayable
+                        ? `Vault can't cover ${n} mines right now — needs ${(
+                            MIN_BET_SOL / Math.max(capForN, 1e-9)
+                          ).toFixed(0)}x more bankroll`
+                        : undefined
+                    }
+                    className={`bg-surface-container-highest py-2 font-headline font-bold text-xs transition-all disabled:opacity-30 ${
+                      n === state.mineCount
+                        ? "text-on-surface border border-primary/40"
+                        : unplayable
+                          ? "text-on-surface-variant/30 line-through cursor-not-allowed"
+                          : "text-on-surface-variant hover:text-on-surface"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        {!isPlaying && state.status !== "cashing" ? (
+        {/* Engage must NOT reappear during a draw — the player has a live bet
+            on the board and pressing it forced the store to idle. */}
+        {!isPlaying && !isRevealing && state.status !== "cashing" ? (
           <button
             onClick={handleStart}
             disabled={

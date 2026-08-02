@@ -108,10 +108,31 @@ function isAllowedOrigin(origin: string | undefined): boolean {
   return ALLOWED_ORIGINS.includes(origin);
 }
 
+/**
+ * Concurrency cap for the PAID-KEY proxy.
+ *
+ * Origin is trivially forgeable, so the allow-list bounds nothing on its own —
+ * the cap is what actually limits cost. Each accepted /rpc-ws client opens its
+ * OWN upstream Alchemy socket, so without this a single script could open
+ * unbounded upstream connections on the operator's paid key.
+ */
+const MAX_RPC_PROXY_CLIENTS = 150;
+
 httpServer.on("upgrade", (req, socket, head) => {
   const origin = req.headers.origin as string | undefined;
-  if (!isAllowedOrigin(origin)) {
+  const pathnameEarly = (req.url ?? "/").split("?")[0];
+  const isProxyPath = pathnameEarly === RPC_PROXY_PATH;
+
+  // The public feed at "/" is genuinely public — curl with no Origin is fine.
+  // /rpc-ws is NOT: it fronts a paid key, so a MISSING Origin must be refused
+  // rather than treated as trusted (isAllowedOrigin returns true for absent).
+  if (!isAllowedOrigin(origin) || (isProxyPath && !origin)) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+  if (isProxyPath && rpcProxyActive.size >= MAX_RPC_PROXY_CLIENTS) {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
     socket.destroy();
     return;
   }
@@ -401,7 +422,31 @@ async function tickCron() {
   try {
     const headers: Record<string, string> = {};
     if (CRON_TICK_AUTH) headers["Authorization"] = `Bearer ${CRON_TICK_AUTH}`;
-    const res = await fetch(CRON_TICK_URL, { method: "GET", headers });
+    // CRON_TICK_URL accepts a COMMA-SEPARATED list.
+    //
+    // This relay is the only thing on the stack that actually runs every 60s.
+    // GitHub Actions free-tier cron claims */5 but measured 59-199 MINUTES, and
+    // it was the sole driver of the VRF settle worker — so a player who
+    // disconnected after a win could wait hours for a payout the fallback
+    // worker was supposed to deliver in minutes. Ticking every endpoint from
+    // here removes GitHub from the critical path entirely.
+    const targets = CRON_TICK_URL.split(",").map((u) => u.trim()).filter(Boolean);
+    const results = await Promise.all(
+      targets.map(async (url) => {
+        try {
+          const r = await fetch(url, { method: "GET", headers });
+          if (!r.ok) console.warn(`[cron] ${new URL(url).pathname} failed: HTTP ${r.status}`);
+          return r;
+        } catch (e) {
+          console.warn(`[cron] ${url} threw:`, e);
+          return null;
+        }
+      }),
+    );
+    // Keep the existing body-logging behaviour for the FIRST target (the
+    // indexer tick), which is the one whose counters are worth reporting.
+    const res = results[0];
+    if (!res) return;
     if (!res.ok) {
       console.warn(`[cron] tick failed: HTTP ${res.status}`);
     } else {

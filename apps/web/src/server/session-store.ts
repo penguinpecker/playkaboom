@@ -62,11 +62,33 @@ export async function saveSession(
 export async function loadSession(
   player: string,
   clientGameToken?: string,
+  /**
+   * Hex commitment of the game this session MUST belong to, read from chain.
+   *
+   * A caller-supplied token is attacker-controlled input. Checking only that
+   * `decoded.player === player` proves the token was once issued to this
+   * wallet — NOT that it belongs to the round being played. Any token kept
+   * from an earlier round therefore passed, letting the mine layout of game A
+   * answer reveals for game B. The house then signs those reveals, and
+   * `is_mine` is an instruction parameter the program cannot validate.
+   *
+   * Callers on a money path MUST pass this. It is optional only so read-only
+   * callers (session probes) can omit it.
+   */
+  expectedCommitment?: string,
 ): Promise<SessionPayload | null> {
   if (clientGameToken) {
     try {
       const decoded = decryptSession(clientGameToken);
-      if (decoded.player === player) return decoded;
+      if (
+        decoded.player === player &&
+        (expectedCommitment === undefined || decoded.commitment === expectedCommitment)
+      ) {
+        return decoded;
+      }
+      // Token is valid but belongs to a different round — fall through to the
+      // server-side row, which is keyed by the CURRENT game PDA and therefore
+      // cannot be swapped by the caller.
     } catch {
       /* fall through to server lookup */
     }

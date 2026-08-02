@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHash } from "node:crypto";
 import { extractEventsFromLogs } from "@playkaboom/sdk";
+import { verifyVrfSettle } from "@/server/verify-vrf";
 import { getConnection } from "@/server/connection";
 import { jsonError } from "@/server/api-helpers";
 
@@ -47,10 +48,19 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
     const events = extractEventsFromLogs(logs);
     const settled = events.find((e) => e.kind === "GameSettled");
     if (!settled || settled.kind !== "GameSettled") {
+      // VRF games emit NO Anchor events (vrf_mode.rs has zero emit! calls), so
+      // the event path above can never see one — every VRF settle used to fail
+      // here with a message telling the player to supply a settle signature
+      // they had in fact just supplied. They are still fully verifiable, just
+      // by different evidence: the transaction's own lamport movements.
+      if (logs.some((l) => l.includes("Instruction: SettleVrf"))) {
+        const vrf = await verifyVrfSettle(tx);
+        if (vrf) return NextResponse.json(vrf);
+      }
       return NextResponse.json(
         {
           error:
-            "No GameSettled event in this transaction. Provide a settle_game signature.",
+            "No GameSettled event in this transaction. Provide a settle_game or settle_vrf signature.",
           eventsFound: events.map((e) => e.kind),
         },
         { status: 400 },

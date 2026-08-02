@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { confirmByPolling } from "@/lib/confirm";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
@@ -216,10 +217,12 @@ export function useReferralActions() {
         skipPreflight: false,
         maxRetries: 3,
       });
-      await connection.confirmTransaction(
-        { signature: sig, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
+      // Poll rather than confirmTransaction. The WS-based confirm is unreliable
+      // in-browser (the whole reason lib/confirm.ts exists), and this is the one
+      // money path that lacked the fallback: a claim that LANDED but timed out
+      // waiting was reported as a failure and re-armed the button, inviting the
+      // player to submit a duplicate claim.
+      await confirmByPolling(connection, sig, blockhash, lastValidBlockHeight);
       return sig;
     },
     [wallet, connection, signTransaction],

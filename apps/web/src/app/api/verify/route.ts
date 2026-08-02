@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHash } from "node:crypto";
+import { verifyVrfSettle } from "@/server/verify-vrf";
 import { extractEventsFromLogs } from "@playkaboom/sdk";
 import { getConnection } from "@/server/connection";
 import { supabasePublic } from "@/server/db/supabase";
@@ -22,6 +23,31 @@ export const dynamic = "force-dynamic";
  * Older callers of `?sig=...` get the same response shape; the consuming
  * page checks `verified` and the bundle fields.
  */
+/**
+ * Recover the player from a house-signed settle. The house is fee payer, so
+ * index 0 is NOT the player; the player is the account that RECEIVED the
+ * payout plus its closed-PDA rent — always the largest positive delta.
+ * Without this the verify page rendered "Player: —" on every VRF game.
+ */
+function playerOf(tx: {
+  meta?: { preBalances: number[]; postBalances: number[] } | null;
+  transaction: { message: { getAccountKeys: () => { staticAccountKeys: { toBase58: () => string }[] } } };
+}): string | null {
+  const meta = tx.meta;
+  if (!meta) return null;
+  const keys = tx.transaction.message.getAccountKeys().staticAccountKeys;
+  let best: string | null = null;
+  let bestDelta = 0;
+  keys.forEach((k, i) => {
+    const d = (meta.postBalances[i] ?? 0) - (meta.preBalances[i] ?? 0);
+    if (d > bestDelta) {
+      bestDelta = d;
+      best = k.toBase58();
+    }
+  });
+  return best;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const sig = req.nextUrl.searchParams.get("sig");
@@ -48,6 +74,43 @@ export async function GET(req: NextRequest) {
     const settled = events.find((e) => e.kind === "GameSettled");
 
     if (!won && !lost && !settled) {
+      // VRF settles emit no Anchor events, so a perfectly valid, fully
+      // verifiable VRF game hit this branch and the verify PAGE rendered a
+      // bare error — on a product whose headline claim is provable fairness.
+      // Reconstruct it from the transaction's lamport movements instead and
+      // return the same row shape the page already renders.
+      if ((tx.meta?.logMessages ?? []).some((l) => l.includes("Instruction: SettleVrf"))) {
+        const v = await verifyVrfSettle(tx);
+        if (v && v.verified) {
+          return NextResponse.json({
+            found: true,
+            settleSource: "input",
+            game: {
+              signature: sig,
+              player: playerOf(tx),
+              bet: String(v.betLamports),
+              payout: String(v.payoutLamports ?? "0"),
+              multiplier_bps: v.multiplierBps ?? 0,
+              mine_count: v.mineCount ?? 0,
+              outcome: (v.outcome as string) ?? (Number(v.payoutLamports ?? 0) > 0 ? "won" : "lost"),
+              safe_reveals: (v.safeReveals as number) ?? 0,
+              // VRF draws randomness per click from the oracle; there is no
+              // pre-committed layout, salt or hash. Null here is the honest
+              // answer, and `mode` tells the page to explain that rather than
+              // render an empty commit-reveal proof.
+              settled_layout: null,
+              commitment: null,
+              salt: null,
+              settled_at: new Date((tx.blockTime ?? 0) * 1000).toISOString(),
+              slot: tx.slot,
+              verified: true,
+              verifySource: "chain",
+              mode: "vrf",
+              howThisIsVerified: v.howThisIsVerified,
+            },
+          });
+        }
+      }
       return NextResponse.json(
         {
           error: "No GameWon, GameLost, or GameSettled event in this tx",

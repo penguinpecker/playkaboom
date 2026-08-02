@@ -18,6 +18,11 @@ interface GameRow {
   settled_layout: number | null;
   commitment: string | null;
   salt: string | null;
+  /** "vrf" when randomness came per-click from the MagicBlock oracle. Those
+   *  games have no pre-committed layout, so the SHA-256 proof below does not
+   *  apply and claiming it does would be a lie. */
+  mode?: "vrf";
+  howThisIsVerified?: string[];
   settled_at: string;
   slot: number;
   /** Chain-direct verification flag. true ONLY when the server re-fetched
@@ -147,13 +152,16 @@ function Verified({
 }) {
   const status =
     verified === true ? "verified" : verified === false ? "mismatch" : "pending";
+  const isVrf = game.mode === "vrf";
   const banner =
     status === "verified"
       ? {
           color: "border-emerald bg-emerald/5 text-emerald",
           icon: "verified",
           title: "VERIFIED",
-          body: "SHA-256 of (layout || mine_count || salt) matches the on-chain commitment, both fetched directly from Solana RPC. House did not cheat.",
+          body: isVrf
+            ? "Payout reconstructed from this transaction's own lamport movements and matched against the published multiplier table. Randomness came per-click from MagicBlock's VRF oracle in the rollup — there is no pre-committed layout, so the proof here is over the MONEY, not a salt."
+            : "SHA-256 of (layout || mine_count || salt) matches the on-chain commitment, both fetched directly from Solana RPC. House did not cheat.",
         }
       : status === "mismatch"
         ? {
@@ -200,26 +208,53 @@ function Verified({
             label="Mine count"
             value={game.mine_count !== null ? game.mine_count.toString() : "— (settle pending)"}
           />
-          <Field
-            label="Mine layout (u16)"
-            mono
-            value={
-              game.settled_layout !== null
-                ? `0x${game.settled_layout.toString(16).padStart(4, "0")}  (${game.settled_layout.toString(2).padStart(16, "0")})`
-                : "— (settle pending)"
-            }
-          />
-          <Field label="Salt (hex)" mono value={game.salt ?? "— (settle pending)"} />
-          <Field
-            label="Commitment (hex)"
-            mono
-            value={game.commitment ?? "— (settle pending)"}
-          />
+          {isVrf ? (
+            /* VRF draws randomness per click from the oracle — there is no
+               pre-committed layout, salt or hash, and there never will be.
+               Showing "settle pending" implied they were still coming. */
+            <Field
+              label="Safe reveals"
+              value={game.safe_reveals !== null ? String(game.safe_reveals) : "—"}
+            />
+          ) : (
+            <>
+              <Field
+                label="Mine layout (u16)"
+                mono
+                value={
+                  game.settled_layout !== null
+                    ? `0x${game.settled_layout.toString(16).padStart(4, "0")}  (${game.settled_layout.toString(2).padStart(16, "0")})`
+                    : "— (settle pending)"
+                }
+              />
+              <Field label="Salt (hex)" mono value={game.salt ?? "— (settle pending)"} />
+              <Field
+                label="Commitment (hex)"
+                mono
+                value={game.commitment ?? "— (settle pending)"}
+              />
+            </>
+          )}
 
           <h3 className="font-headline text-xs font-bold uppercase tracking-widest text-on-surface mt-8 mb-4">
             Verification
           </h3>
           <div className="bg-surface-container-lowest p-4 font-mono text-[11px] text-on-surface-variant">
+            {isVrf ? (
+              /* NEVER render the SHA-256 proof for a VRF game. That hash check
+                 does not run — there is no commitment to compare against — so
+                 printing it with a green tick asserted a verification that
+                 never happened, which is worse than showing nothing. These are
+                 the checks that ACTUALLY ran, returned by the API. */
+              <>
+                {(game.howThisIsVerified ?? []).map((line, i) => (
+                  <div key={i} className={i === 0 ? "" : "mt-2"}>
+                    <span className="text-tertiary">{i + 1}.</span> {line}
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
             <div>
               <span className="text-primary">computed</span> = SHA256(
               <span className="text-tertiary">layout_le</span> ‖{" "}
@@ -229,6 +264,8 @@ function Verified({
             <div className="mt-1">
               <span className="text-primary">expected</span> = on-chain commitment
             </div>
+              </>
+            )}
             <div className="mt-3">
               <span
                 className={
@@ -240,7 +277,9 @@ function Verified({
                 }
               >
                 {status === "verified"
-                  ? "✓ computed.equals(expected)"
+                  ? isVrf
+                    ? "✓ payout matches the published multiplier table"
+                    : "✓ computed.equals(expected)"
                   : status === "mismatch"
                     ? "✗ computed != expected"
                     : "… awaiting settle"}

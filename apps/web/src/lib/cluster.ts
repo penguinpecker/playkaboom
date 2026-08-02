@@ -83,9 +83,9 @@ export const RPC_URL =
 const RAILWAY_WS_PROXY: Record<"mainnet-beta" | "devnet" | "testnet", string> = {
   // Single Railway service handles all clusters — the upstream Alchemy
   // URL is set per-deploy via ALCHEMY_WS_URL env on Railway.
-  "mainnet-beta": "wss://playkaboom-realtime-production.up.railway.app/rpc-ws",
-  devnet: "wss://playkaboom-realtime-production.up.railway.app/rpc-ws",
-  testnet: "wss://playkaboom-realtime-production.up.railway.app/rpc-ws",
+  "mainnet-beta": "wss://kaboom-realtime-production.up.railway.app/rpc-ws",
+  devnet: "wss://kaboom-realtime-production.up.railway.app/rpc-ws",
+  testnet: "wss://kaboom-realtime-production.up.railway.app/rpc-ws",
 };
 
 const DEV_WS_OVERRIDE =

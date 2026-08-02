@@ -37,15 +37,62 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** A player-side signer: takes a Transaction, returns it signed (e.g. Privy). */
 export type SignTx = (tx: Transaction) => Promise<Transaction>;
 
-/** Poll-based confirmation (browser-safe). */
-export async function pollConfirm(conn: Connection, sig: string, tries = 80): Promise<void> {
+/**
+ * Poll-based confirmation (browser-safe).
+ *
+ * Two things this has to get right, both learned the hard way:
+ *
+ * 1. POLL LONG ENOUGH. 40s was too short. sendRawTransaction keeps
+ *    rebroadcasting until the blockhash dies (~150 blocks, 60-90s), so a
+ *    congested slot can land the transaction AFTER a 40s window gave up — the
+ *    player saw "confirm timeout" for a start_game_vrf that had in fact landed,
+ *    locking their bet in a game the UI believed never began. Poll to the real
+ *    deadline instead of an arbitrary one.
+ *
+ * 2. ASK PROPERLY BEFORE DECLARING FAILURE. getSignatureStatuses only consults
+ *    the recent-status cache; anything older returns null, which is
+ *    indistinguishable from "never landed". So the final word is a lookup with
+ *    searchTransactionHistory — otherwise we report failure for a transaction
+ *    that is sitting on chain, confirmed.
+ */
+export async function pollConfirm(conn: Connection, sig: string, tries = 180): Promise<void> {
   for (let i = 0; i < tries; i++) {
     const st = (await conn.getSignatureStatuses([sig])).value[0];
     if (st?.err) throw new Error("tx failed: " + JSON.stringify(st.err));
     if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return;
     await sleep(500);
   }
-  throw new Error("confirm timeout");
+  // Authoritative last check before calling it lost.
+  try {
+    const st = (await conn.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+    if (st?.err) throw new Error("tx failed: " + JSON.stringify(st.err));
+    if (st) return; // it landed after all
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("tx failed")) throw e;
+    /* history lookup unavailable — fall through to the timeout below */
+  }
+  throw new Error(
+    `Transaction was submitted but not confirmed in time (${sig.slice(0, 8)}…). ` +
+      "It may still land — reload before retrying so you don't start a second game.",
+  );
+}
+
+/**
+ * Does this error mean the transaction's blockhash aged out before it landed?
+ *
+ * Matched on message text because the error surfaces from several layers —
+ * the RPC ("Blockhash not found"), web3.js
+ * (TransactionExpiredBlockheightExceededError) and the wallet adapter — with
+ * no shared error code between them.
+ */
+function isBlockhashExpired(e: unknown): boolean {
+  const m = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
+  return (
+    m.includes("blockhash not found") ||
+    m.includes("block height exceeded") ||
+    m.includes("blockheightexceeded") ||
+    m.includes("transaction expired")
+  );
 }
 
 /** Build → sign → send → poll-confirm one or more instructions. */
@@ -54,17 +101,78 @@ async function sendIx(
   ix: TransactionInstruction | TransactionInstruction[],
   feePayer: PublicKey,
   sign: SignTx,
+  /**
+   * Optional check of the EFFECT this transaction was meant to have.
+   *
+   * Confirmation polling is a proxy for "did it work", and a lossy one: RPC
+   * status caches lag, a node can miss a signature it did not index, and the
+   * poll can simply expire while the transaction is landing. Treating that
+   * proxy as authoritative is what produced "submitted but not confirmed in
+   * time" on transactions that had, in fact, executed — sending the player to
+   * a recovery flow for a game that was live and playable.
+   *
+   * When supplied, this outranks the poll: if the intended state exists on
+   * chain, the operation succeeded, whatever the poll believed.
+   */
+  effectLanded?: () => Promise<boolean>,
 ): Promise<string> {
-  const tx = new Transaction().add(...(Array.isArray(ix) ? ix : [ix]));
-  tx.feePayer = feePayer;
-  tx.recentBlockhash = (await conn.getLatestBlockhash("confirmed")).blockhash;
-  const signed = await sign(tx);
+  const build = async () => {
+    const t = new Transaction().add(...(Array.isArray(ix) ? ix : [ix]));
+    t.feePayer = feePayer;
+    t.recentBlockhash = (await conn.getLatestBlockhash("confirmed")).blockhash;
+    return sign(t);
+  };
+
+  // A blockhash is only valid for ~150 blocks (60-90s), and it is fetched
+  // BEFORE the player approves in their wallet. Take longer than that to hit
+  // confirm and the send is rejected outright: no transaction ever reaches the
+  // chain, the bet never starts, and all the player sees is a timeout. Sign
+  // again against a fresh blockhash rather than losing the round.
+  //
+  // Safe to retry: nothing landed. A genuinely-landed transaction cannot
+  // produce this error, and the duplicate would be rejected on its own terms
+  // anyway (start_game_vrf hits "account already in use", reveals hit
+  // TileAlreadyRevealed). Retried ONCE, and ONLY on an expiry signal — never
+  // blind-retry a money instruction.
+  let signed: Transaction;
+  try {
+    signed = await build();
+  } catch (e) {
+    if (!isBlockhashExpired(e)) throw e;
+    signed = await build();
+  }
   // Preflight ON for player-signed transactions, matching the commit-reveal
   // path: a deterministic failure (bet over the cap, stale state) should be
   // rejected up front rather than costing the player a fee and surfacing as a
   // generic timeout 40s later.
-  const sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 5 });
-  await pollConfirm(conn, sig);
+  let sig: string;
+  try {
+    sig = await conn.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 5 });
+  } catch (e) {
+    if (!isBlockhashExpired(e)) throw e;
+    // Approval outlived the blockhash. Re-sign against a current one.
+    const fresh = await build();
+    sig = await conn.sendRawTransaction(fresh.serialize(), { skipPreflight: false, maxRetries: 5 });
+  }
+  try {
+    await pollConfirm(conn, sig);
+  } catch (e) {
+    // The poll gave up. Before surfacing a failure that would send the player
+    // into recovery, ask the chain whether the work actually happened. Retried
+    // briefly because a transaction landing right at the deadline needs a
+    // moment to become visible.
+    if (effectLanded) {
+      for (let i = 0; i < 6; i++) {
+        try {
+          if (await effectLanded()) return sig;
+        } catch {
+          /* transient RPC — keep trying */
+        }
+        await sleep(1_000);
+      }
+    }
+    throw e;
+  }
   return sig;
 }
 
@@ -137,7 +245,24 @@ export async function startVrfGame(
   const session = Keypair.generate();
   onSession?.(session);
   const ctx = { programId: cfg.programId };
-  const startSig = await sendIx(
+  const [gamePda] = deriveVrfGamePda(cfg.programId, player);
+
+  // ONE ATOMIC TRANSACTION: start + fund the session key + delegate.
+  //
+  // This used to be TWO transactions with two confirmations. That gave the
+  // flow a half-started state with no owner: if the first landed and the
+  // second never fired — a confirm timeout, a dropped packet, a slow wallet —
+  // the player's bet sat in a game that existed on L1 but had never reached
+  // the rollup, so it could not be played, only refunded. Every "engage
+  // failed but my SOL is gone" report traced to that window, and it recurred
+  // every few games because it is a race, not a bug you can test away.
+  //
+  // Solana transactions are atomic, so folding delegate_vrf in removes the
+  // window entirely: either the game exists AND is delegated AND the session
+  // key is funded, or nothing happened at all. There is no third outcome to
+  // recover from. Measured at 616 bytes of the 1232 limit and ~80k CU, so it
+  // fits with room to spare.
+  const sig = await sendIx(
     cfg.l1,
     [
       buildStartGameVrf({ ctx, player, mineCount, betLamports, sessionKey: session.publicKey }),
@@ -146,13 +271,18 @@ export async function startVrfGame(
         toPubkey: session.publicKey,
         lamports: SESSION_FUND_LAMPORTS,
       }),
+      buildDelegateVrf({ ctx, player }),
     ],
     player,
     signPlayer,
+    // Confirmation is advisory here, not authoritative. The chain is.
+    async () => {
+      const info = await cfg.l1.getAccountInfo(gamePda, "confirmed");
+      // Delegated => the whole atomic transaction executed.
+      return info !== null && !info.owner.equals(cfg.programId);
+    },
   );
-  const delegateSig = await sendIx(cfg.l1, buildDelegateVrf({ ctx, player }), player, signPlayer);
-  const [gamePda] = deriveVrfGamePda(cfg.programId, player);
-  return { gamePda, session, startSig, delegateSig };
+  return { gamePda, session, startSig: sig, delegateSig: sig };
 }
 
 /** Poll the reveal-state PDA (from L1 or ER) until `done` or timeout. */
@@ -237,6 +367,47 @@ export async function settleAndUndelegateVrf(
 }
 
 /**
+ * Undelegate using the PLAYER's own wallet instead of the session key.
+ *
+ * `settle_and_undelegate_vrf` accepts `g.player` as well as `g.session_key`
+ * (vrf_mode.rs: `signer == g.player || signer == g.session_key`), and this is
+ * the ONLY route out of a delegated game when the session key is gone — a
+ * cleared localStorage, a different browser, a different device.
+ *
+ * Without it the game is unrecoverable from the UI: `reveal_request_vrf`
+ * demands the exact session key, `cash_out_vrf` needs safe_reveals > 0, and
+ * `refund_stalled_vrf` deliberately refuses while the account is still
+ * delegated. So the bet sits locked with no path forward.
+ */
+export async function settleAndUndelegateVrfAsPlayer(
+  cfg: VrfEngineConfig,
+  player: PublicKey,
+  sign: SignTx,
+): Promise<string> {
+  const ctx = { programId: cfg.programId };
+  return sendIx(
+    cfg.er,
+    buildSettleAndUndelegateVrf({ ctx, player, payer: player }),
+    player,
+    sign,
+  );
+}
+
+/**
+ * Cash out with the player's wallet. Same dual-signer allowance as above, so a
+ * game that made progress still pays its earned multiplier when the session
+ * key is gone, instead of being refunded down to the bare bet.
+ */
+export async function cashOutVrfAsPlayer(
+  cfg: VrfEngineConfig,
+  player: PublicKey,
+  sign: SignTx,
+): Promise<string> {
+  const ctx = { programId: cfg.programId };
+  return sendIx(cfg.er, buildCashOutVrf({ ctx, player, signer: player }), player, sign);
+}
+
+/**
  * Return whatever gas is left on the session key to the player.
  *
  * Without this the funding is a pure loss every round — at the minimum bet the
@@ -275,4 +446,40 @@ export async function waitForCommittedResult(
   timeoutMs = 60_000,
 ): Promise<VrfGameAccount | null> {
   return pollVrfGame(cfg.l1, cfg.programId, player, (g) => g.status === "Won" || g.status === "Lost", timeoutMs);
+}
+
+/**
+ * Wait only for the rollup to hand the game account back to the program.
+ *
+ * The RECOVERY path must not use waitForCommittedResult: that waits for a
+ * TERMINAL status (Won/Lost), and a game being refunded stays `Playing`
+ * forever — so the predicate can never pass and the caller eats the entire
+ * timeout before doing anything. That was a flat ~32s of dead waiting on every
+ * refund, measured twice on chain to the second.
+ *
+ * Undelegation is the only precondition that actually matters here, because
+ * refund_stalled_vrf refuses while the account is still owned by the
+ * delegation program. Ownership flips back in a few seconds, and polling for
+ * exactly that turns a 32s wait into a ~2s one.
+ *
+ * A missing account also counts as done: it means the game was already
+ * settled or refunded and closed.
+ */
+export async function waitForUndelegation(
+  cfg: VrfEngineConfig,
+  player: PublicKey,
+  timeoutMs = 20_000,
+): Promise<boolean> {
+  const [gamePda] = deriveVrfGamePda(cfg.programId, player);
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const ai = await cfg.l1.getAccountInfo(gamePda, "processed");
+      if (!ai || ai.owner.equals(cfg.programId)) return true;
+    } catch {
+      /* transient RPC */
+    }
+    await sleep(400);
+  }
+  return false;
 }

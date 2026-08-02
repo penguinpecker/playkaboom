@@ -154,6 +154,20 @@ export interface VaultV2StateAccount {
   minHealthBps: number;
   withdrawCooldownSlots: bigint;
   minLpDeposit: bigint;
+  /**
+   * ⚠️ NOT a reliable off signal on its own — this byte previously held
+   * `er_enabled` and already reads 1 on mainnet. The real gate is
+   * `vrfValidator` being non-default AND `vrfMaxPayoutBps > 0`.
+   */
+  vrfModeEnabled: boolean;
+  vrfValidator: PublicKey;
+  /**
+   * VRF-only payout ceiling in bps of vault assets. The program applies
+   * `min(vault.maxPayoutBps, this)` — so any client computing a max bet for a
+   * VRF game MUST use the min, not `vault.maxPayoutBps` alone, or it will
+   * offer bets the program rejects with VaultInsufficientFunds.
+   */
+  vrfMaxPayoutBps: number;
 }
 
 export interface LpPositionAccount {
@@ -182,6 +196,12 @@ export function decodeVaultV2State(data: Buffer): VaultV2StateAccount {
   const minHealthBps = r.u16();
   const withdrawCooldownSlots = r.u64();
   const minLpDeposit = r.u64();
+  // Carved from the former `_reserved: [u8; 64]` — see VaultV2State in
+  // programs/kaboom/src/lib.rs. Order is fixed: bool, Pubkey, u16, then
+  // `_reserved: [u8; 29]`.
+  const vrfModeEnabled = r.bool();
+  const vrfValidator = r.pk();
+  const vrfMaxPayoutBps = r.u16();
   return {
     bump,
     totalOutstandingMaxPayout,
@@ -196,6 +216,9 @@ export function decodeVaultV2State(data: Buffer): VaultV2StateAccount {
     minHealthBps,
     withdrawCooldownSlots,
     minLpDeposit,
+    vrfModeEnabled,
+    vrfValidator,
+    vrfMaxPayoutBps,
   };
 }
 

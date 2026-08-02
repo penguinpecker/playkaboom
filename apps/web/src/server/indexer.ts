@@ -1,7 +1,13 @@
+import { PublicKey } from "@solana/web3.js";
 import "server-only";
-import { extractEventsFromLogs, type KaboomEvent } from "@playkaboom/sdk";
+import { extractEventsFromLogs, type KaboomEvent,
+  derivePlayerStatsPda,
+  decodePlayerStats
+} from "@playkaboom/sdk";
 import type { PostgrestError } from "@supabase/supabase-js";
 import { supabaseAdmin } from "./db/supabase";
+import { getConnection } from "./connection";
+import { programId } from "./env";
 import { logger } from "./logger";
 import { awardPoints } from "./points";
 
@@ -81,6 +87,106 @@ export interface IndexResult {
  * which is the conservative side: at-most-once for the unapplied events
  * vs at-least-once if we re-applied on retry (the atomic idx_apply_* RPCs
  * already make every handler commutative, so at-least-once is safe). */
+/**
+ * Write a settled VRF game into the mirror.
+ *
+ * WHY THIS EXISTS: `vrf_mode.rs` emits NO Anchor events — zero `emit!` calls in
+ * the whole module. Every row in `public.games` is written by the GameWon /
+ * GameLost branches below, which are driven by decoded event logs. So a VRF
+ * game produces a perfectly good on-chain settle that the indexer cannot see:
+ * indexFreshSignature runs, finds no recognised event, writes nothing, and the
+ * activity feed silently stops at the last commit-reveal game. No amount of
+ * cron tuning fixes that, because there was never an event to index.
+ *
+ * The durable fix is `emit!(GameWon/GameLost)` inside settle_vrf, which would
+ * put VRF on the identical pipeline — but that is a program upgrade behind the
+ * Squads authority. This keeps the mirror correct until then, writing the same
+ * columns the event branches write so downstream readers cannot tell the
+ * difference. Idempotent on `signature`, so a later event-driven re-index of
+ * the same transaction is a no-op rather than a duplicate.
+ */
+export async function recordVrfGame(args: {
+  signature: string;
+  gamePda: string;
+  player: string;
+  betLamports: bigint;
+  payoutLamports: bigint;
+  multiplierBps: number;
+  safeReveals: number;
+  mineCount: number;
+  won: boolean;
+  slot: number;
+  blockTime: string;
+}): Promise<void> {
+  const db = supabaseAdmin();
+  const res = await db.from("games").upsert(
+    {
+      signature: args.signature,
+      game: args.gamePda,
+      player: args.player,
+      bet: args.betLamports.toString(),
+      // VRF knows its real mine_count at settle time, so unlike the event path
+      // there is no sentinel to backfill.
+      mine_count: args.mineCount,
+      outcome: args.won ? "won" : "lost",
+      payout: args.payoutLamports.toString(),
+      multiplier_bps: args.won ? args.multiplierBps : 0,
+      safe_reveals: args.safeReveals,
+      // VRF has no pre-committed layout — randomness comes from the oracle per
+      // click, so there is nothing to reveal or verify against.
+      mine_layout: null,
+      commitment: "0".repeat(64),
+      settled_at: args.blockTime,
+      slot: args.slot,
+    },
+    { onConflict: "signature" },
+  );
+  check("games", "recordVrfGame.upsert", res);
+
+  // MIRROR PLAYER STATS TOO.
+  //
+  // Leaderboard and profile totals are driven by player_stats, which the event
+  // path fills from a StatsUpdated event. VRF emits no events, so VRF games
+  // updated `games` but never player_stats — leaderboard and profiles drifted
+  // from chain, and a VRF-only player was absent entirely.
+  //
+  // settle_vrf DOES maintain the on-chain PlayerStats account (vrf_mode.rs:593),
+  // so the cumulative truth exists; it just was never read. Pull that snapshot
+  // and push it through the same slot-guarded RPC the event path uses, so a
+  // late write can never revert newer counters. Non-fatal: a stats mirror
+  // failure must not fail a settle that already moved money.
+  try {
+    const [statsPda] = derivePlayerStatsPda(programId(), new PublicKey(args.player));
+    const info = await getConnection().getAccountInfo(statsPda, "confirmed");
+    if (info) {
+      const st = decodePlayerStats(info.data as Buffer);
+      const rpc = await db.rpc("idx_apply_stats", {
+        p_player: args.player,
+        p_games_played: st.gamesPlayed.toString(),
+        p_games_won: st.gamesWon.toString(),
+        p_total_wagered: st.totalWagered.toString(),
+        p_total_payouts: st.totalPayouts.toString(),
+        p_biggest_win: st.biggestWin.toString(),
+        p_current_streak: st.currentStreak,
+        p_best_streak: st.bestStreak,
+        p_last_played: args.blockTime,
+        p_event_slot: args.slot,
+      });
+      check("player_stats", "recordVrfGame.stats", rpc);
+    }
+  } catch (e) {
+    logger.error({ err: e, player: args.player }, "vrf player_stats mirror failed");
+  }
+
+  await awardPoints({
+    player: args.player,
+    sourceKey: args.signature,
+    source: args.won ? "game_won" : "game_lost",
+    betLamports: args.betLamports,
+    edgeBps: POINTS_EDGE_BPS,
+  });
+}
+
 export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResult> {
   const db = supabaseAdmin();
   let processed = 0;

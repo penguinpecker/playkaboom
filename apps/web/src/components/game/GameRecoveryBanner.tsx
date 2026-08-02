@@ -22,6 +22,7 @@ import { PROGRAM_ID } from "@/lib/cluster";
 import { buildPriorityIxs } from "@/lib/priority-fee";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
 import { useGameStore } from "@/stores/game-store";
+import { useGame } from "@/hooks/useGame";
 import { useToast } from "@/components/providers/toast";
 
 interface Props {
@@ -81,6 +82,7 @@ export function GameRecoveryBanner({ info }: Props) {
   const { signTransaction } = useSignTransaction();
   const wallet = wallets[0];
   const setGameToken = useGameStore((s) => s.setGameToken);
+  const { cleanupStuck } = useGame();
   // Hide the banner the instant the player has actively re-entered a
   // game flow — playing/starting/cashing means the BetControls/Grid is
   // taking over and the banner is irrelevant.
@@ -158,6 +160,26 @@ export function GameRecoveryBanner({ info }: Props) {
     if (busy || !wallet || !isReady) return;
     setBusy(true);
     try {
+      // A VRF round cannot be recovered with any of the legacy instructions —
+      // there is no legacy GameSession PDA, so refund_expired fails with
+      // AccountNotInitialized (3012). The rollup game must first be
+      // undelegated (only then will refund_stalled_vrf agree to run), which is
+      // a multi-step, multi-chain flow rather than one instruction.
+      // cleanupStuck owns that sequence, so hand off to it wholesale.
+      if (info.vrf) {
+        const ok = await cleanupStuck();
+        toast(
+          // Recovery may settle a win, settle a loss, OR refund — asserting
+          // "Bet refunded" misreported two of the three outcomes.
+          ok
+            ? "Round closed — wallet unblocked. Any payout has been sent."
+            : "Recovery failed — try again in a moment",
+          ok ? "success" : "error",
+        );
+        setGameToken(null);
+        info.refresh();
+        return;
+      }
       const ix = buildIx(new PublicKey(wallet.address));
       const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
         connection.getLatestBlockhash("confirmed"),
@@ -196,10 +218,21 @@ export function GameRecoveryBanner({ info }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [busy, wallet, isReady, buildIx, connection, signTransaction, action, toast, setGameToken, info]);
+  }, [busy, wallet, isReady, buildIx, connection, signTransaction, action, toast, setGameToken, info, cleanupStuck]);
 
   if (!info.active) return null;
-  if (storeStatus === "playing" || storeStatus === "starting" || storeStatus === "cashing") {
+  if (
+    storeStatus === "playing" ||
+    storeStatus === "starting" ||
+    storeStatus === "cashing" ||
+    // "revealing" is a LIVE round — a VRF draw is in flight and can take up to
+    // 45s. Omitting it left this banner rendered with an ACTIVE button for the
+    // whole draw, directly above the grid, and clicking it handed the round to
+    // cleanupStuck mid-play. Nothing is lost by hiding it: a genuinely timed-out
+    // draw returns the store to "playing", at which point the banner is
+    // suppressed anyway and recovery is reached through the normal idle path.
+    storeStatus === "revealing"
+  ) {
     return null;
   }
   if (pendingClose) return null;

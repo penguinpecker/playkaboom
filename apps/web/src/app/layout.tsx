@@ -4,6 +4,7 @@ import { Web3Provider } from "@/components/providers/web3";
 import { GameProvider } from "@/hooks/useGame";
 import { ModalProvider } from "@/hooks/useModal";
 import { ToastProvider } from "@/hooks/useToast";
+import { VersionGuard } from "@/components/providers/version-guard";
 import { AuthToastBridge } from "@/components/providers/auth-toast-bridge";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
@@ -63,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <ModalProvider>
               <ToastProvider>
                 <AuthToastBridge />
+                <VersionGuard />
                 <Navbar />
                 <main className="flex-1 pt-14 sm:pt-16">{children}</main>
                 <Footer />

@@ -41,11 +41,26 @@ const csp = [
     "https://api.devnet.solana.com",
     "https://*.g.alchemy.com",
     "wss://*.g.alchemy.com",
-    // Railway realtime relay — fans out public.games settle events to
-    // every connected browser. Wired in apps/realtime/. Has been silently
-    // CSP-blocked since the worker shipped 2026-05-09.
-    "wss://playkaboom-realtime-production.up.railway.app",
+    // Railway realtime relay (apps/realtime). Fans out settle events to every
+    // connected browser AND polls /api/cron/index-events every 60s, which is
+    // what actually keeps the mirror fresh. MUST match
+    // NEXT_PUBLIC_REALTIME_WS_URL exactly — the host changed on 2026-07-29
+    // when the service was rebuilt, and a stale entry here blocks the socket
+    // silently in the browser with nothing in any server log.
+    "wss://kaboom-realtime-production.up.railway.app",
     "https://hermes.pyth.network",
+    // MagicBlock Ephemeral Rollup — the VRF game mode talks DIRECTLY to this
+    // node from the browser (per-click reveals, cash-out, and the
+    // settle-and-undelegate that is the ONLY way out of a delegated game).
+    //
+    // Omitting it does not degrade gracefully: the browser silently refuses
+    // every request, so tile taps do nothing, resume cannot read the rollup
+    // state, and recovery cannot undelegate — which then makes the L1 refund
+    // refuse too, because refund_stalled_vrf rejects a still-delegated game.
+    // Every client-side VRF failure on 2026-07-28 traced back to this line
+    // being absent. Keep it in sync with NEXT_PUBLIC_ER_RPC / _ER_WS.
+    "https://*.magicblock.app",
+    "wss://*.magicblock.app",
     // Privy bundles WalletConnect for wallet picker. Explorer API hosts the
     // wallet list; relay.walletconnect.{com,org} carries the v2 session WS.
     "https://*.walletconnect.com",
@@ -125,6 +140,32 @@ const nextConfig = {
       {
         source: "/_next/static/(.*)",
         headers: [{ key: "Cross-Origin-Resource-Policy", value: "cross-origin" }],
+      },
+    ];
+  },
+  // Host routing for status.playkaboom.gg lives in src/middleware.ts, NOT
+  // here. A config rewrite can express "/ on this host -> /status" but not
+  // "and nothing else on this host is served", which is the part that matters:
+  // the subdomain shares this project, so without that rule the entire
+  // wallet-connecting game app stays reachable on it.
+  //
+  // These redirects only collapse the duplicate public URL. The `has` host
+  // condition is load-bearing: middleware rewrites status.playkaboom.gg/ into
+  // an INTERNAL request for /status, so an unscoped redirect on /status would
+  // catch its own rewrite and loop forever.
+  async redirects() {
+    return [
+      {
+        source: "/status",
+        has: [{ type: "host", value: "playkaboom.gg" }],
+        destination: "https://status.playkaboom.gg/",
+        permanent: true,
+      },
+      {
+        source: "/status",
+        has: [{ type: "host", value: "www.playkaboom.gg" }],
+        destination: "https://status.playkaboom.gg/",
+        permanent: true,
       },
     ];
   },

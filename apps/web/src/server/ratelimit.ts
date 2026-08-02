@@ -42,9 +42,43 @@ export function getLimiter(): Ratelimit | null {
   return cachedLimiter;
 }
 
+/**
+ * Per-instance fallback used ONLY when Upstash is unprovisioned.
+ *
+ * Serverless means many instances, so this is not a real distributed limiter —
+ * an attacker spread across instances gets a multiple of the budget. It exists
+ * because the alternative in production today is literally no limit at all:
+ * `enforceRateLimit` returned {ok:true} unconditionally, so every call site —
+ * including /api/reveal, which makes the HOUSE KEY sign a transaction per
+ * request — was unthrottled. A loose ceiling per instance still turns an
+ * unbounded flood into a bounded one.
+ *
+ * Bounded map: entries are evicted on read, and the map is cleared wholesale
+ * if it ever grows past MAX_KEYS, so this cannot become a memory leak.
+ */
+const WINDOW_MS = 10_000;
+const MAX_HITS = 30;
+const MAX_KEYS = 10_000;
+const localHits = new Map<string, number[]>();
+
+function localLimit(key: string): { ok: boolean; remaining: number } {
+  const now = Date.now();
+  if (localHits.size > MAX_KEYS) localHits.clear();
+  const hits = (localHits.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
+  if (hits.length >= MAX_HITS) {
+    localHits.set(key, hits);
+    return { ok: false, remaining: 0 };
+  }
+  hits.push(now);
+  localHits.set(key, hits);
+  return { ok: true, remaining: MAX_HITS - hits.length };
+}
+
 export async function enforceRateLimit(key: string): Promise<{ ok: boolean; remaining: number }> {
   const limiter = getLimiter();
-  if (!limiter) return { ok: true, remaining: -1 };
+  // Not configured: fall back to the in-process limiter rather than waving
+  // every request through. Provisioning Upstash replaces this automatically.
+  if (!limiter) return localLimit(key);
   try {
     const r = await limiter.limit(key);
     return { ok: r.success, remaining: r.remaining };

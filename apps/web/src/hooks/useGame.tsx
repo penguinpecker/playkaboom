@@ -21,10 +21,11 @@ export function useGame() {
 
   return {
     state: {
-      // Date.parse(`${Date.now()}`) returns NaN — Date.parse expects a
-      // date-formatted string, not a unix-ms integer-as-string. Use Date.now()
-      // directly so the BigInt cast doesn't crash the page once the bet lands.
-      gameId: state.status === "playing" ? BigInt(Date.now()) : null,
+      // The on-chain commitment IS the round's identity — stable for the life
+      // of the game and verifiable. Date.now() changed on every render, so the
+      // "#" chip on the grid was a meaningless number that never matched
+      // anything a player could look up.
+      gameId: state.commitment ?? null,
       status: state.status,
       bet: state.bet,
       mineCount: state.mineCount,
@@ -46,6 +47,10 @@ export function useGame() {
     startGame: actions.startGame,
     revealTile: actions.revealTile,
     cashOut: actions.cashOut,
+    // Exposed so GameRecoveryBanner can recover a VRF round. Its legacy
+    // single-instruction path (refund_expired etc.) does not apply there:
+    // a rollup game must be undelegated before refund_stalled_vrf will run.
+    cleanupStuck: actions.cleanupStuck,
     resetGame: state.reset,
     gameHistory: history,
     walletAddress: wallet?.address ?? null,

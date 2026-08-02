@@ -1,0 +1,38 @@
+# IMPORTANT: the bare `build`, `dist` and `out` rules below match ANY
+# directory with that name, at any depth — including source folders such
+# as apps/web/src/app/api/build/. A route created there is silently NOT
+# uploaded and 404s in production while building perfectly locally.
+# Never name a source directory build/, dist/ or out/.
+# Build artifacts and caches — Vercel rebuilds these during deploy
+node_modules
+**/node_modules
+.next
+**/.next
+.turbo
+**/.turbo
+target
+**/target
+.anchor
+**/.anchor
+dist
+**/dist
+build
+**/build
+out
+**/out
+
+# Local dev / env / state
+.git
+.env
+.env.local
+**/.env.local
+
+# Heavy non-build assets not needed for the web build
+decks
+keypairs
+*.so
+*.keypair.json
+*.tar
+*.tgz
+*.zip
+test-ledger

@@ -16,6 +16,14 @@ export type OnChainGameStatus = "Playing" | "Won" | "Lost" | "Expired";
 
 export interface StuckGameInfo {
   active: boolean;
+  /**
+   * True when the open round is a VRF/rollup game rather than a legacy
+   * commit-reveal one. The recovery INSTRUCTIONS are completely different:
+   * a VRF game must be undelegated from the rollup and then refunded via
+   * refund_stalled_vrf, so dispatching the legacy refund_expired at it fails
+   * with AccountNotInitialized (there is no legacy GameSession PDA).
+   */
+  vrf: boolean;
   /** True if server has the encrypted session and player can keep playing. */
   recoverable: boolean;
   /** True only when on-chain game exists AND server has no session. */
@@ -67,6 +75,7 @@ export interface StuckGameInfo {
  */
 const EMPTY_INFO: Omit<StuckGameInfo, "refresh"> = {
   active: false,
+  vrf: false,
   recoverable: false,
   stuck: false,
   betLamports: null,
@@ -119,6 +128,7 @@ export function useGameResume(): StuckGameInfo {
       if (!res.ok) return;
       const data = (await res.json()) as {
         active: boolean;
+        vrf?: boolean;
         gameToken?: string | null;
         sessionRecovered?: boolean;
         onChain?: {
@@ -153,6 +163,7 @@ export function useGameResume(): StuckGameInfo {
       // resume on this device).
       setInfo({
         active: true,
+        vrf: data.vrf === true,
         recoverable: !!data.gameToken,
         stuck: !data.gameToken,
         betLamports: data.onChain?.bet ?? null,

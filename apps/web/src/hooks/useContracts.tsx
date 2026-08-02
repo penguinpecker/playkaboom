@@ -21,7 +21,7 @@ import {
   type VaultV2StateAccount,
 } from "@playkaboom/sdk";
 import { calcMultiplierBps } from "@playkaboom/shared";
-import { PROGRAM_ID } from "@/lib/cluster";
+import { PROGRAM_ID, VRF_MODE_ENABLED } from "@/lib/cluster";
 
 const VAULT_PDA = deriveVaultPda(PROGRAM_ID)[0];
 const V2_PDA = deriveV2StatePda(PROGRAM_ID)[0];
@@ -163,12 +163,20 @@ export interface CapacityResult {
   reason: string;
 }
 
-export function useVaultCapacity(
+/**
+ * Pure core of the capacity check, extracted so the per-mine-count selector
+ * can reuse it verbatim. Duplicating this formula is how the UI and the
+ * program drift apart, which is exactly the bug that let players pick a mine
+ * count the program would always reject.
+ */
+function computeCapacity(
+  lamports: bigint,
+  vault: VaultAccountData["vault"],
+  v2: VaultAccountData["v2"],
   betSol: number,
   mineCount: number,
 ): CapacityResult {
-  const { lamports, vault, v2 } = useVaultAccount();
-  return useMemo(() => {
+  {
     const empty: CapacityResult = {
       maxBetSol: 0,
       healthBps: 0,
@@ -203,9 +211,16 @@ export function useVaultCapacity(
       }
     }
 
-    const effectiveMaxPayoutBps = Math.floor(
-      (vault.maxPayoutBps * healthBps) / 10_000,
-    );
+    // VRF games are capped by min(vault.maxPayoutBps, v2.vrfMaxPayoutBps) —
+    // see start_game_vrf in programs/kaboom/src/vrf_mode.rs. Using
+    // vault.maxPayoutBps alone here offered bets up to 10x what the program
+    // would accept, so the UI handed the player a "max" that always failed
+    // with VaultInsufficientFunds. Mirror the program exactly.
+    const payoutCapBps =
+      VRF_MODE_ENABLED && v2 && v2.vrfMaxPayoutBps > 0
+        ? Math.min(vault.maxPayoutBps, v2.vrfMaxPayoutBps)
+        : vault.maxPayoutBps;
+    const effectiveMaxPayoutBps = Math.floor((payoutCapBps * healthBps) / 10_000);
     // Convert "max payout" to "max bet" by dividing by the worst-case
     // multiplier for the chosen mine_count. The worst case is when the
     // player reveals every safe tile (safeReveals = GRID_SIZE - mineCount).
@@ -235,14 +250,62 @@ export function useVaultCapacity(
       worstCasePayoutSol,
       reason,
     };
-  }, [betSol, mineCount, lamports, vault, v2]);
+  }
+}
+
+export function useVaultCapacity(
+  betSol: number,
+  mineCount: number,
+): CapacityResult {
+  const { lamports, vault, v2 } = useVaultAccount();
+  return useMemo(
+    () => computeCapacity(lamports, vault, v2, betSol, mineCount),
+    [betSol, mineCount, lamports, vault, v2],
+  );
+}
+
+/**
+ * Max bet (SOL) for each mine count, so the selector can grey out densities
+ * the vault cannot cover at ANY legal bet. Worst-case payout scales with
+ * C(16, mines) — 16x at 1 mine, 560x at 3 — so on a small bankroll most
+ * densities are unplayable even at the minimum bet, and offering them just
+ * produces a failed simulation after the player has committed.
+ */
+export function useMaxBetByMineCount(mineCounts: readonly number[]): Record<number, number> {
+  const { lamports, vault, v2 } = useVaultAccount();
+  const key = mineCounts.join(",");
+  return useMemo(() => {
+    const out: Record<number, number> = {};
+    for (const n of mineCounts) {
+      out[n] = computeCapacity(lamports, vault, v2, 0, n).maxBetSol;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lamports, vault, v2, key]);
 }
 
 export function useVaultMaxBet() {
-  const { lamports, vault } = useVaultAccount();
+  const { lamports, vault, v2 } = useVaultAccount();
   const bps = vault?.maxBetBps ?? 200;
+  // The program scales max_bet_bps by CURRENT HEALTH (see start_game). Ignoring
+  // that advertised a ceiling ~47% above what the chain would accept, so /vault
+  // and /logs quoted a number a player could not actually bet. Mirror the
+  // program: available = lamports - rent, health = free/available.
   return {
-    data: lamports > 0n ? (lamports * BigInt(bps)) / 10_000n : undefined,
+    data: (() => {
+      if (lamports <= VAULT_RENT_LAMPORTS_FLOOR) return undefined;
+      const available = lamports - VAULT_RENT_LAMPORTS_FLOOR;
+      let healthBps = 10_000;
+      if (v2) {
+        const pending =
+          v2.totalUnits > 0n ? (v2.totalPendingUnits * available) / v2.totalUnits : 0n;
+        const obligations = v2.totalOutstandingMaxPayout + pending;
+        const free = obligations >= available ? 0n : available - obligations;
+        healthBps = Number((free * 10_000n) / available);
+      }
+      const effBps = Math.floor((bps * healthBps) / 10_000);
+      return (available * BigInt(effBps)) / 10_000n;
+    })(),
   };
 }
 

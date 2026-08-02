@@ -2,11 +2,22 @@
 import { useEffect } from "react";
 import { GAME_CONFIG } from "@/lib/chain";
 import { useGame } from "@/hooks/useGame";
+import { useHouseEdgeBps } from "@/hooks/useContracts";
+import { calcMultiplierBps } from "@playkaboom/shared";
 import { useModal } from "@/hooks/useModal";
 import { Tile } from "./Tile";
 
 export function Grid() {
   const { state, cashOut } = useGame();
+  // "Next Gain" must be the multiplier the NEXT safe reveal would pay, not the
+  // one already banked — a fresh round showed 1.00x, which is the CURRENT
+  // multiplier and tells the player nothing about the tile they are about to
+  // click. Uses the same table the program prices with.
+  const houseEdgeBps = useHouseEdgeBps();
+  const nextGain =
+    Number(
+      calcMultiplierBps(state.safeTiles.size + 1, state.mineCount, houseEdgeBps),
+    ) / 10_000;
   const { open } = useModal();
   const safeTilesTotal = GAME_CONFIG.GRID_SIZE - state.mineCount;
 
@@ -73,7 +84,7 @@ export function Grid() {
               Next Gain
             </div>
             <div className="font-headline font-bold text-primary text-base sm:text-lg">
-              {state.multiplier.toFixed(2)}×
+              {nextGain.toFixed(2)}×
             </div>
           </div>
           <div className="hidden sm:block h-8 w-px bg-outline-variant/20" />
