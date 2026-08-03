@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHash } from "node:crypto";
 import { verifyVrfSettle } from "@/server/verify-vrf";
-import { extractEventsFromLogs } from "@playkaboom/sdk";
+import { assertProgramInvoked, extractEventsFromLogs } from "@playkaboom/sdk";
 import { getConnection } from "@/server/connection";
+import { programId } from "@/server/env";
 import { supabasePublic } from "@/server/db/supabase";
 import { jsonError } from "@/server/api-helpers";
 
@@ -68,7 +69,12 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ found: false });
     }
 
-    const events = extractEventsFromLogs(tx.meta?.logMessages ?? []);
+    // Logs are not authenticated — require a real invocation of our program
+    // before decoding anything out of them (see assertProgramInvoked).
+    if (!assertProgramInvoked(tx, programId())) {
+      return NextResponse.json({ found: false });
+    }
+    const events = extractEventsFromLogs(tx.meta?.logMessages ?? [], programId());
     const won = events.find((e) => e.kind === "GameWon");
     const lost = events.find((e) => e.kind === "GameLost");
     const settled = events.find((e) => e.kind === "GameSettled");
@@ -186,7 +192,9 @@ export async function GET(req: NextRequest) {
           maxSupportedTransactionVersion: 0,
         });
         if (settleTx) {
-          const settleEvents = extractEventsFromLogs(settleTx.meta?.logMessages ?? []);
+          const settleEvents = assertProgramInvoked(settleTx, programId())
+            ? extractEventsFromLogs(settleTx.meta?.logMessages ?? [], programId())
+            : [];
           const s = settleEvents.find((e) => e.kind === "GameSettled");
           if (s && s.kind === "GameSettled") {
             settleEv = s;

@@ -15,7 +15,12 @@ import { checkTile, saltBuffer } from "@/server/game";
 import { fetchPlayerReferrer } from "@/server/player";
 import { encryptSession } from "@/server/session";
 import { loadSession, saveSession, deleteSession } from "@/server/session-store";
-import { OnChainError, requireActiveGame, sendHouseTx } from "@/server/solana";
+import {
+  confirmOutcomeSettled,
+  OnChainError,
+  requireActiveGame,
+  sendHouseTx,
+} from "@/server/solana";
 import { housePubkey, programId, treasuryPubkey } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
@@ -152,6 +157,24 @@ export async function POST(req: NextRequest) {
         referrer: referrer ?? undefined,
       });
       signature = await sendHouseTx([revealIx, settleIx]);
+
+      // Do NOT answer until the settle is locked in. sendHouseTx returns on
+      // RPC acceptance, so until this resolves the game is still `Playing` on
+      // chain — and a player who has been told "mine" can broadcast their own
+      // cash_out with a higher priority fee and land it first, turning the
+      // loss into a full payout. Fail closed: if we cannot establish that the
+      // round is decided, we disclose nothing and the client retries.
+      const decided = await confirmOutcomeSettled(signature, playerPk);
+      if (!decided) {
+        logger.warn(
+          { player: body.player, sig: signature },
+          "reveal settle unconfirmed — withholding outcome",
+        );
+        throw new ApiError(409, "Still resolving your tile — try again in a moment.", {
+          settling: true,
+        });
+      }
+
       closeInstruction = serializeIx(buildCloseGame({ ctx, player: playerPk }));
       // Auto-settle on mine — push to indexer in the background. Don't
       // await: the cron tickler + (when configured) the Helius webhook

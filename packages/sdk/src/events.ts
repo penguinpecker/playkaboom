@@ -8,6 +8,55 @@ function eventDiscriminator(name: string): Buffer {
 }
 
 const PROGRAM_DATA_PREFIX = "Program data: ";
+/** `Program <base58 id> invoke [<depth>]` — pushes onto the invoke stack. */
+const INVOKE_RE = /^Program ([1-9A-HJ-NP-Za-km-z]{32,44}) invoke \[\d+\]$/;
+/** `Program <id> success` / `... failed: ...` — pops the invoke stack. */
+const END_RE = /^Program [1-9A-HJ-NP-Za-km-z]{32,44} (success|failed)/;
+
+/**
+ * True when `programId` is invoked by this transaction for real — i.e. it is
+ * the program of a top-level or inner instruction, which the runtime records
+ * in the transaction message rather than in free-text logs.
+ *
+ * Log lines can be spoofed by any program in the transaction; this cannot.
+ * Call it before trusting anything decoded out of the logs.
+ */
+export function assertProgramInvoked(tx: unknown, programId: PublicKey | string): boolean {
+  const want = typeof programId === "string" ? programId : programId.toBase58();
+
+  const asBase58 = (k: unknown): string | undefined => {
+    if (typeof k === "string") return k;
+    const pubkey = (k as { pubkey?: unknown })?.pubkey;
+    if (pubkey) return asBase58(pubkey);
+    const fn = (k as { toBase58?: () => string })?.toBase58;
+    return typeof fn === "function" ? fn.call(k) : undefined;
+  };
+
+  const message = (tx as { transaction?: { message?: Record<string, unknown> } })?.transaction
+    ?.message;
+  const meta = (tx as { meta?: Record<string, unknown> | null })?.meta;
+  const loaded = meta?.loadedAddresses as
+    | { writable?: unknown[]; readonly?: unknown[] }
+    | undefined;
+
+  // Legacy messages expose `accountKeys`; versioned (v0) messages expose
+  // `staticAccountKeys` plus addresses resolved from lookup tables, which the
+  // RPC returns separately in `meta.loadedAddresses`. Check every source — a
+  // miss here would wrongly reject a real transaction.
+  const groups: unknown[][] = [
+    (message?.accountKeys as unknown[]) ?? [],
+    (message?.staticAccountKeys as unknown[]) ?? [],
+    loaded?.writable ?? [],
+    loaded?.readonly ?? [],
+  ];
+
+  for (const group of groups) {
+    for (const k of group) {
+      if (asBase58(k) === want) return true;
+    }
+  }
+  return false;
+}
 
 class EventReader {
   private offset = 8; // skip discriminator
@@ -502,11 +551,40 @@ const EVENTS: Record<
 /**
  * Walk Solana log lines, extract the base64 payload after each
  * `Program data: ` entry, match the leading 8 bytes against known events.
+ *
+ * `programId` is required: a `Program data:` line is only decoded when the
+ * program currently executing — the top of the invoke stack rebuilt from the
+ * surrounding `Program <id> invoke [n]` / `success` / `failed` lines — is that
+ * program. Without this, ANY program's logs decode as ours, so anyone can
+ * emit an arbitrary payload with our discriminator and have it accepted as a
+ * real game event.
+ *
+ * Residual, deliberately documented: log text is not authenticated. A program
+ * can `msg!` a line that mimics an invoke/success pair, so a transaction that
+ * genuinely invokes this program can still interleave forged lines. Callers
+ * that make money or trust decisions must additionally confirm the program was
+ * really invoked (see assertProgramInvoked) and cross-check the claim against
+ * on-chain state. Log parsing alone is a convenience, never a proof.
  */
-export function extractEventsFromLogs(logs: string[]): KaboomEvent[] {
+export function extractEventsFromLogs(
+  logs: string[],
+  programId: PublicKey | string,
+): KaboomEvent[] {
+  const want = typeof programId === "string" ? programId : programId.toBase58();
   const out: KaboomEvent[] = [];
+  const stack: string[] = [];
   for (const line of logs) {
+    const invoke = INVOKE_RE.exec(line);
+    if (invoke?.[1]) {
+      stack.push(invoke[1]);
+      continue;
+    }
+    if (END_RE.test(line)) {
+      stack.pop();
+      continue;
+    }
     if (!line.startsWith(PROGRAM_DATA_PREFIX)) continue;
+    if (stack[stack.length - 1] !== want) continue;
     let buf: Buffer;
     try {
       buf = Buffer.from(line.slice(PROGRAM_DATA_PREFIX.length), "base64");

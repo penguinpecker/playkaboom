@@ -200,7 +200,9 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
         skipped++;
         continue;
       }
-      const events = extractEventsFromLogs(tx.logMessages ?? []);
+      // Only logs emitted by OUR program decode — otherwise any program can
+      // print our discriminator and write fake games, stats and points here.
+      const events = extractEventsFromLogs(tx.logMessages ?? [], programId());
       if (events.length === 0) {
         skipped++;
         continue;

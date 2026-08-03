@@ -118,6 +118,52 @@ function isAllowedOrigin(origin: string | undefined): boolean {
  */
 const MAX_RPC_PROXY_CLIENTS = 150;
 
+/**
+ * What a browser may ask the upstream for through this socket.
+ *
+ * Mirrors the HTTP proxy's list (apps/web/src/app/api/rpc/[cluster]/route.ts)
+ * plus the subscription methods that are the entire reason a WS proxy exists,
+ * and MINUS sendTransaction: writes go through the HTTP proxy, which has its
+ * own per-IP limit. Anything not named here is refused, so an outsider cannot
+ * turn this endpoint into free general-purpose access to a paid RPC key.
+ */
+const WS_ALLOWED_METHODS = new Set<string>([
+  "accountSubscribe",
+  "accountUnsubscribe",
+  "signatureSubscribe",
+  "signatureUnsubscribe",
+  "logsSubscribe",
+  "logsUnsubscribe",
+  "programSubscribe",
+  "programUnsubscribe",
+  "slotSubscribe",
+  "slotUnsubscribe",
+  "rootSubscribe",
+  "rootUnsubscribe",
+  "getAccountInfo",
+  "getMultipleAccounts",
+  "getBalance",
+  "getBlockHeight",
+  "getSlot",
+  "getLatestBlockhash",
+  "getFeeForMessage",
+  "getRecentPrioritizationFees",
+  "getSignatureStatuses",
+  "getSignaturesForAddress",
+  "getTransaction",
+  "getMinimumBalanceForRentExemption",
+  "getEpochInfo",
+  "getVersion",
+  "getHealth",
+]);
+
+/** Per-connection budget: steady rate, short burst, and hard frame limits. */
+const RPC_PER_SEC = 12;
+const RPC_BURST = 40;
+const RPC_MAX_FRAME_BYTES = 64 * 1024;
+const RPC_MAX_BATCH = 10;
+const RPC_MAX_PENDING = 50;
+
 httpServer.on("upgrade", (req, socket, head) => {
   const origin = req.headers.origin as string | undefined;
   const pathnameEarly = (req.url ?? "/").split("?")[0];
@@ -244,14 +290,75 @@ function handleRpcProxyConnection(client: WebSocket): void {
   upstream.on("close", (code, reason) => closeBoth(code, reason?.toString() ?? ""));
   upstream.on("error", () => closeBoth(1011, "upstream error"));
 
+  // Token bucket, refilled continuously. Bounds how fast ONE client can burn
+  // upstream credits; the connection cap bounds how many clients there are.
+  let tokens = RPC_BURST;
+  let lastRefill = Date.now();
+
+  const rpcError = (id: unknown, code: number, message: string): void => {
+    if (client.readyState !== client.OPEN) return;
+    try {
+      client.send(JSON.stringify({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }));
+    } catch {
+      /* client is gone; the close handlers will clean up */
+    }
+  };
+
   client.on("message", (data, isBinary) => {
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+
+    // Everything below is the gate that used to be missing: this socket fronts
+    // a PAID upstream key, so a frame is forwarded only if it is a small,
+    // well-formed JSON-RPC call naming an allowlisted method, and only if this
+    // connection is within its rate budget. Binary frames are never RPC.
+    if (isBinary || buf.length > RPC_MAX_FRAME_BYTES) {
+      rpcError(null, -32600, "Invalid request");
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(buf.toString("utf8"));
+    } catch {
+      rpcError(null, -32700, "Parse error");
+      return;
+    }
+
+    const calls = Array.isArray(parsed) ? parsed : [parsed];
+    if (calls.length === 0 || calls.length > RPC_MAX_BATCH) {
+      rpcError(null, -32600, "Invalid request");
+      return;
+    }
+    for (const call of calls) {
+      const method = (call as { method?: unknown })?.method;
+      const id = (call as { id?: unknown })?.id;
+      if (typeof method !== "string" || !WS_ALLOWED_METHODS.has(method)) {
+        // Same posture as the HTTP proxy: an unknown or write method is
+        // refused outright rather than forwarded and paid for.
+        rpcError(id, -32601, "Method not allowed");
+        return;
+      }
+    }
+
+    const now = Date.now();
+    tokens = Math.min(RPC_BURST, tokens + ((now - lastRefill) / 1000) * RPC_PER_SEC);
+    lastRefill = now;
+    if (tokens < calls.length) {
+      rpcError((calls[0] as { id?: unknown })?.id, -32005, "Rate limit exceeded");
+      return;
+    }
+    tokens -= calls.length;
+
     if (!upstreamOpen) {
+      if (pending.length >= RPC_MAX_PENDING) {
+        closeBoth(1013, "too many buffered requests");
+        return;
+      }
       pending.push(buf);
       return;
     }
     try {
-      upstream.send(buf, { binary: isBinary });
+      upstream.send(buf, { binary: false });
     } catch {
       closeBoth(1011, "upstream send error");
     }

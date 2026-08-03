@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHash } from "node:crypto";
-import { extractEventsFromLogs } from "@playkaboom/sdk";
+import { assertProgramInvoked, extractEventsFromLogs } from "@playkaboom/sdk";
 import { verifyVrfSettle } from "@/server/verify-vrf";
 import { getConnection } from "@/server/connection";
+import { programId } from "@/server/env";
 import { jsonError } from "@/server/api-helpers";
 
 export const runtime = "nodejs";
@@ -45,7 +46,16 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
       return NextResponse.json({ error: "Transaction not found" }, { status: 404 });
     }
     const logs = tx.meta?.logMessages ?? [];
-    const events = extractEventsFromLogs(logs);
+    // A public fairness attestation must never rest on logs alone: any program
+    // can print our event discriminator. Require that OUR program was really
+    // invoked by this transaction, then decode only the logs it emitted.
+    if (!assertProgramInvoked(tx, programId())) {
+      return NextResponse.json(
+        { error: "Transaction does not invoke the Kaboom program" },
+        { status: 400 },
+      );
+    }
+    const events = extractEventsFromLogs(logs, programId());
     const settled = events.find((e) => e.kind === "GameSettled");
     if (!settled || settled.kind !== "GameSettled") {
       // VRF games emit NO Anchor events (vrf_mode.rs has zero emit! calls), so

@@ -10,6 +10,7 @@ import { programId } from "./env";
 import { getConnection } from "./connection";
 import { getHouseSigner } from "./turnkey-signer";
 import {
+  decodeGameSession,
   deriveGamePda,
   extractAnchorFrameworkError,
   isAccountNotInitializedError,
@@ -162,6 +163,64 @@ export async function sendHouseTx(
     }
     throw err;
   }
+}
+
+/**
+ * Block until a house transaction is irreversible enough to disclose its
+ * outcome, or report that it is not.
+ *
+ * Why this exists: `sendHouseTx` returns the moment the RPC accepts the bytes,
+ * so a route that answers immediately tells the player the result while the
+ * game is still `Playing` on chain. On a LOSING reveal that is exploitable —
+ * the player now knows they lost and can broadcast their own `cash_out` with a
+ * higher priority fee and land it before our settle, converting the loss into
+ * a full payout. Confirming first removes the window; the player learns the
+ * outcome only once it can no longer be changed.
+ *
+ * Falls back to reading the game account: if the PDA is gone or is no longer
+ * `Playing`, the round is decided regardless of what the status API says.
+ * Returns false if neither could be established inside the budget — callers
+ * must then fail closed and disclose nothing.
+ */
+export async function confirmOutcomeSettled(
+  signature: string,
+  player: PublicKey,
+  timeoutMs = 20_000,
+): Promise<boolean> {
+  const conn = getConnection();
+  const deadline = Date.now() + timeoutMs;
+  const [pda] = deriveGamePda(programId(), player);
+
+  while (Date.now() < deadline) {
+    try {
+      const { value } = await conn.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const st = value[0];
+      if (st?.err) return true; // settle failed; nothing was decided in the player's favour
+      if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") {
+        return true;
+      }
+    } catch {
+      /* transient RPC error — fall through to the account probe */
+    }
+
+    try {
+      // Authoritative even when the signature lookup is lagging: an absent or
+      // non-Playing game can no longer be cashed out.
+      const info = await conn.getAccountInfo(pda, "confirmed");
+      if (info === null) return true;
+      // Use the SDK decoder, never hand-rolled byte offsets: GameSession has
+      // `bump` before `status`, and an off-by-one here would silently read the
+      // wrong field and disclose an outcome that is still racing.
+      if (decodeGameSession(info.data).status !== "Playing") return true;
+    } catch {
+      /* ignore and retry */
+    }
+
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
 }
 
 export async function playerHasActiveGame(player: PublicKey): Promise<boolean> {
