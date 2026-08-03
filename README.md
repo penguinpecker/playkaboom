@@ -191,10 +191,13 @@ stay live during the cooldown, still earning or losing.
   game obligations vs vault assets, so the vault never accepts a bet it can't underwrite.
 - **VRF payout ceiling** — a VRF game takes the tighter of the vault-wide cap and
   `vrf_max_payout_bps`. This is the aggregate bound on a forged-outcome attack.
-- **Anti-inflation seed** — 1 SOL of locked units (carved from the house seed at
-  `initialize_v2`) stops the first depositor from gaming unit-value math.
-- **House LP position** — the operator holds its own position with a configurable minimum
-  share floor (default 50%) it cannot withdraw below without re-balancing.
+- **Anti-inflation seed** — `initialize_v2` can lock a tranche of units that no one can
+  withdraw, so the first depositor cannot game unit-value math.
+- **House LP position** — the operator holds its own position, and `min_house_share_bps`
+  can pin a floor below which it cannot withdraw without re-balancing.
+- **Per-user cap** — `max_user_position_bps` bounds any single depositor's share of the
+  vault. Like the two above it is owner-configured; the live value of every parameter is
+  on the [status page](https://status.playkaboom.gg) and in `/api/vault/state`.
 - **Treasury split** — 50% of each settle's house profit stays in the vault (raising unit
   value for every LP); the other 50% goes to the Squads treasury.
 - **Live config** — every cap is recomputed from current vault state at start time. No

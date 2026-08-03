@@ -1,230 +1,174 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot you can paste into a fresh session to pick up where the previous session left off. Refreshed **2026-05-12** (stuck-game release + referees-list UI + CRON rotation). Full session-by-session log lives in `records.txt`.
+A self-contained snapshot to pick up where the last session left off. Refreshed **2026-08-04** (README rewrite + git history scrub + live-config audit). Full session-by-session log lives in `records.txt` (local-only, gitignored).
 
-## STATUS — 2026-05-12 (mainnet, vault healed)
+## STATUS — 2026-08-04
 
-**Live on Solana mainnet at https://playkaboom.gg.** All admin/treasury/upgrade authorities on Squads 2/2. Hot game-ix signer on Turnkey HSM. The 2026-05-11 sweep audited every layer (program, SDK, API, frontend, indexer, RLS, build/CI, tests) via 8 parallel sub-agents; every HIGH finding has a fix shipped.
+**Live on Solana mainnet at <https://playkaboom.gg>.** Per-click VRF over MagicBlock ephemeral rollups is the default game mode and is armed on chain. Commit-reveal remains as the legacy path. All admin/treasury/upgrade authorities are on Squads 2-of-2; the hot game-ix signer is a Turnkey HSM. Public health page at <https://status.playkaboom.gg>.
 
 | Authority | Address | Type |
 |---|---|---|
 | `vault.owner` | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
 | `vault.treasury` | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
-| `vault.house_authority` | `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` | Turnkey HSM (game ixs only) |
 | BPF upgrade authority | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
+| `vault.house_authority` | `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` | Turnkey HSM (game ixs only) |
 | Squads multisig config | `H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm` | threshold 2-of-2, time_lock 0 |
-| Squads member 1 | `6wvvcCZ44f9AeJPC7k1VKMNdexCUsuwpaw1sZjyktGr1` | Initiate + Vote + Execute |
-| Squads member 2 | `EchyZCoLtfDjcpY7dWEAurmzyGqSHKGMeE2sKfpcg4MG` | Initiate + Vote + Execute |
-| Program ID (mainnet) | `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` | |
-| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned, ~12.29 SOL (post-release) |
+| Program ID | `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` | 41 instructions |
+| ProgramData | `8TTVAvxig6dQfLiHcDXrXUs8sjiGTAxk6viNPC1y1SJb` | |
+| Vault PDA | `9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK` | program-owned |
+| Vault V2 State | `6cKDKGz4qEhJRWJUjEFcVyvKGtYXD7duy2fEkLkaM3zb` | |
+| MagicBlock VRF queue | `5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc` | program constant |
+| Pinned ER validator | `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57` | in `VaultV2State` |
 | Deployer wallet | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | zero admin powers — fee-payer only |
 
-**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey can sign game ixs only (start/reveal/settle/refund/close); admin/treasury/upgrade all need Squads 2/2.
+**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey signs gameplay instructions only; admin, treasury and upgrade all need Squads 2-of-2.
 
-## Live config + economics (mainnet vault)
+## Live config — verified on chain 2026-08-04
 
-| Param | Value | Notes |
+Decode these yourself rather than trusting this table after a config change; the status page and `/api/vault/state` are always current.
+
+| Param | Value | Note |
 |---|---|---|
 | `house_edge_bps` | 200 (2.00%) | |
-| `max_bet_bps` | 200 (2% of vault) | At ~12.29 SOL vault → 0.246 SOL max |
-| `max_payout_bps` | **5000 (50% of vault)** ⚠️ | Industry std is 0.5–1%. Still queued (Squads 2/2 vote). |
-| `treasury_split_bps` | 5000 (50/50) | LP gets half, treasury gets half |
-| `maxUserPositionBps` | 1000 (10%) | Per-user LP cap; at 12.29 SOL → 1.228 SOL each |
-| Vault PDA balance | ~12.29 SOL | LP + obligations + accrued fees |
-| Vault health | 99.93% | post 2026-05-12 stuck-game release |
+| `max_bet_bps` | 200 (2% of vault) | |
+| `max_payout_bps` | **5000 (50% of vault)** ⚠️ | Biggest open risk. Industry std 0.5–1%. Still queued. |
+| `treasury_split_bps` | 5000 | 50/50 LP / treasury |
+| `vrf_mode_enabled` | 1 | armed |
+| `vrf_max_payout_bps` | 500 (5%) | VRF games take the tighter of this and `max_payout_bps` |
+| `min_health_bps` | 1000 (10%) | |
+| `withdraw_cooldown_slots` | 648,000 (3 days) | |
+| `min_lp_deposit` | 10,000,000 (0.01 SOL) | |
+| `seed_units` | **0** ⚠️ | Anti-inflation seed is NOT set |
+| `min_house_share_bps` | **0** ⚠️ | House share floor is DISABLED |
+| `max_user_position_bps` | **0** ⚠️ | Per-user LP cap is DISABLED — one depositor may take an unbounded share |
+| Vault balance | ~2.10 SOL | health 7382 bps |
+| `total_outstanding_max_payout` | 0.5488 SOL | ⚠️ 26% of the vault, and **all of it is one abandoned game ~81 days old** |
+| house units / total units | 314,505 / 330,509,106 | house holds **0.10%** — the bankroll is almost entirely other people's money |
 
-Math is provably correct on both sides: TS `calcMultiplierBps` and Rust `calc_multiplier` now share a 675-row fixture (`tests/fixtures/multiplier.json`) covering mine_count 1..15 × safe_reveals 0..(16-mc) × edge_bps {0, 100, 200, 500, 1000}. Both implementations assert against the fixture in CI; any drift breaks the build.
+The three zeroed LP guards and the stale obligation were surfaced by this session's audit and have **not** been changed. Each fix is a Squads vote.
+
+Multiplier math is `C(16,s)/C(16−m,s) × (1 − edge)`, edge applied once. Rust `calc_multiplier` and TS `calcMultiplierBps` both assert against `tests/fixtures/multiplier.json` (675 rows) in CI; drift breaks the build.
+
+## Game modes
+
+**Per-click VRF (default).** No layout is ever generated.
+1. `start_game_vrf` + session-key funding + `delegate_vrf` in **one atomic transaction** — a half-started game is not a reachable state.
+2. Each tap: `reveal_request_vrf` → oracle → `reveal_callback_vrf` writes raw randomness into the delegated `VrfGame`; `decide_mine()` derives the tile.
+3. `settle_and_undelegate_vrf` → `settle_vrf` **replays every recorded randomness value on L1**. Bet, mine count and edge come from the never-delegated `VrfClaim`; its `reserved` field is a hard payout cap.
+4. `refund_stalled_vrf` after `STALL_SLOTS`; abandoned games reclaimable after `ABANDON_SLOTS` (~24 h).
+
+**VRF startup overhead: 11,795,760 lamports (~0.0118 SOL) on top of the bet**, nearly all refundable when the round closes but required in the wallet at bet time. Breakdown: VrfClaim rent 1,371,120 · VrfGame rent 5,213,040 · session funding 2,000,000 · delegation 3,206,600 · fee ~10,000. This is a **12× onboarding floor** against the 0.001 SOL minimum bet — VrfGame rent and session funding are 61% of it and are the two levers worth pulling.
+
+**Commit-reveal (legacy).** Server commits `SHA-256(layout ‖ mine_count ‖ salt)`, Turnkey signs each reveal, `settle_game` rejects any settle whose hash doesn't match. Session tokens are bound to the on-chain commitment (see Security below).
 
 ## Stack & infra
 
 | Layer | Choice |
 |---|---|
-| Frontend | Next.js 15 (App Router), React 19, Tailwind, Privy embedded wallets |
-| RPC | Alchemy mainnet (deploy & user reads); public mainnet for fallback |
-| Indexer | Helius webhook → Supabase Postgres. Atomic SQL deltas (idx_apply_*) on every read-modify-write counter. INSERT-first dedupe with apply-error rollback. Settle handler retries on no-match (handles Helius out-of-order event delivery). |
-| Realtime | Railway WS relay (apps/realtime) on INSERT+UPDATE events; Supabase Realtime as Layer-2 fallback; TanStack 60s polling as Layer-3. |
-| House signing | Turnkey HSM — signs reveal/settle/refund/close ixs only |
-| Hosting | Vercel kaboomweb3-6280 account, project `playkaboom` |
-| Auto-deploy | **GH Actions, gated on CI success** (`.github/workflows/vercel-deploy.yml`) — triggers via `workflow_run` after CI completes with conclusion=success. Red CI = no deploy. |
-| DB | Supabase project `vrxeqgynejlnmwsifvml` |
-| Sensitive secrets | Vercel-only encrypted env (TURNKEY_*, SUPABASE_SERVICE_ROLE_KEY, PRIVY_APP_SECRET, SESSION_ENC_KEY, HELIUS_WEBHOOK_AUTH, CRON_SECRET). Local `.env.local` is public values only. |
+| Frontend | Next.js 15 App Router, React 19, Tailwind, Zustand, Privy embedded wallets |
+| Rollup | MagicBlock ephemeral rollups, `ephemeral-rollups-sdk` 0.15.5 (`vrf` feature) |
+| RPC | Alchemy mainnet (HTTP + WS) |
+| Indexer | Alchemy `logsSubscribe` push via the Railway relay → `/api/ingest` → Supabase. VRF settles emit no event, so they are mirrored explicitly at settle time. Cron sweep as backstop. |
+| Realtime | Railway WS relay (`apps/realtime`); Supabase Realtime as layer-2 fallback; 60s polling as layer-3 |
+| House signing | Turnkey HSM — gameplay ixs only |
+| Hosting | Vercel, `kaboomweb3` team (**never** penguinpeckers-projects) |
+| **Deploys** | **CLI-only. There is NO git integration — pushing to `main` deploys nothing.** |
+| DB | Supabase Postgres (project ref in `NEXT_PUBLIC_SUPABASE_URL`) |
+| Secrets | Vercel encrypted env, `Sensitive` (unreadable by API by design). Local keystore files under `~/.keystores/` — never in the repo. |
 
-## Testing posture (NEW as of 2026-05-11)
+## Deploying
 
-- **Math invariants (CI gate):** `cargo test -p kaboom --lib` runs Rust `multiplier_tests` against the 675-cell fixture. `npm run test` runs 690 vitest cases including the TS-side fixture parity test.
-- **Anchor integration:** `tests/anchor/` is a real workspace (`@playkaboom/anchor-tests`) with five tests against a local validator started by `anchor test`: happy path, double-start blocked, cashout-no-reveals, settle-wrong-layout, refund-too-early. Triggered by Anchor.toml's `[scripts] test` calling `tsx tests/anchor/runner.ts`. CI step is `continue-on-error: true` for first runs; remove once validator startup is reliable on the GH runner.
-- **DB invariants (nightly):** `.github/workflows/invariants.yml` runs `scripts/check-invariants.mjs` at 03:00 UTC. Asserts `multiplier_bps == calcMultiplier(safe_reveals, mine_count, 200)`, `popcount(mine_layout) == mine_count`, and SHA-256 commitment match for every settled row. Allow-list at `scripts/known-corruption-allow.txt` exempts the 17 legacy 2026-05-11-corrupted rows.
-- **Chain-only verifier CLI:** `node scripts/verify-sig.mjs <sig>` reproduces fairness proof from chain RPC alone. Use as authoritative source if `/verify/[sig]` ever disagrees.
-
-## Indexer reliability
-
-- INSERT-first dedupe in `ingestTransactions` (close TOCTOU of two concurrent Helius deliveries).
-- On apply-loop throw, DELETE the `processed_events` claim before rethrowing so cron retry can re-attempt.
-- All RMW counters (Lp*, ReferralAccrued/Claimed, StatsUpdated) go through atomic SQL functions (`idx_apply_*`) — no read-then-write race.
-- `idx_apply_game_settled` returns row count. Handler throws on 0 → claim is released → cron retries once cashout row exists (handles Helius out-of-order event delivery).
-- `uniq_games_unsettled_per_pda` partial unique index forbids two unsettled rows for the same PDA at the same slot.
-- Slot-monotonic guards on `player_stats`, `referrals`, `lp_positions` (`last_event_slot` column).
-
-## Recent shipped — 2026-05-12 / 2026-05-11
-
-(Newest first, all in `origin/main`. The CI/deploy gate landed in batch 3 — every commit after that REQUIRED CI green to deploy.)
-
-| Commit | What |
-|---|---|
-| `81c19bb` | **on-chain referees list + funnel cleanup + payout wording.** New auth-gated `GET /api/ref/referees/[wallet]` scans `PlayerStats` via `getProgramAccounts` memcmp on referrer at offset 107 → ground-truth list (wallet, games, wagered, payouts, last played). /referrals page renders this table under the funnel. Removed "Visits" stat from the funnel (`click_count` bump in `resolveAndCountVisit` is fire-and-forget, killed by Vercel serverless lifecycle — drop unreliable metric rather than fix). BetControls payout-preview wording: "Worst-case payout if you reveal all N safe tiles" → "Max payout if you clear all N safe tiles". Five operator diagnostics added under `scripts/` (health-diagnose, referrals-by, diagnose-user, check-stuck-game, show-referral). **`check-invariants` CI job FAILED on this SHA — 8 new MULT mismatches in production `games` data, unrelated to commit content; Vercel deploy gated until allowlist update or root-cause.** |
-| `7b02e4c` | **chain-truth gate on /api/reveal + /api/settle.** Fixes the 500-on-tile-click report: stale `gameToken` (from a closed PDA, or a tile-click landing before `start_game` propagated) no longer bubbles `AccountNotInitialized` as a 500. New `requireActiveGame()` probes the GameSession PDA at `confirmed` with 3×250 ms retry — absorbs the propagation race, deletes the server-side session and returns `409 { needsCleanup: true }` when the PDA is truly absent. `sendHouseTx` catches `SendTransactionError` and classifies the Anchor framework error (code 3012) as a typed `OnChainError` for TOCTOU safety. Client `revealTile` and `cashOut` now wire 409+`needsCleanup` into the existing `cleanupStuck` flow. SDK: `extractAnchorFrameworkError` + `isAccountNotInitializedError` decode both the structured AnchorError log line and the bare `custom program error: 0xbc4` fallback; 11 new unit tests cover real RPC log shapes. No UI changes. |
-| `f907d93` | auto-bundle `set_referrer` into the player's first `start_game` (single Privy signing prompt, atomic) |
-| `e6cf831` | `/install` route deep-linking to Solana dApp Store |
-| `8a5965f` | realtime relay broadcasts INSERT+UPDATE (was INSERT-only); applyIncoming merges in-place |
-| `9668104` | strip 13 debug console.log/warn from game flow |
-| `c73fdb7` | settle handler retries on no-match (out-of-order Helius delivery); backfill of `52mySrDaDM…` |
-| `c37c2bd` | anchor-tests workspace fix (excluded from turbo test; tsx for ESM bridge) |
-| `89e41e1` | real Anchor integration tests + workspace + CI wiring |
-| `b7761ff` | SSG hotfix: move `useToast` out of `PrivyAuthBridge` |
-| `d3e99ed` | vercel CLI unpin (v39 broke env-var auth) |
-| `7221a34` | auth 401/429 handlers + safe JSON parsing |
-| `8a8788a` | 675-cell TS↔Rust `calc_multiplier` fixture parity + `cargo test` in CI |
-| `15315b2` | realtime numReplicas=1, dyn priority fee, Helius payload cap, update_vault zero-key reject (source-only) |
-| `4a66f18` | DB hardening: slot guards, FORCE rls on 8 tables, unique-unsettled-per-PDA, idempotent reset migration |
-| `c2ee6ac` | **CI/deploy gate ENABLED.** Vercel deploy now requires CI green. CODEOWNERS, npm ci, vercel CLI pin, turbo secret-cache fix |
-| `802ed22` | sync-ref double-click guards on cashout / LP / Withdraw modal |
-| `e412f84` | indexer regression fix, /api/verify PDA cross-check, /api/ref/* chain verify + ratelimit, SDK error names, legacy-row cleanup migration |
-| `0a428ad` | hotfix: ratelimit fail-open when Upstash env missing (morning regression) |
-
-## Pending / queued for next session
-
-**On-chain (each is a Squads 2/2 vote):**
-1. **`update_vault`: max_payout_bps 5000 → 100.** Still the biggest survival risk. 50% drain on a single max-bet 12-mine win, P ≈ 0.055%/attempt. Industry std is 0.5–1%.
-2. **`update_v2_config`: min_health_bps 1000 → 2000.** Auto-pause earlier when stressed.
-3. **Program upgrade** to activate the source-only `update_vault` zero-key guard (`require!(auth != Pubkey::default())` added 2026-05-11 in lib.rs:933-941; not on chain yet).
-
-**Indexer math drift (NEW, 2026-05-12):**
-- `check-invariants.mjs` flagged 8 NEW multiplier_bps mismatches in `games` table on commit `81c19bb` — signatures `2JCQ8R…`, `4eRzpLUz…`, `GkN1KS…`, `si64AQ…`, `2Ps23V…`, `5fJwVR…`, `59M9kT…`, `5Ls2de…`. One row (`4eRzpLUz…`) is the failed-first-settle of the 2026-05-12 stuck game. **Decide:** extend `scripts/known-corruption-allow.txt` (same pattern as the 17-row 2026-05-11 allowlist) OR root-cause the indexer math drift and write a one-shot backfill. Vercel deploy is gated until resolved.
-- Related: `total_outstanding_max_payout` ate ~45% of vault liquidity for 2.5h on 2026-05-12 (single stuck Won-but-unsettled game). Cleared via `/api/admin/release-stuck-obligations`. **Action item:** add a cron-watcher that pages if a Won-unsettled game persists > 5 min, so the release endpoint fires automatically.
-
-**Operational (no code):**
-- **CRON_SECRET handling:** the env var is `type: sensitive` in Vercel — unrecoverable from outside runtime even with a valid CLI/API token. Firing the admin/cron endpoints from local tooling currently requires rotating the secret (PATCH `/v9/projects/.../env/<id>`, redeploy, fire). If frequent ops use is expected, either (a) keep `CRON_SECRET` non-sensitive, or (b) script the rotate-redeploy-fire flow.
-- **GitHub branch protection rule:** Settings → Branches → `main` → enable "Require status checks (CI) to pass" + "Require review from Code Owners". CODEOWNERS file is committed but advisory until you toggle.
-- **Turnkey console policy:** pin `programId=Kaboom` + ix discriminator allow-list. Belt-and-suspenders; current on-chain account constraints already block non-game ixs.
-- **Provision Upstash Redis** (Vercel Marketplace) if HTTP-layer rate limiting is wanted. Code activates immediately once `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` appear in Vercel env — no redeploy needed.
-- **Logger transport:** pick Axiom / Better Stack / Logflare, wire `pino-*-send`. Currently stdout-only (24h Vercel log retention).
-- **Anchor test `continue-on-error`**: remove the flag from `.github/workflows/ci.yml` once first runs prove the validator+toolchain works on the GH runner.
-
-**Code (lower priority):**
-- Move `gameToken` from localStorage to sessionStorage (defense-in-depth: XSS-readable mine layout for the active session).
-- WinModal payout derived client-side from `calcMultiplier` — fragile if package versions ever fork. Pull from server response.
-- `/api/rpc/[cluster]` tighten `getSignaturesForAddress`/`getMultipleAccounts`/`sendTransaction` limits.
-- `/api/verify/[signature]` regex `{64,128}` too loose; should be `{86,90}`.
-- Replace runner's PDA-derivation smoke tests with full integration test count (currently 5; the audit listed 10 high-priority cases).
-
-## How to deploy
-
-**Auto:** push to main → CI runs → on success, Vercel Deploy auto-fires via `workflow_run` trigger. **No deploy if CI fails.** Concurrency group cancels in-flight runs on newer pushes.
-
-**Manual fallback** (if Actions is broken or you want to skip CI):
 ```bash
-cd ~/Projects/playkaboom
-# Token persisted at root .env.local as VERCEL_TOKEN= (gitignored)
-source <(grep ^VERCEL_TOKEN= .env.local)
-npx vercel --prod --token="$VERCEL_TOKEN" --yes
+./scripts/deploy.sh                          # build → deploy → verify, all or nothing
+./scripts/deploy.sh "toast copy,identifier"  # assert these RUNTIME strings landed in the bundle
+./scripts/verify-deploy.sh                   # read-only re-verify of production
+./scripts/watch-deploy.sh --once             # watch for the next deploy and verify it
 ```
 
-**Apply a Supabase migration:**
-```bash
-cd ~/Projects/playkaboom
-supabase db push --linked
-```
+`verify-deploy.sh` checks READY **and** aliased-to-domain, env vars decrypt non-empty, marker strings present in the served bundle, program live on chain, VRF client flag vs on-chain gate, and CSP allows the rollup endpoints.
 
-**One-shot indexer rescue** (now requires confirm-prefix matching current cursor):
-```bash
-# Read current cursor first
-gh workflow run index-events.yml --repo penguinpecker/playkaboom \
-  --ref main -f confirm=<first-8-chars-of-cron_indexer_state.last_signature>
-```
+Two traps that have each cost a session:
+- **Markers must be runtime strings.** Minification strips comments, so a comment marker always reports a false FAIL.
+- **Run the local build before deploying.** Next prerenders `/play`, so a hook that throws during render fails the build while typechecking clean.
 
-**Run integration tests locally:**
-```bash
-cd ~/Projects/playkaboom && anchor test
-```
+Config that lives outside the repo (it is public): `~/.keystores/kaboom-vercel.ids` (project + team id), `~/.keystores/vercel-kaboomweb3.token`, `~/.keystores/kaboom-deploy-rpc.txt`, `~/.keystores/kaboom-relay-secrets.env`.
 
-## Critical lessons (carried forward)
+## Security posture
 
-1. **Squads V4 Tx Builder Raw data field expects base58, NOT hex.** (Saved as feedback memory.)
-2. **Vercel Sensitive env vars are non-decryptable by API or `vercel env pull`.**
-3. **GitHub Actions secret-masking breaks `--token=${{ secrets.X }}` inline.** Use `env:` block.
-4. **`gh secret set X --body -` sets the value to literal "-".** Omit `--body`.
-5. **`vercel build --prebuilt` fails for Next routes that need runtime ctx.** Use `vercel deploy --prod`.
-6. **Don't bundle untracked local files into commits even on "push the rest".** (Saved as feedback memory.)
-7. **No secret fragments in committed docs** — even truncated forms leak identity. (Saved as feedback memory.)
-8. **Operator-first deploy, multisig handoff at the literal end.** (Saved as feedback memory.)
-9. **Audit scope must include indexer + UI, not just the program.** (NEW 2026-05-11; saved as feedback memory.) Solana audit firms default to scoping the Anchor program only. The display layer matters too — a self-consistent SHA-256 verification of WRONG game data still passes math but lies to the user.
-10. **Verify env vars + critical paths BEFORE shipping fail-closed changes.** (NEW 2026-05-11; saved as feedback memory.) Env-var names in memory ≠ configured. Check the live env with `vercel env ls` and hit the endpoint before pushing to a live-auto-deploy main.
-11. **PDA reuse + non-unique indexer matching → cross-instance bleed.** (Internalized 2026-05-11.) Whenever an indexer's UPDATE keys on a reusable PDA, ensure at most one row can match: partial unique index, slot guard, or single-row subquery (most-recent slot ≤ event_slot).
-12. **Helius can deliver events out of order.** Settle handlers must self-heal when the cashout row isn't yet present — throw on no-match, release the dedupe claim, let the cron's next pass retry.
+- Governance 2-of-2 on owner, treasury and upgrade authority; Turnkey confined to gameplay.
+- **Session tokens are commitment-bound** — `/api/reveal` compares the token's commitment against the live on-chain one and returns 409 on mismatch. This closed a vault-drain vector where a token from a settled round could be replayed against a new game.
+- VRF fail-closed: oracle queue is a program constant, validator is pinned in vault state, and both `vrf_mode_enabled` and a non-zero pinned validator must be set deliberately before any VRF game can open.
+- `settle_vrf` trusts no committed rollup value that prices a payout.
+- CSP must list `magicblock.app` — its absence silently killed every rollup request in the browser and produced four separate "the game keeps failing" reports with a healthy backend.
+- Client version guard polls `/api/version` and reloads a stale tab when idle (banner mid-round), so the operator and the code are never on different builds.
 
-## Repo layout (for orientation)
+## Git state — IMPORTANT, read before pushing
+
+
+
+- **Not pushed.** This needs a force-push to a public `main`, which is irreversible on the remote — get an explicit go-ahead. A force-push deploys nothing (no git integration).
+- Remote also carries 7 stale feature branches and 2 tags with the same trailers; all rewritten locally, same decision pending.
+- Note: `git filter-branch -- --all` rewrites your backup branch too. `refs/original/` is the real safety net.
+
+## Pending / queued
+
+**Squads 2-of-2 votes:**
+1. `max_payout_bps` 5000 → 100. Largest survival risk.
+2. Release the 0.5488 SOL stale obligation (26% of the vault, ~81 days old).
+3. Decide `max_user_position_bps` / `min_house_share_bps` / `seed_units`, all currently 0.
+4. Program upgrade for the queued source-only guards.
+5. Bankroll top-up (~86 SOL to underwrite all mine counts at current caps).
+
+**Local / no vote needed:**
+- LP P&L SQL backfill.
+- `LICENSE` file does not exist but the README claims MIT and `package.json` has no license field. Add the MIT text or drop the claim.
+- Shrink VRF startup overhead: session funding is a one-line client constant and looks generous for a rollup where fees are ~0; VrfGame account size is a program change.
+- Force-push decision above.
+
+## Repo layout
 
 ```
 playkaboom/
-├── apps/web/                  Next.js 15 app + API routes
-│   ├── src/app/api/cron/      index-events, vault-health
-│   ├── src/app/api/admin/     backfill-points, release-stuck-obligations
-│   ├── src/server/            indexer.ts, inline-ingest.ts, points.ts,
-│   │                          turnkey-signer.ts, auth.ts, ratelimit.ts,
-│   │                          logger.ts (wide redact list)
-│   └── src/components/        Navbar, Footer, modals, game/, ui/,
-│                              providers/{web3,auth-toast-bridge,toast}
-├── apps/realtime/             Railway WS relay (INSERT+UPDATE on `games`)
-├── programs/kaboom/src/lib.rs Anchor program + #[cfg(test)] multiplier_tests
-├── packages/sdk/              TS ix builders, account/event decoders,
-│                              errors.ts (all ~42 on-chain variants)
-├── packages/shared/           Zod schemas + multiplier math + constants
-├── supabase/migrations/       Postgres migrations (atomic idx_apply_*,
-│                              FORCE rls, idempotent guards)
-├── tests/
-│   ├── anchor/                Real integration tests (workspace pkg)
-│   ├── sdk/                   Vitest (690 cases incl. fixture parity)
-│   └── fixtures/              multiplier.json (TS↔Rust drift oracle)
-├── scripts/                   check-invariants.mjs, verify-sig.mjs,
-│                              audit-multipliers.mjs, ops scripts
-├── .github/
-│   ├── CODEOWNERS             advisory until branch-protection toggled
-│   └── workflows/             ci.yml (gates deploy via workflow_run),
-│                              vercel-deploy.yml (workflow_run-triggered),
-│                              invariants.yml (nightly DB assert),
-│                              codeql.yml, vault-health.yml,
-│                              index-events.yml (?confirm guard),
-│                              release-stuck-obligations.yml (confirm-input)
-├── records.txt                full session log (≈3500 lines)
-└── HANDOFF.md                 this file
+├── apps/
+│   ├── web/                    Next.js 15 app + API routes + indexer
+│   │   ├── src/app/api/        commit, reveal, settle, vrf/*, vault/*, status,
+│   │   │                       version, ref/*, cron/*, ingest, rpc/*, verify/*
+│   │   ├── src/lib/vrf/        rollup client — atomic start, confirm polling, undelegate
+│   │   ├── src/server/         env, auth, session-store, indexer, solana, turnkey,
+│   │   │                       verify-vrf, ratelimit
+│   │   ├── src/hooks/          use-vrf-game (rollup state machine), use-game-actions
+│   │   └── src/middleware.ts   status-subdomain host isolation
+│   └── realtime/               Railway WS relay + Alchemy logsSubscribe ingest
+├── programs/kaboom/src/
+│   ├── lib.rs                  vault, commit-reveal, LP, referrals, owner ops
+│   └── vrf_mode.rs             VrfClaim/VrfGame, delegation, per-click VRF, L1 replay
+├── packages/sdk/               ix builders, decoders, PDAs, vrf, verify
+├── packages/shared/            constants + zod schemas + multiplier math
+├── supabase/migrations/
+├── scripts/                    deploy.sh, verify-deploy.sh, watch-deploy.sh + ops scripts
+├── docs/security/              audit fix threads
+├── tests/                      Vitest + Anchor integration + multiplier fixture
+├── records.txt                 full session log — LOCAL-ONLY, gitignored
+├── learnings.txt               durable lessons — LOCAL-ONLY, gitignored
+└── HANDOFF.md                  this file (tracked)
 ```
 
-## Quick verification commands
+## Quick verification
 
 ```bash
-# Live health
-curl -sS https://www.playkaboom.gg/api/health | python3 -m json.tool
+# Public health — every dependency in one request
+curl -sS https://status.playkaboom.gg/api/status | python3 -m json.tool
 
-# Live verifier on a specific cashout sig
-curl -sS "https://www.playkaboom.gg/api/verify?sig=<sig>" | python3 -m json.tool
+# Vault state
+curl -sS https://www.playkaboom.gg/api/vault/state | python3 -m json.tool
 
 # Chain-only fairness check (no DB)
 node scripts/verify-sig.mjs <sig>
 
-# DB invariants (with anon key)
-SUPABASE_URL=https://vrxeqgynejlnmwsifvml.supabase.co \
-SUPABASE_ANON_KEY=<anon-from-env> \
-ALLOWED_MISMATCH_SIGNATURES_PATH=scripts/known-corruption-allow.txt \
-node scripts/check-invariants.mjs
-
-# Vault state on-chain
-solana account 9qDnHBWKvo5CjFk3mZmSFS3pq8bLfGSmTtXP6gHeeWAK \
-  --url https://api.mainnet-beta.solana.com
-
-# Latest deploy + CI status
-gh run list --repo penguinpecker/playkaboom --limit 5
+# Production, end to end
+./scripts/verify-deploy.sh
 
 # Math tests
-cargo test -p kaboom --lib                 # 5 Rust cases
-npm run test --workspace=@playkaboom/sdk-tests   # 690 TS cases
+cargo test -p kaboom --lib
+npm run test
 ```
