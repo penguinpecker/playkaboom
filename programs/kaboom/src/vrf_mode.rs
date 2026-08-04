@@ -351,6 +351,45 @@ pub fn start_game_vrf(
 /// delegation succeeds and the game becomes unreachable, with the bet locked
 /// until `admin_release_vrf_claim`. The pin and the ER endpoint the app talks to
 /// must always name the same node.
+/// Delegation is only legal for a game that is GENUINELY STILL IN PLAY on L1.
+///
+/// Without this, a player whose client had already committed a LOST game back
+/// to L1 could front-run the operator's `settle_vrf` with a re-delegation: the
+/// hand-off zeroes the L1 copy (and zero == `VRF_PLAYING`), after which settle
+/// fails its owner check and refund fails `GameStillDelegated`, so the loss can
+/// never be booked and the house is eventually forced to refund a lost bet via
+/// `admin_release_vrf_claim`. Loss-withholding must not be exercisable AFTER
+/// the result has already landed.
+///
+/// Ownership is checked FIRST, for the same reason `refund_stalled_vrf` does
+/// it: while delegated, the stale zero-filled L1 copy reads as `VRF_PLAYING`,
+/// so the status byte only means anything once the account is back under
+/// program ownership. Under program ownership the bytes cannot be forged —
+/// only this program's L1 instructions and the delegation program's undelegate
+/// finalization (of state committed under the owner-set `vrf_validator`, which
+/// must sign every commit) can write them — so a terminal status is sticky
+/// until `settle_vrf` consumes it.
+fn check_vrf_game_delegable(owner: &Pubkey, data: &[u8]) -> Result<()> {
+    require!(owner == &crate::ID, KaboomError::GameStillDelegated);
+    require!(data.len() >= VRF_GAME_MIN_RAW_LEN, KaboomError::BadGameAccount);
+    // The context types `game` as a bare AccountInfo (seed-constrained only),
+    // so nothing else proves these bytes are a VrfGame. Without this an account
+    // squatted at the PDA — zero-filled, therefore reading as status Playing,
+    // pending false — would sail through the checks below and be delegated.
+    require!(
+        data[..8] == *VrfGame::DISCRIMINATOR,
+        KaboomError::BadGameAccount
+    );
+    require!(
+        data[VRF_GAME_STATUS_OFFSET] == VRF_PLAYING,
+        KaboomError::GameAlreadyResolved
+    );
+    // A game undelegated mid-request must not re-enter the rollup behind a
+    // dead oracle callback; it fails fast here and recovers via refund instead.
+    require!(data[VRF_GAME_PENDING_OFFSET] == 0, KaboomError::RevealPending);
+    Ok(())
+}
+
 pub fn delegate_vrf(ctx: Context<DelegateVrf>) -> Result<()> {
     let pinned = ctx.accounts.v2_state.vrf_validator;
     require!(pinned != Pubkey::default(), KaboomError::VrfValidatorNotSet);
@@ -358,6 +397,12 @@ pub fn delegate_vrf(ctx: Context<DelegateVrf>) -> Result<()> {
     // one — so a mismatch fails loudly instead of silently delegating elsewhere.
     if let Some(passed) = ctx.remaining_accounts.first() {
         require!(passed.key() == pinned, KaboomError::WrongVrfValidator);
+    }
+    // Scoped so the data borrow is released before the CPI below.
+    {
+        let game_info = ctx.accounts.game.to_account_info();
+        let data = game_info.try_borrow_data()?;
+        check_vrf_game_delegable(game_info.owner, &data)?;
     }
     ctx.accounts.delegate_game(
         &ctx.accounts.player,
@@ -1151,3 +1196,84 @@ pub struct AdminReleaseVrfClaim<'info> {
     pub v2_state: Box<Account<'info, VaultV2State>>,
 }
 
+
+/// F14 — written AS THE ATTACK. Each case builds the exact L1 byte image the
+/// delegation program finalizes after a commit, then tries to re-delegate it.
+#[cfg(test)]
+mod delegate_guard_tests {
+    use super::*;
+
+    /// The L1 image of a VrfGame: Anchor discriminator, then the fields whose
+    /// offsets the guard reads. Only the bytes under test need to be real.
+    fn l1_image(status: u8, pending: u8) -> Vec<u8> {
+        let mut data = vec![0u8; VRF_GAME_MIN_RAW_LEN];
+        data[..8].copy_from_slice(VrfGame::DISCRIMINATOR);
+        data[VRF_GAME_STATUS_OFFSET] = status;
+        data[VRF_GAME_PENDING_OFFSET] = pending;
+        data
+    }
+
+    /// THE ATTACK: the client has already committed the game back to L1 as
+    /// LOST. Before the operator's settle_vrf lands, the player front-runs it
+    /// with delegate_vrf to push the loss back into the rollup, where it can
+    /// never be booked — settle fails its owner check, refund fails
+    /// GameStillDelegated, and the house is eventually forced to refund a bet
+    /// it won. Must be rejected.
+    #[test]
+    fn redelegating_a_committed_loss_is_rejected() {
+        let data = l1_image(VRF_LOST, 0);
+        assert!(check_vrf_game_delegable(&crate::ID, &data).is_err());
+    }
+
+    /// Same move on a win: re-delegating after the result landed must also be
+    /// refused, or the player can withhold a settled game to dodge the
+    /// treasury cut and keep the reservation pinned.
+    #[test]
+    fn redelegating_a_committed_win_is_rejected() {
+        let data = l1_image(VRF_WON, 0);
+        assert!(check_vrf_game_delegable(&crate::ID, &data).is_err());
+    }
+
+    /// A still-delegated account is stale by design: the hand-off zeroes it,
+    /// and zero reads as Playing. Ownership must be checked BEFORE the status
+    /// byte or the guard reads a lie.
+    #[test]
+    fn a_still_delegated_game_is_rejected_before_its_status_is_trusted() {
+        let dlp = Pubkey::new_unique();
+        // Zero-filled exactly as the delegation hand-off leaves it: status
+        // byte reads VRF_PLAYING, which would otherwise pass.
+        let data = vec![0u8; VRF_GAME_MIN_RAW_LEN];
+        assert!(check_vrf_game_delegable(&dlp, &data).is_err());
+    }
+
+    /// F2 interaction: `game` is a bare AccountInfo, so a squatted zero-filled
+    /// account at the PDA reads as status Playing / pending false. Only the
+    /// discriminator check stops it being delegated.
+    #[test]
+    fn a_squatted_zero_discriminator_account_is_rejected() {
+        let data = vec![0u8; VRF_GAME_MIN_RAW_LEN];
+        assert!(check_vrf_game_delegable(&crate::ID, &data).is_err());
+    }
+
+    /// A draw in flight must not re-enter the rollup behind a dead callback.
+    #[test]
+    fn a_game_with_a_reveal_pending_is_rejected() {
+        let data = l1_image(VRF_PLAYING, 1);
+        assert!(check_vrf_game_delegable(&crate::ID, &data).is_err());
+    }
+
+    /// A truncated account must not be read past its end.
+    #[test]
+    fn a_short_account_is_rejected_without_panicking() {
+        let data = vec![0u8; 8];
+        assert!(check_vrf_game_delegable(&crate::ID, &data).is_err());
+    }
+
+    /// The honest case still delegates: undelegated, real VrfGame, in play,
+    /// nothing pending.
+    #[test]
+    fn an_in_play_undelegated_game_still_delegates() {
+        let data = l1_image(VRF_PLAYING, 0);
+        assert!(check_vrf_game_delegable(&crate::ID, &data).is_ok());
+    }
+}
