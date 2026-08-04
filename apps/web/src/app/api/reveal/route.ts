@@ -52,6 +52,7 @@ export async function POST(req: NextRequest) {
       throw new ApiError(409, "Tile already revealed");
     }
 
+
     const playerPk = new PublicKey(body.player);
     const housePk = housePubkey();
     const ctx = { programId: programId() };
@@ -90,9 +91,15 @@ export async function POST(req: NextRequest) {
     // unique per round. Comparing it is exactly what
     // /api/admin/release-stuck-obligations already does before it trusts a
     // session, and it is what this hot path was missing.
-    const onChainCommitment = Buffer.from(
-      decodeGameSession(onChainGame.data as Buffer).commitment,
-    ).toString("hex");
+    // Decode ONCE and treat the chain as truth for everything it records.
+    // The encrypted session is a convenience copy: two reveals racing each
+    // other both load it, both append their own tile and both save, so one
+    // tile is silently dropped (last write wins). Every check below that was
+    // computed from the session inherited that drift — which is how a player
+    // could pass the perfect-game guard, clear the board on chain, and strand
+    // the whole bet (status Won, cash_out reverts, settle pays nothing).
+    const chainGame = decodeGameSession(onChainGame.data as Buffer);
+    const onChainCommitment = Buffer.from(chainGame.commitment).toString("hex");
     if (session.commitment !== onChainCommitment) {
       // Do NOT delete the server-side session: the on-chain game is real and
       // may still be playable with the CORRECT token. Only the caller's token
@@ -100,6 +107,13 @@ export async function POST(req: NextRequest) {
       throw new ApiError(409, "That game token is for a different round — start a new round.", {
         needsCleanup: true,
       });
+    }
+
+    // Same reason: the chain knows every tile that actually landed, including
+    // one this session copy never recorded. Re-revealing would fail on chain
+    // anyway; catching it here keeps the house from paying for a doomed tx.
+    if ((chainGame.revealedMask & (1 << body.tileIndex)) !== 0) {
+      throw new ApiError(409, "Tile already revealed");
     }
 
     const { isMine, updated } = checkTile(session, body.tileIndex);
@@ -112,10 +126,12 @@ export async function POST(req: NextRequest) {
     // the player must `cash_out` first to claim. Mine reveals are not
     // affected (those auto-settle into Lost).
     if (!isMine) {
-      const newSafeReveals = updated.reveals.filter(
-        (t) => (updated.mineLayout & (1 << t)) === 0,
-      ).length;
-      const totalSafe = GRID_SIZE - session.mineCount;
+      // Counted from the CHAIN, not the session: `safe_reveals` on the game
+      // account is what the on-chain handler compares against when it decides
+      // to auto-flip the game to Won, so it is the only count that can predict
+      // that flip. A session that lost a concurrent write reports fewer.
+      const newSafeReveals = chainGame.safeReveals + 1;
+      const totalSafe = GRID_SIZE - chainGame.mineCount;
       if (newSafeReveals >= totalSafe) {
         throw new ApiError(
           409,
@@ -186,7 +202,9 @@ export async function POST(req: NextRequest) {
       signature = await sendHouseTx([revealIx]);
     }
 
-    const safeReveals = updated.reveals.filter((t) => (updated.mineLayout & (1 << t)) === 0).length;
+    // Report the chain's count (plus this reveal when it was safe) so the
+    // multiplier the player sees matches what cash_out will actually pay.
+    const safeReveals = isMine ? chainGame.safeReveals : chainGame.safeReveals + 1;
 
     logger.info(
       { player: body.player, tile: body.tileIndex, isMine, sig: signature },
