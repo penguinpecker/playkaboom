@@ -29,14 +29,27 @@ export const CLOSE_UNSETTLED_EXPIRY_SLOTS = 38;
 export const MIN_BET_LAMPORTS = 1_000_000n; // 0.001 SOL
 
 /** Mine count selector options surfaced in the UI.
- * Final set [1, 3, 5, 12, 15] picks values from both halves of the symmetric
+ * Set [1, 3, 5, 12] picks values from both halves of the symmetric
  * Pascal-triangle multiplier curve while skipping the central peaks. New
  * bottleneck = 5 mines (4280× max) requiring ~8.6 SOL vault for a 0.001 min
  * bet — much friendlier seed than including 8 (~25 SOL) or 10 (~16 SOL).
- * 15 mines mirrors 1 mine's multiplier (15.68×) but as a high-variance
- * single-reveal mode (1 safe tile out of 16).
+ *
+ * 15 IS WITHDRAWN AND MUST NOT BE RESTORED UNTIL THE PROGRAM IS UPGRADED.
+ * A 15-mine board has exactly one safe tile, so `totalSafe` is 1 and the
+ * perfect-game guard in /api/reveal (which refuses to dispatch the LAST safe
+ * reveal, because the on-chain full-clear branch flips status to Won and then
+ * pays nothing) fires on the FIRST reveal. The reveal never reaches the
+ * chain, `safe_reveals` stays 0, and `cash_out` reverts NoTilesRevealed — so
+ * a 15-mine round has no winning path at all. Its only outcomes are a mine
+ * (total loss, 15/16 of the time) or an expiry refund at 1×, i.e. an expected
+ * return near 6% of stake against an advertised ~98%.
+ *
+ * Restore it in the same change that makes the on-chain full-clear branch pay,
+ * not before. `MAX_MINES` is deliberately left at 15: the program still
+ * accepts that count and the multiplier fixtures still assert it, so nothing
+ * about existing games or the math tests changes.
  */
-export const MINE_OPTIONS = [1, 3, 5, 12, 15] as const;
+export const MINE_OPTIONS = [1, 3, 5, 12] as const;
 
 /** Default vault config the house deploys with. Mirrors program caps. */
 export const DEFAULT_HOUSE_EDGE_BPS = 200; // 2.00%

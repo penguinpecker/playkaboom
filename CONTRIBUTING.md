@@ -23,5 +23,7 @@
 
 ## Reporting security issues
 
-Email `security@playkaboom.example` — please don't open public issues for vulnerabilities.
+Report privately via GitHub's private advisory form:
+<https://github.com/penguinpecker/playkaboom/security/advisories/new>
+Please don't open public issues for vulnerabilities.
 See [`SECURITY.md`](./SECURITY.md) for the threat model.

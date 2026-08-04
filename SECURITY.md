@@ -1,5 +1,19 @@
 # Security model
 
+## Reporting a vulnerability
+
+Report privately through GitHub's private advisory form:
+<https://github.com/penguinpecker/playkaboom/security/advisories/new>
+
+Please do **not** open a public issue for a vulnerability. PlayKaboom holds
+real user funds on Solana mainnet, so a public report is a public exploit
+until the fix ships. We will acknowledge your report and keep you updated
+through the advisory thread.
+
+In scope: the on-chain program, the web app and its API routes, the indexer,
+and the realtime relay. Include the concrete path from an attacker-controlled
+input to the impact — that is what lets us reproduce and fix it quickly.
+
 ## Threat model
 
 | Actor | Powers |
@@ -7,7 +21,7 @@
 | Player | Place bets, click tiles, cash out, refund expired games |
 | House authority | Generate mine layouts, reveal tiles, settle games, push proofs on-chain |
 | Owner | Initialize vault, withdraw house profits, update config, pause |
-| Treasury | Receives house withdrawals (separate key from owner) |
+| Treasury | Receives house withdrawals. NOTE: on mainnet the treasury is the SAME Squads 2-of-2 vault PDA as the owner, not a separate key — verify current values on chain rather than trusting this table |
 | Attacker | Anyone — including a hostile player or compromised house key |
 
 ### Critical invariant

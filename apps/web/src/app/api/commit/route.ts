@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
-import { GRID_SIZE, MIN_BET_LAMPORTS, StartGameInput, calcMultiplierBps } from "@playkaboom/shared";
+import {
+  MINE_OPTIONS,
+  GRID_SIZE,
+  MIN_BET_LAMPORTS,
+  StartGameInput,
+  calcMultiplierBps,
+} from "@playkaboom/shared";
 import {
   buildStartGame,
   decodeVault,
@@ -87,6 +93,17 @@ export async function POST(req: NextRequest) {
     const betLamports = BigInt(body.betLamports);
     if (betLamports < MIN_BET_LAMPORTS) {
       throw new ApiError(400, "Bet below minimum");
+    }
+
+    // MINE_OPTIONS is enforced HERE, not only in the picker. The request
+    // schema accepts anything in [MIN_MINES, MAX_MINES], so dropping a value
+    // from the UI does not stop a crafted POST from opening that game — and a
+    // withdrawn value is withdrawn because it is unsafe to play (see the note
+    // on MINE_OPTIONS: a 15-mine board cannot pay a win until the on-chain
+    // full-clear branch is fixed). A client-side list must never be the only
+    // thing standing between a player and an unwinnable round.
+    if (!(MINE_OPTIONS as readonly number[]).includes(body.mineCount)) {
+      throw new ApiError(400, "That mine count is not available.");
     }
     const lamportsBig = BigInt(vaultLamports);
     if (lamportsBig <= VAULT_RENT_LAMPORTS_FLOOR) {

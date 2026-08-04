@@ -1,0 +1,11 @@
+# PlayKaboom — security contact
+#
+# PlayKaboom is a real-money on-chain game. If you have found a vulnerability
+# in the program, the web app, or the indexer, please report it privately
+# through the link below and give us a chance to fix it before disclosure.
+
+Contact: https://github.com/penguinpecker/playkaboom/security/advisories/new
+Policy: https://github.com/penguinpecker/playkaboom/blob/main/SECURITY.md
+Preferred-Languages: en
+Canonical: https://playkaboom.gg/.well-known/security.txt
+Expires: 2027-08-04T00:00:00.000Z
