@@ -61,6 +61,21 @@ body {
   clip-path: polygon(0 0, 95% 0, 100% 5%, 100% 100%, 5% 100%, 0 95%);
 }
 
+/* Same cut as .stealth-card, but a FIXED size instead of a percentage, so a
+   wide chip and a narrow one get identical corners. On small elements the
+   percentage version scales with width and the wide ones end up visibly more
+   chamfered than their neighbours. */
+.chip-chamfer {
+  clip-path: polygon(
+    0 0,
+    calc(100% - 8px) 0,
+    100% 8px,
+    100% 100%,
+    8px 100%,
+    0 calc(100% - 8px)
+  );
+}
+
 .tile {
   transition: all 0.2s ease;
   perspective: 600px;

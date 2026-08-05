@@ -3,22 +3,28 @@ import Link from "next/link";
 import { useModal } from "@/hooks/useModal";
 import { PROGRAM_ID } from "@/lib/cluster";
 
-// Was text-[7px] at 20% opacity — present in the DOM but effectively
-// unreadable, which is why the terms, privacy and social links read as
-// missing. Kept deliberately quiet (this is a footer, not a call to action)
-// but at a size and contrast a person can actually resolve.
-const linkCls =
-  "font-headline text-[10px] tracking-widest uppercase text-on-surface-variant/60 hover:text-primary transition-colors";
+// Footer links are chips, not bare text. They started at 7px and 20% opacity —
+// in the DOM but unreadable — so terms, privacy and the socials effectively did
+// not exist for anyone looking at the page. Chamfered so they speak the same
+// console language as the game cards, and lit on hover with the same primary
+// glow used elsewhere.
+const chipCls =
+  "chip-chamfer font-headline text-[11px] tracking-widest uppercase px-4 py-2.5 " +
+  "bg-surface-container-high text-on-surface-variant/85 " +
+  "transition-all duration-200 " +
+  "hover:bg-surface-container-highest hover:text-primary " +
+  "hover:shadow-[0_0_20px_rgba(164,201,255,0.28)] " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60";
 
 export function Footer() {
   const { open } = useModal();
   return (
-    <footer className="flex flex-wrap justify-between items-center px-4 md:px-6 py-2.5 gap-x-4 gap-y-2 bg-surface-container-low border-t border-outline-variant/[0.06]">
-      <div className="font-headline text-[10px] tracking-[.08em] uppercase text-on-surface-variant/45">
+    <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-5 border-t border-outline-variant/10 bg-surface-container-low px-4 py-6 md:px-8 md:py-7">
+      <div className="font-headline text-[11px] tracking-[.12em] uppercase text-on-surface-variant/55">
         © {new Date().getFullYear()} KABOOM! • Solana
       </div>
-      <div className="flex flex-wrap gap-4">
-        <button onClick={() => open("fair")} className={linkCls}>
+      <nav aria-label="Footer" className="flex flex-wrap items-center gap-2.5">
+        <button onClick={() => open("fair")} className={chipCls}>
           Provably Fair
         </button>
         <a
@@ -27,7 +33,7 @@ export function Footer() {
           rel="noreferrer"
           aria-label="PlayKaboom on X (Twitter)"
           title="PlayKaboom on X (formerly Twitter)"
-          className={linkCls}
+          className={chipCls}
         >
           X (Twitter) · @playkaboom
         </a>
@@ -35,7 +41,7 @@ export function Footer() {
           href="https://github.com/penguinpecker/playkaboom"
           target="_blank"
           rel="noreferrer"
-          className={linkCls}
+          className={chipCls}
         >
           GitHub
         </a>
@@ -44,17 +50,17 @@ export function Footer() {
           target="_blank"
           rel="noreferrer"
           title="View the Kaboom program on Solscan"
-          className={linkCls}
+          className={chipCls}
         >
           Solscan
         </a>
-        <Link href="/terms" className={linkCls}>
+        <Link href="/terms" className={chipCls}>
           Terms
         </Link>
-        <Link href="/privacy" className={linkCls}>
+        <Link href="/privacy" className={chipCls}>
           Privacy
         </Link>
-      </div>
+      </nav>
     </footer>
   );
 }
