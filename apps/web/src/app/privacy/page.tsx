@@ -92,12 +92,12 @@ export default function PrivacyPage() {
             <li>
               <strong>Privy</strong> — embedded wallets and authentication (
               <a
-                href="https://privy.io/legal/privacy"
+                href="https://www.privy.io/privacy-policy"
                 className="text-primary hover:underline"
                 target="_blank"
                 rel="noreferrer"
               >
-                privy.io/legal/privacy
+                privy.io/privacy-policy
               </a>
               )
             </li>

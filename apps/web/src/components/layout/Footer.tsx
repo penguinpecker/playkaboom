@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useModal } from "@/hooks/useModal";
+import { PROGRAM_ID } from "@/lib/cluster";
 
 // Was text-[7px] at 20% opacity — present in the DOM but effectively
 // unreadable, which is why the terms, privacy and social links read as
@@ -25,9 +26,10 @@ export function Footer() {
           target="_blank"
           rel="noreferrer"
           aria-label="PlayKaboom on X (Twitter)"
+          title="PlayKaboom on X (formerly Twitter)"
           className={linkCls}
         >
-          @playkaboom
+          X (Twitter) · @playkaboom
         </a>
         <a
           href="https://github.com/penguinpecker/playkaboom"
@@ -37,7 +39,13 @@ export function Footer() {
         >
           GitHub
         </a>
-        <a href="https://solscan.io" target="_blank" rel="noreferrer" className={linkCls}>
+        <a
+          href={`https://solscan.io/account/${PROGRAM_ID.toBase58()}`}
+          target="_blank"
+          rel="noreferrer"
+          title="View the Kaboom program on Solscan"
+          className={linkCls}
+        >
           Solscan
         </a>
         <Link href="/terms" className={linkCls}>
