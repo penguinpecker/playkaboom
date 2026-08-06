@@ -9,8 +9,8 @@ import { PROGRAM_ID } from "@/lib/cluster";
 // console language as the game cards, and lit on hover with the same primary
 // glow used elsewhere.
 const chipCls =
-  "chip-chamfer font-headline text-[13px] md:text-[14px] font-bold tracking-widest uppercase " +
-  "px-5 py-3.5 bg-surface-container-high text-white " +
+  "chip-chamfer font-headline text-lg md:text-xl font-bold tracking-widest uppercase " +
+  "px-8 py-5 bg-surface-container-high text-white " +
   "transition-all duration-200 " +
   "hover:bg-surface-container-highest hover:text-primary " +
   "hover:shadow-[0_0_22px_rgba(164,201,255,0.32)] " +
@@ -19,11 +19,11 @@ const chipCls =
 export function Footer() {
   const { open } = useModal();
   return (
-    <footer className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 border-t border-outline-variant/15 bg-surface-container-low px-5 py-9 md:px-10 md:py-11">
-      <div className="font-headline text-[13px] font-bold tracking-[.12em] uppercase text-white/70">
+    <footer className="flex flex-wrap items-center justify-between gap-x-10 gap-y-8 border-t border-outline-variant/20 bg-surface-container-low px-6 py-14 md:px-12 md:py-16">
+      <div className="font-headline text-lg md:text-xl font-bold tracking-[.12em] uppercase text-white">
         © {new Date().getFullYear()} KABOOM! • Solana
       </div>
-      <nav aria-label="Footer" className="flex flex-wrap items-center gap-3">
+      <nav aria-label="Footer" className="flex flex-wrap items-center gap-4">
         <button onClick={() => open("fair")} className={chipCls}>
           Provably Fair
         </button>
