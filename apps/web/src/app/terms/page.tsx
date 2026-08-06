@@ -18,7 +18,7 @@ export default function TermsPage() {
         TERMS OF SERVICE
       </h1>
       <p className="font-headline text-[10px] tracking-widest uppercase text-on-surface-variant mb-12">
-        Last updated 2026-05-07
+        Last updated 2026-08-06
       </p>
 
       <div className="space-y-8 text-sm leading-relaxed text-on-surface-variant">
@@ -63,10 +63,38 @@ export default function TermsPage() {
             4. Provably Fair
           </h2>
           <p>
-            Each game uses a SHA-256 commit-reveal scheme: the server commits a hash of the
+            The Service runs two game modes, and every settled game is independently
+            verifiable through the public verifier.
+          </p>
+          <p className="mt-3">
+            <strong>Per-click VRF (default).</strong> No mine layout is generated in advance.
+            Each tile you tap requests a verifiable-random-function draw from a MagicBlock
+            oracle inside an ephemeral rollup, and that draw decides the tile. At settlement
+            the Solana program replays every recorded random value on the base layer before
+            paying, and the bet, mine count and house edge are pinned on chain when the round
+            opens, so they cannot change mid-game. The payout is hard-capped at the amount the
+            vault reserved for that round at its start.
+          </p>
+          <p className="mt-3">
+            <strong>Commit-reveal (legacy).</strong> The server commits a SHA-256 hash of the
             mine layout on chain at start, signs each tile reveal during play, and publishes
-            the layout + salt at settlement. Anyone can independently verify any settled game
-            via the public verifier or by recomputing the hash.
+            the layout and salt at settlement, where the program rejects any settlement whose
+            hash does not match the original commitment. Anyone can recompute that hash.
+          </p>
+          <p className="mt-3">
+            Which mode a round uses is recorded on chain and shown on the verification page
+            for that game. Live configuration — including the house edge and payout caps — is
+            published at{" "}
+            <a
+              href="https://status.playkaboom.gg"
+              className="text-primary hover:underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              status.playkaboom.gg
+            </a>
+            ; that endpoint, not this document, is the current source of truth for those
+            values.
           </p>
         </section>
 
@@ -134,6 +162,19 @@ export default function TermsPage() {
           <h2 className="font-headline text-xl font-bold text-on-surface mb-3">
             10. Contact
           </h2>
+          <p className="mb-3">
+            Security issues go through GitHub's private advisory form:{" "}
+            <a
+              href="https://github.com/penguinpecker/playkaboom/security/advisories/new"
+              className="text-primary hover:underline"
+              target="_blank"
+              rel="noreferrer"
+            >
+              report a vulnerability
+            </a>
+            . Please do not disclose a vulnerability publicly before it is fixed — this
+            Service holds real user funds.
+          </p>
           <p>
             For questions or disputes, reach us via the project's X account:{" "}
             <a

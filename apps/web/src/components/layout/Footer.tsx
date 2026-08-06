@@ -9,21 +9,21 @@ import { PROGRAM_ID } from "@/lib/cluster";
 // console language as the game cards, and lit on hover with the same primary
 // glow used elsewhere.
 const chipCls =
-  "chip-chamfer font-headline text-[11px] tracking-widest uppercase px-4 py-2.5 " +
-  "bg-surface-container-high text-on-surface-variant/85 " +
+  "chip-chamfer font-headline text-[13px] md:text-[14px] font-bold tracking-widest uppercase " +
+  "px-5 py-3.5 bg-surface-container-high text-white " +
   "transition-all duration-200 " +
   "hover:bg-surface-container-highest hover:text-primary " +
-  "hover:shadow-[0_0_20px_rgba(164,201,255,0.28)] " +
+  "hover:shadow-[0_0_22px_rgba(164,201,255,0.32)] " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60";
 
 export function Footer() {
   const { open } = useModal();
   return (
-    <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-5 border-t border-outline-variant/10 bg-surface-container-low px-4 py-6 md:px-8 md:py-7">
-      <div className="font-headline text-[11px] tracking-[.12em] uppercase text-on-surface-variant/55">
+    <footer className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 border-t border-outline-variant/15 bg-surface-container-low px-5 py-9 md:px-10 md:py-11">
+      <div className="font-headline text-[13px] font-bold tracking-[.12em] uppercase text-white/70">
         © {new Date().getFullYear()} KABOOM! • Solana
       </div>
-      <nav aria-label="Footer" className="flex flex-wrap items-center gap-2.5">
+      <nav aria-label="Footer" className="flex flex-wrap items-center gap-3">
         <button onClick={() => open("fair")} className={chipCls}>
           Provably Fair
         </button>
