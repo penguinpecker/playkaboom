@@ -1,8 +1,8 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot to pick up where the last session left off. Refreshed **2026-08-04** (README rewrite + git history scrub + live-config audit). Full session-by-session log lives in `records.txt` (local-only, gitignored).
+A self-contained snapshot to pick up where the last session left off. Refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
 
-## STATUS — 2026-08-04
+## STATUS — 2026-08-09
 
 **Live on Solana mainnet at <https://playkaboom.gg>.** Per-click VRF over MagicBlock ephemeral rollups is the default game mode and is armed on chain. Commit-reveal remains as the legacy path. All admin/treasury/upgrade authorities are on Squads 2-of-2; the hot game-ix signer is a Turnkey HSM. Public health page at <https://status.playkaboom.gg>.
 
@@ -42,7 +42,7 @@ Decode these yourself rather than trusting this table after a config change; the
 | `min_house_share_bps` | **0** ⚠️ | House share floor is DISABLED |
 | `max_user_position_bps` | **0** ⚠️ | Per-user LP cap is DISABLED — one depositor may take an unbounded share |
 | Vault balance | ~2.10 SOL | health 7382 bps |
-| `total_outstanding_max_payout` | 0.5488 SOL | ⚠️ 26% of the vault, and **all of it is one abandoned game ~81 days old** |
+| `total_outstanding_max_payout` | 0.5488 SOL | ⚠️ ~26% of the vault, and **all of it is one abandoned game ~85 days old** |
 | house units / total units | 314,505 / 330,509,106 | house holds **0.10%** — the bankroll is almost entirely other people's money |
 
 The three zeroed LP guards and the stale obligation were surfaced by this session's audit and have **not** been changed. Each fix is a Squads vote.
@@ -102,28 +102,73 @@ Config that lives outside the repo (it is public): `~/.keystores/kaboom-vercel.i
 - CSP must list `magicblock.app` — its absence silently killed every rollup request in the browser and produced four separate "the game keeps failing" reports with a healthy backend.
 - Client version guard polls `/api/version` and reloads a stale tab when idle (banner mid-round), so the operator and the code are never on different builds.
 
-## Git state — IMPORTANT, read before pushing
+## Security review — 2026-08-04
 
+A full read of the codebase (on-chain program, API routes, server library, client,
+database, CI, relay) was carried out on 2026-08-04. **The findings, their exploit
+paths and the patch designs are deliberately NOT in this repo** — several concern
+code that is still deployed, and this repository is public. They live in the
+operator's local notes alongside `records.txt`.
 
+What that review changed here, all shipped to production on 2026-08-06:
 
-- **Not pushed.** This needs a force-push to a public `main`, which is irreversible on the remote — get an explicit go-ahead. A force-push deploys nothing (no git integration).
-- Remote also carries 7 stale feature branches and 2 tags with the same trailers; all rewritten locally, same decision pending.
-- Note: `git filter-branch -- --all` rewrites your backup branch too. `refs/original/` is the real safety net.
+- **Event logs are attributed to the emitting program.** `extractEventsFromLogs`
+  now rebuilds the invoke stack and decodes only what this program emitted, and
+  `assertProgramInvoked` confirms from the transaction's account keys — which the
+  runtime records, unlike log text — that it really ran. The indexer and the public
+  verifier both gate on it. Log text is not authenticated; treat it as a
+  convenience, never a proof.
+- **A losing reveal is not disclosed until it is settled.** `sendHouseTx` returns on
+  RPC acceptance, so answering immediately told a player the outcome while the game
+  was still `Playing` on chain. `/api/reveal` now waits for the round to be decided
+  and fails closed rather than disclosing early.
+- **Reveal accounting reads the chain.** `revealed_mask` / `safe_reveals` on the game
+  account, not the encrypted session copy, which two concurrent reveals could race
+  into dropping a tile.
+- **`/rpc-ws` on the relay is bounded.** Method allow-list, per-connection token
+  bucket, frame and batch caps — matching what the HTTP proxy already enforced.
+- **15 mines is withdrawn** from `MINE_OPTIONS` and rejected in `/api/commit`. See
+  the note on that constant: a 15-mine board has one safe tile, so the perfect-game
+  guard fires on the first reveal and the round has no winning path. Restore it only
+  with the on-chain fix that makes the full-clear branch pay.
+- **A working disclosure channel**: `/.well-known/security.txt`, `SECURITY.md` and
+  `CONTRIBUTING.md` all point at GitHub's private advisory form. `SECURITY.md`'s
+  claim that the treasury is a separate key from the owner was false and is corrected.
+- **Terms §4 describes the game that is actually running** — per-click VRF as the
+  default and commit-reveal as legacy — and points at the status endpoint for live
+  values instead of quoting numbers that drift.
+
+Remaining work from that review is on-chain and ships as one Squads upgrade.
 
 ## Pending / queued
 
 **Squads 2-of-2 votes:**
-1. `max_payout_bps` 5000 → 100. Largest survival risk.
-2. Release the 0.5488 SOL stale obligation (26% of the vault, ~81 days old).
-3. Decide `max_user_position_bps` / `min_house_share_bps` / `seed_units`, all currently 0.
-4. Program upgrade for the queued source-only guards.
+1. The audit's program-side bundle. Designs and an integration review exist in the
+   operator's local notes; they conflict with each other in specific ways and must
+   be merged against one canonical account layout — read that review before writing
+   any of it. The client must ship before the chain.
+2. `max_payout_bps` 5000 → 100. Largest survival risk.
+3. Release the 0.5488 SOL stale obligation (~85 days old).
+4. Decide `max_user_position_bps` / `min_house_share_bps` / `seed_units`, all currently 0.
 5. Bankroll top-up (~86 SOL to underwrite all mine counts at current caps).
 
-**Local / no vote needed:**
+**No vote needed:**
+- Rotate the Alchemy RPC key. It has been readable in public git history for months;
+  rotation is the only fix, and nothing about a rewrite or a push changes that.
+- Enable private vulnerability reporting in the GitHub repo settings, or the link in
+  `security.txt` and `SECURITY.md` 404s.
+- Dependency bumps, narrowest first: `ws` in `apps/realtime` (that app is a public
+  WebSocket server and is on a vulnerable version), then `bigint-buffer`, `js-cookie`.
+  Do not run a blanket `npm audit fix` on this repo — it rewrites the lockfile across
+  60+ advisories in one unreviewable step.
+- CSP still ships `'unsafe-inline'` in `script-src`. Removing it needs a nonce; do
+  not ship that blind.
 - LP P&L SQL backfill.
-- `LICENSE` file does not exist but the README claims MIT and `package.json` has no license field. Add the MIT text or drop the claim.
-- Shrink VRF startup overhead: session funding is a one-line client constant and looks generous for a rollup where fees are ~0; VrfGame account size is a program change.
-- Force-push decision above.
+- `LICENSE` file does not exist but the README claims MIT and `package.json` has no
+  license field. Add the MIT text or drop the claim.
+- Shrink VRF startup overhead: session funding is a one-line client constant and
+  looks generous for a rollup where fees are ~0; VrfGame account size is a program
+  change.
 
 ## Repo layout
 
