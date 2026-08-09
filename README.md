@@ -84,6 +84,12 @@ PlayKaboom is a provably-fair on-chain Mines casino on Solana mainnet. Players b
 
 ---
 
+## Gameplay
+
+PlayKaboom is a Minesweeper-style game played on a 4×4 grid. Each game hides a configurable number of mines beneath the tiles; the fewer mines in play, the higher the potential multiplier. Tap tiles to reveal safe spots and build your multiplier, or cash out at any time to lock in your winnings — hit a mine and the round ends. Every round's mine layout is committed on chain before the first tap, so the result is fixed from the start and verifiable after settlement.
+
+---
+
 ## Provably fair
 
 Every game uses a server-assisted commit-reveal scheme:
