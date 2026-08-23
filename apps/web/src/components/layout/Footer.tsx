@@ -28,14 +28,14 @@ export function Footer() {
           Provably Fair
         </button>
         <a
-          href="https://x.com/playkaboom"
+          href="https://x.com/playkaboomgg"
           target="_blank"
           rel="noreferrer"
           aria-label="PlayKaboom on X (Twitter)"
           title="PlayKaboom on X (formerly Twitter)"
           className={chipCls}
         >
-          X (Twitter) · @playkaboom
+          X (Twitter) · @playkaboomgg
         </a>
         <a
           href="https://github.com/penguinpecker/playkaboom"

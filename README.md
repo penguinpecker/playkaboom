@@ -6,7 +6,7 @@
 [![Status](https://img.shields.io/badge/status-status.playkaboom.gg-22c55e?style=flat-square)](https://status.playkaboom.gg)
 [![Solana](https://img.shields.io/badge/solana-mainnet--beta-9945FF?style=flat-square&logo=solana&logoColor=white)](https://solscan.io/account/9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh)
 [![License](https://img.shields.io/badge/license-MIT-emerald?style=flat-square)](#repository)
-[![X](https://img.shields.io/badge/x-@playkaboom-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/playkaboom)
+[![X](https://img.shields.io/badge/x-@playkaboomgg-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/playkaboomgg)
 
 PlayKaboom is a provably-fair Mines casino on Solana mainnet. Players bet SOL against a
 permissionless bankroll: anyone can deposit into the vault via `lp_deposit` and share net
@@ -330,7 +330,7 @@ player is idle (a banner instead, mid-round), so a stale tab can't keep running 
   privileged instructions.
 - **Audited** — full fix threads in `docs/security/`.
 
-Report vulnerabilities via [SECURITY.md](SECURITY.md) or [@playkaboom](https://x.com/playkaboom) on X.
+Report vulnerabilities via [SECURITY.md](SECURITY.md) or [@playkaboomgg](https://x.com/playkaboomgg) on X.
 
 ---
 
@@ -338,5 +338,5 @@ Report vulnerabilities via [SECURITY.md](SECURITY.md) or [@playkaboom](https://x
 
 - Source: [github.com/penguinpecker/playkaboom](https://github.com/penguinpecker/playkaboom)
 - Live: [playkaboom.gg](https://www.playkaboom.gg) · Status: [status.playkaboom.gg](https://status.playkaboom.gg)
-- X: [@playkaboom](https://x.com/playkaboom)
+- X: [@playkaboomgg](https://x.com/playkaboomgg)
 - License: MIT
