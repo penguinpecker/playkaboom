@@ -137,12 +137,12 @@ export default function TermsPage() {
           <p>
             For questions or disputes, reach us via the project's X account:{" "}
             <a
-              href="https://x.com/playkaboom"
+              href="https://x.com/playkaboomgg"
               className="text-primary hover:underline"
               target="_blank"
               rel="noreferrer"
             >
-              @playkaboom
+              @playkaboomgg
             </a>
             .
           </p>

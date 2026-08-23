@@ -16,7 +16,7 @@ export function Footer() {
         <button onClick={() => open("fair")} className={linkCls}>
           Provably Fair
         </button>
-        <a href="https://x.com/playkaboom" target="_blank" rel="noreferrer" className={linkCls}>
+        <a href="https://x.com/playkaboomgg" target="_blank" rel="noreferrer" className={linkCls}>
           X
         </a>
         <a

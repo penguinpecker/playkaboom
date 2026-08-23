@@ -5,7 +5,7 @@
 [![Live](https://img.shields.io/badge/live-playkaboom.gg-a4c9ff?style=flat-square)](https://www.playkaboom.gg)
 [![Solana](https://img.shields.io/badge/solana-mainnet--beta-9945FF?style=flat-square&logo=solana&logoColor=white)](https://solscan.io/account/9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh)
 [![License](https://img.shields.io/badge/license-MIT-emerald?style=flat-square)](LICENSE)
-[![X](https://img.shields.io/badge/x-@playkaboom-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/playkaboom)
+[![X](https://img.shields.io/badge/x-@playkaboomgg-000000?style=flat-square&logo=x&logoColor=white)](https://x.com/playkaboomgg)
 
 PlayKaboom is a provably-fair on-chain Mines casino on Solana mainnet. Players bet SOL, the program commits a SHA-256 hash of the mine layout up front, and publishes the layout + salt at settlement so anyone can verify the layout existed before any reveal. The vault that backs payouts is a permissionless yield vehicle — anyone can deposit SOL via `lp_deposit` and share net P&L pro-rata.
 
@@ -169,7 +169,7 @@ playkaboom/
 - **Audit-fix patch deployed** — covers explicit referral PDA derivation, executable-account rejection in treasury withdrawals, min-floor on cooldown + health-bps, aliasing assert on treasury destination. Full thread of fixes in `docs/security/program-audit.md`.
 - **Squads multisig handover (planned)** — `vault.owner`, `vault.treasury`, and the BPF upgrade authority all rotate to a Squads V4 2-of-2 multisig once mainnet operations stabilise.
 
-For vulnerability disclosures, reach out via [@playkaboom](https://x.com/playkaboom) on X.
+For vulnerability disclosures, reach out via [@playkaboomgg](https://x.com/playkaboomgg) on X.
 
 ---
 
@@ -177,5 +177,5 @@ For vulnerability disclosures, reach out via [@playkaboom](https://x.com/playkab
 
 - Source: [github.com/penguinpecker/playkaboom](https://github.com/penguinpecker/playkaboom)
 - Live: [playkaboom.gg](https://www.playkaboom.gg)
-- X: [@playkaboom](https://x.com/playkaboom)
+- X: [@playkaboomgg](https://x.com/playkaboomgg)
 - License: [MIT](LICENSE)

@@ -162,12 +162,12 @@ export default function PrivacyPage() {
           <p>
             We may update this policy. Material changes will be announced via{" "}
             <a
-              href="https://x.com/playkaboom"
+              href="https://x.com/playkaboomgg"
               className="text-primary hover:underline"
               target="_blank"
               rel="noreferrer"
             >
-              @playkaboom
+              @playkaboomgg
             </a>
             .
           </p>

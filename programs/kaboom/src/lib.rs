@@ -36,7 +36,7 @@ declare_id!("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
 solana_security_txt::security_txt! {
     name: "PlayKaboom",
     project_url: "https://www.playkaboom.gg",
-    contacts: "link:https://x.com/playkaboom",
+    contacts: "link:https://x.com/playkaboomgg",
     policy: "https://github.com/penguinpecker/playkaboom/blob/main/SECURITY.md",
     preferred_languages: "en",
     source_code: "https://github.com/penguinpecker/playkaboom",
