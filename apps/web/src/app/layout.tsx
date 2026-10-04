@@ -65,8 +65,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <ToastProvider>
                 <AuthToastBridge />
                 <VersionGuard />
+                <div
+                  role="status"
+                  className="w-full bg-secondary-container px-4 py-2 text-center font-headline text-xs sm:text-sm font-bold uppercase tracking-wider text-on-surface break-words"
+                >
+                  {"PlayKaboom is under maintenance. We'll be back soon."}
+                </div>
                 <Navbar />
-                <main className="flex-1 pt-14 sm:pt-16">{children}</main>
+                <main className="flex-1">{children}</main>
                 <Footer />
                 <ModalRoot />
               </ToastProvider>

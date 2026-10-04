@@ -89,7 +89,7 @@ export function Navbar() {
 
   return (
     <>
-      <header className="fixed top-0 w-full z-50 flex justify-between items-center px-3 sm:px-6 h-14 sm:h-16 bg-surface-container-low/90 backdrop-blur-xl shadow-[0_0_20px_rgba(208,188,255,0.1)]">
+      <header className="sticky top-0 w-full z-50 flex justify-between items-center px-3 sm:px-6 h-14 sm:h-16 bg-surface-container-low/90 backdrop-blur-xl shadow-[0_0_20px_rgba(208,188,255,0.1)]">
         <div className="flex items-center gap-3 sm:gap-8 min-w-0">
           <button className="lg:hidden flex-shrink-0" onClick={() => setShowMobile(true)} aria-label="Menu">
             <span
