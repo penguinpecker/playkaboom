@@ -2,7 +2,11 @@
 
 A self-contained snapshot to pick up where the last session left off. Refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
 
-## STATUS — 2026-08-09
+## STATUS — 2026-10-05: PROGRAM CLOSED
+
+**The mainnet program `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05 and its rent reclaimed.** The site stays up with a maintenance banner; every on-chain game/vault call now fails. Everything below this section describes the pre-close system and is kept for a future redeploy. That redeploy needs a **new program ID** (a closed upgradeable program cannot be redeployed at the same address); keep the old program keypair anyway. The full decommission record, backups and redeploy guide live outside the repo in the local archive `~/Projects/kaboom-archive-2026-10-05/` (start with its `HANDOFF.md`).
+
+## STATUS — 2026-08-09 (pre-close)
 
 **Live on Solana mainnet at <https://playkaboom.gg>.** Per-click VRF over MagicBlock ephemeral rollups is the default game mode and is armed on chain. Commit-reveal remains as the legacy path. All admin/treasury/upgrade authorities are on Squads 2-of-2; the hot game-ix signer is a Turnkey HSM. Public health page at <https://status.playkaboom.gg>.
 
