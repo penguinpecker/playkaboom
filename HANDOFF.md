@@ -157,8 +157,8 @@ Remaining work from that review is on-chain and ships as one Squads upgrade.
 5. Bankroll top-up (~86 SOL to underwrite all mine counts at current caps).
 
 **No vote needed:**
-- Rotate the Alchemy RPC key. It has been readable in public git history for months;
-  rotation is the only fix, and nothing about a rewrite or a push changes that.
+- Rotate the Alchemy RPC key. It was exposed in an earlier revision of this repo;
+  rotation is the only fix.
 - Enable private vulnerability reporting in the GitHub repo settings, or the link in
   `security.txt` and `SECURITY.md` 404s.
 - Dependency bumps, narrowest first: `ws` in `apps/realtime` (that app is a public
