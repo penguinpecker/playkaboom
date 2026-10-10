@@ -24,7 +24,6 @@ target
 .env
 .env.local
 .env.*.local
-!.env.example
 
 # editors
 .idea

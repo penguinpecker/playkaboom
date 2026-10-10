@@ -63,7 +63,7 @@ export function Web3Provider({ children }: { children: ReactNode }) {
       <div style={{ padding: 24, fontFamily: "monospace" }}>
         <strong>NEXT_PUBLIC_PRIVY_APP_ID</strong> is not set.
         <br />
-        Copy <code>.env.example</code> to <code>.env.local</code> and add your Privy app id.
+        Add it to <code>.env.local</code>.
       </div>
     );
   }

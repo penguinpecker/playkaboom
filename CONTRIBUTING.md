@@ -4,7 +4,7 @@
 
 1. `nvm use` — pin Node 20.
 2. `npm install` — installs all workspace deps.
-3. `cp .env.example .env.local` — fill in `HOUSE_AUTHORITY_KEY`, `SESSION_ENC_KEY`, `NEXT_PUBLIC_PRIVY_APP_ID`.
+3. Create `apps/web/.env.local` — the required variable names are validated in `apps/web/src/server/env.ts`; at minimum set `SESSION_ENC_KEY` and `NEXT_PUBLIC_PRIVY_APP_ID`.
 4. `npm run dev` — starts the web app on http://localhost:3000.
 5. `npm run test` — runs SDK Vitest suite. `npm run anchor:test` runs the on-chain flow tests (requires Anchor + a funded devnet wallet).
 

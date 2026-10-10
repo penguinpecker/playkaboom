@@ -152,7 +152,7 @@ further.
 ## Defense-in-depth checklist (state today)
 
 - [x] All secrets in environment variables, none committed to git
-- [x] `.env.local` files gitignored; `.env.example` committed without values
+- [x] `.env.local` files gitignored; no env template committed
 - [x] Server-only secrets never exposed via `NEXT_PUBLIC_*`
 - [x] CSP `connect-src` host-allowlisted
 - [x] Trusted Types enforced where supported
