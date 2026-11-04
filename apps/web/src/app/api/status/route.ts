@@ -10,7 +10,7 @@ import {
   deriveV2StatePda,
 } from "@playkaboom/sdk";
 import { getConnection } from "@/server/connection";
-import { supabaseAdmin } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 import { programId, vrfModeEnabled } from "@/server/env";
 
 export const runtime = "nodejs";
@@ -249,14 +249,21 @@ async function checkDatabase(): Promise<Component[]> {
   const conn = getConnection();
   const pid = programId();
   const probe = await timed(async () => {
-    const db = supabaseAdmin();
     const [state, game, newestOnChain] = await Promise.all([
-      db
-        .from("cron_indexer_state")
-        .select("last_slot")
-        .eq("program", pid.toBase58())
-        .maybeSingle(),
-      db.from("games").select("settled_at").order("slot", { ascending: false }).limit(1).maybeSingle(),
+      query<{ last_slot: number | null }>(
+        "select last_slot from public.cron_indexer_state where program = $1",
+        [pid.toBase58()],
+      ).then(
+        (rows) => ({ data: rows[0] ?? null, error: null }),
+        () => ({ data: null, error: true }),
+      ),
+      // The newest-game read never failed the probe; keep it non-fatal.
+      query<{ settled_at: string | null }>(
+        "select settled_at from public.games order by slot desc limit 1",
+      ).then(
+        (rows) => ({ data: rows[0] ?? null }),
+        () => ({ data: null }),
+      ),
       conn.getSignaturesForAddress(pid, { limit: 1 }),
     ]);
     if (state.error) throw new Error("query failed");
@@ -346,7 +353,7 @@ async function checkRealtime(): Promise<Component> {
   });
   const code = probe.value?.code;
   const body = probe.value?.body;
-  // `upstream` is the relay's own Supabase Realtime connection. Reachable but
+  // `upstream` is the relay's own Postgres LISTEN connection. Reachable but
   // upstream-down means it is running and fanning out nothing — degraded, not
   // healthy, and worth distinguishing.
   const healthy = code === 200 && body?.ok === true;

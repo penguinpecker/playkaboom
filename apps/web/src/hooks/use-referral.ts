@@ -41,7 +41,13 @@ export function useReferralCapture(): string | null {
         /* invalid pubkey, drop */
       }
     } else {
-      setStored(localStorage.getItem(REFERRER_LOCAL_KEY));
+      // Mounted in the app shell, so a throwing localStorage (Safari
+      // Private Browsing, Seeker TWA) must not take down every page.
+      try {
+        setStored(localStorage.getItem(REFERRER_LOCAL_KEY));
+      } catch {
+        /* no storage; getPendingReferrer falls back to the cookie */
+      }
     }
   }, []);
 

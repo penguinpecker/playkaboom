@@ -12,8 +12,9 @@ import {
   PublicKey,
   Transaction,
   VersionedTransaction,
+  type TransactionInstruction,
 } from "@solana/web3.js";
-import { deserializeIx } from "@playkaboom/sdk";
+import { buildCancelWithdraw, buildRequestWithdraw, deserializeIx } from "@playkaboom/sdk";
 import { confirmByPolling } from "@/lib/confirm";
 import { buildPriorityIxs } from "@/lib/priority-fee";
 import { PROGRAM_ID } from "@/lib/cluster";
@@ -61,17 +62,20 @@ export function useLpActions() {
   const wallet = wallets[0];
   const walletAddress = wallet?.address;
 
+  /** Sign + send one tx holding `ixs` (a route's `{ instruction }` or SDK-built ixs). */
   const signAndSend = useCallback(
-    async (instructionResp: { instruction: Parameters<typeof deserializeIx>[0] }) => {
+    async (
+      ixsOrResp: TransactionInstruction[] | { instruction: Parameters<typeof deserializeIx>[0] },
+    ) => {
       if (!wallet) throw new Error("Connect wallet first");
-      const ix = deserializeIx(instructionResp.instruction);
+      const ixs = Array.isArray(ixsOrResp) ? ixsOrResp : [deserializeIx(ixsOrResp.instruction)];
       const [{ blockhash, lastValidBlockHeight }, priorityIxs] = await Promise.all([
         connection.getLatestBlockhash("confirmed"),
         buildPriorityIxs(connection, PROGRAM_ID),
       ]);
       const tx = new Transaction();
       for (const pix of priorityIxs) tx.add(pix);
-      tx.add(ix);
+      for (const ix of ixs) tx.add(ix);
       tx.recentBlockhash = blockhash;
       tx.lastValidBlockHeight = lastValidBlockHeight;
       tx.feePayer = new PublicKey(wallet.address);
@@ -127,6 +131,21 @@ export function useLpActions() {
     return signAndSend(resp);
   }, [walletAddress, signAndSend]);
 
+  /**
+   * F4: a matured request lapses 9,000 slots after unlock (6056). Restart it in
+   * ONE tx: cancel (units back to the position) + request the same units again
+   * (a fresh cooldown). Built client-side with the SDK, like the recovery banner.
+   */
+  const restartWithdraw = useCallback(
+    async (units: bigint) => {
+      if (!walletAddress) throw new Error("no wallet");
+      const ctx = { programId: PROGRAM_ID };
+      const user = new PublicKey(walletAddress);
+      return signAndSend([buildCancelWithdraw({ ctx, user }), buildRequestWithdraw({ ctx, user, units })]);
+    },
+    [walletAddress, signAndSend],
+  );
+
   return {
     authenticated,
     login,
@@ -135,5 +154,6 @@ export function useLpActions() {
     requestWithdraw,
     cancelWithdraw,
     completeWithdraw,
+    restartWithdraw,
   };
 }

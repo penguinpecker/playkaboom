@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jsonError } from "@/server/api-helpers";
+import { clientIp, jsonError } from "@/server/api-helpers";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 
@@ -29,7 +29,12 @@ interface RouteContext {
  *      so a misbehaving client can't push a 100MB JSON.
  *   4. Request logged sans body — we count methods for analytics but
  *      don't log params (user wallets, signatures, etc).
+ *   5. Batches capped at RPC_MAX_BATCH (same as the relay's WS proxy) and
+ *      every call in a batch is charged to the limiter, so one request can't
+ *      buy thousands of upstream calls on the paid key.
  */
+const RPC_MAX_BATCH = 10;
+
 const ALLOWED_METHODS = new Set<string>([
   // Reads — what the dApp actually uses.
   "getAccountInfo",
@@ -73,13 +78,15 @@ function clusterToRpcUrl(cluster: string): string | null {
   return null;
 }
 
-function clientIp(req: NextRequest): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-}
-
 export async function POST(req: NextRequest, ctx: RouteContext) {
   try {
     const { cluster } = await ctx.params;
+    // SOLANA_RPC is this deploy's own cluster, so on a mainnet (or testnet)
+    // deploy /api/rpc/devnet would quietly proxy to mainnet. Serve devnet
+    // only from a devnet deploy (same default as lib/cluster.ts).
+    if (cluster === "devnet" && process.env.NEXT_PUBLIC_SOLANA_CLUSTER !== "devnet") {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     const upstream = clusterToRpcUrl(cluster);
     if (!upstream) {
       return NextResponse.json(
@@ -91,13 +98,14 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     // 60 RPC calls per IP per 10 seconds — a chatty wallet hitting the
     // page only sends ~5/sec at peak (blockhash + slot + balance + tx
     // + sigStatuses). Over-quota buys a 429 with retry headers.
-    const rl = await enforceRateLimit(`rpc:${cluster}:${clientIp(req)}`);
-    if (!rl.ok) {
-      return NextResponse.json(
+    const rlKey = `rpc:${cluster}:${clientIp(req)}`;
+    const tooMany = () =>
+      NextResponse.json(
         { error: "Too many requests" },
         { status: 429, headers: { "Retry-After": "10" } },
       );
-    }
+    const rl = await enforceRateLimit(rlKey);
+    if (!rl.ok) return tooMany();
 
     const raw = await req.text();
     if (raw.length > 1_000_000) {
@@ -113,6 +121,20 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
     // Standard JSON-RPC payloads are { jsonrpc, id, method, params }.
     // web3.js sometimes sends batches as an array of those.
     const calls = Array.isArray(body) ? body : [body];
+    if (calls.length === 0 || calls.length > RPC_MAX_BATCH) {
+      return NextResponse.json(
+        {
+          jsonrpc: "2.0",
+          id: null,
+          error: { code: -32600, message: `Batch must hold 1-${RPC_MAX_BATCH} calls` },
+        },
+        { status: 400 },
+      );
+    }
+    // One hit was charged above; charge the rest of the batch too.
+    if (calls.length > 1 && !(await enforceRateLimit(rlKey, calls.length - 1)).ok) {
+      return tooMany();
+    }
     for (const c of calls) {
       const m = (c as { method?: unknown })?.method;
       if (typeof m !== "string" || !ALLOWED_METHODS.has(m)) {

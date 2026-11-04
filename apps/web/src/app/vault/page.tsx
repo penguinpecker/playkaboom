@@ -11,6 +11,7 @@ import {
 import { CLUSTER, CLUSTER_LABEL, accountExplorer } from "@/lib/cluster";
 import { CONTRACTS } from "@/lib/chain";
 import { VaultLpPanel } from "@/components/vault/lp-panel";
+import { useVaultState } from "@/hooks/use-vault-lp";
 
 const RISK_LABELS = ["Healthy", "Caution", "Emergency"];
 const RISK_COLORS = ["text-emerald", "text-amber", "text-error"];
@@ -22,6 +23,10 @@ export default function VaultPage() {
   const { data: health } = useVaultHealth();
   const { data: riskLevel } = useRiskLevel();
   const { data: gameCount } = useGameCounter();
+  const { data: vaultState } = useVaultState();
+  const anchors: Record<string, string> = vaultState?.houseAuthority
+    ? { ...CONTRACTS, "House signer": vaultState.houseAuthority }
+    : CONTRACTS;
 
   const fmt = (v: bigint | undefined) => (v ? Number(formatEther(v)).toFixed(2) : "—");
   const healthNum = health ?? 0;
@@ -120,7 +125,7 @@ export default function VaultPage() {
               Trust Anchors
             </h3>
             <div className="space-y-2">
-              {Object.entries(CONTRACTS).map(([name, addr]) => (
+              {Object.entries(anchors).map(([name, addr]) => (
                 <div key={name}>
                   <span className="font-headline text-[10px] text-on-surface-variant/30 block">
                     {name}

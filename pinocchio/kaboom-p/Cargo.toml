@@ -1,0 +1,45 @@
+[package]
+name = "kaboom_p"
+version = "0.1.0"
+description = "PlayKaboom Mines: Pinocchio port of programs/kaboom (Anchor 0.31.1), ABI-identical"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "kaboom"
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+no-entrypoint = []
+
+[dependencies]
+pinocchio = { version = "0.11.2", default-features = false, features = ["cpi"] }
+pinocchio-system = { version = "0.6.1", default-features = false }
+# `decode` = const base58 (`Address::from_str_const`) for the ID constants; no runtime cost.
+solana-address = { version = "2", default-features = false, features = ["decode"] }
+ephemeral-rollups-pinocchio = { version = "0.17.3" }
+
+[dev-dependencies]
+serde_json = "1"
+sha2 = "0.10"
+solana-address = { version = "2", default-features = false, features = ["decode", "curve25519"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[profile.release]
+# "3", not "z" (integration, 2026-11-04): measured on this crate z ~= 292 KB, s ~= 214 KB, 3 = 195 KB.
+# z leaves copy_from_slice / RefMut::deref_mut as out-of-line calls at hundreds of sites. 3 is also cheapest in CU.
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+overflow-checks = true
+
+[patch.crates-io]
+ephemeral-rollups-pinocchio = { path = "../vendor/ephemeral-rollups-pinocchio-0.17.3" }
+
+# Own workspace so the repo-root Anchor workspace never picks this crate up.
+[workspace]

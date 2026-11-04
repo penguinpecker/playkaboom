@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { supabaseAdmin } from "./db/supabase";
+import { query } from "./db/pg";
 import { logger } from "./logger";
 
 /** Cookie names — kept short to minimize header bloat. Both are non-HttpOnly
@@ -26,14 +26,17 @@ export interface VisitInsertResult {
  */
 export async function recordVisitClick(code: string): Promise<VisitInsertResult> {
   const sessionId = randomUUID();
-  const db = supabaseAdmin();
   // We don't bump click_count here — the existing resolveAndCountVisit
   // handler in /api/ref/[code] already does that. This insert is purely
   // for the per-visit attribution row.
-  const { error } = await db.from("referral_visits").insert({ code, session_id: sessionId });
-  if (error) {
+  try {
+    await query("insert into public.referral_visits (code, session_id) values ($1, $2)", [
+      code,
+      sessionId,
+    ]);
+  } catch (error) {
     logger.warn(
-      { code, err: error.message },
+      { code, err: error instanceof Error ? error.message : String(error) },
       "referral_visits insert failed — visit tracking degraded for this click",
     );
   }
@@ -49,49 +52,40 @@ export async function recordVisitClick(code: string): Promise<VisitInsertResult>
  * on (session_id) WHERE wallet IS NOT NULL is the race-safety mechanism.
  */
 export async function recordSignup(sessionId: string, wallet: string): Promise<boolean> {
-  const db = supabaseAdmin();
   // 1. Find the visit. If it's already attributed (wallet IS NOT NULL),
   //    we no-op — never overwrite an earlier signup.
-  const { data: visit, error: lookupErr } = await db
-    .from("referral_visits")
-    .select("id, code, wallet")
-    .eq("session_id", sessionId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (lookupErr || !visit) return false;
+  const visit = await query<{ id: string; code: string; wallet: string | null }>(
+    "select id, code, wallet from public.referral_visits where session_id = $1 order by created_at desc limit 1",
+    [sessionId],
+  ).then(
+    (rows) => rows[0] ?? null,
+    () => null,
+  );
+  if (!visit) return false;
   if (visit.wallet) return false;
 
-  // 2. Update the row + bump signup_count on the code in a single rpc-like
-  //    sequence. We accept a small race here — if two updates land in the
-  //    same millisecond signup_count could double-count by 1; the
-  //    referral_visits row is the source of truth so the dashboard can
-  //    re-derive the real number any time.
-  const { error: updErr } = await db
-    .from("referral_visits")
-    .update({ wallet, signed_up_at: new Date().toISOString() })
-    .eq("id", visit.id)
-    .is("wallet", null);
-  if (updErr) {
+  // 2. Update the row + bump signup_count on the code. We accept a small
+  //    race here — if two updates land in the same millisecond signup_count
+  //    could double-count by 1; the referral_visits row is the source of
+  //    truth so the dashboard can re-derive the real number any time.
+  try {
+    await query(
+      "update public.referral_visits set wallet = $1, signed_up_at = $3 where id = $2 and wallet is null",
+      [wallet, visit.id, new Date().toISOString()],
+    );
+  } catch (updErr) {
     logger.warn(
-      { sessionId, wallet, err: updErr.message },
+      { sessionId, wallet, err: updErr instanceof Error ? updErr.message : String(updErr) },
       "referral_visits signup update failed",
     );
     return false;
   }
 
-  // 3. Increment signup_count on referral_codes.
-  const { data: code } = await db
-    .from("referral_codes")
-    .select("signup_count")
-    .eq("code", visit.code)
-    .single();
-  if (code) {
-    await db
-      .from("referral_codes")
-      .update({ signup_count: (code.signup_count ?? 0) + 1 })
-      .eq("code", visit.code);
-  }
+  // 3. Increment signup_count on referral_codes (in SQL; errors ignored as before).
+  await query(
+    "update public.referral_codes set signup_count = coalesce(signup_count, 0) + 1 where code = $1",
+    [visit.code],
+  ).catch(() => undefined);
   return true;
 }
 
@@ -105,37 +99,28 @@ export async function recordSetReferrerConfirmation(
   wallet: string,
   signature: string,
 ): Promise<boolean> {
-  const db = supabaseAdmin();
-  const { data: visit } = await db
-    .from("referral_visits")
-    .select("id, code, set_referrer_signature")
-    .eq("wallet", wallet)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const visit = await query<{ id: string; code: string; set_referrer_signature: string | null }>(
+    "select id, code, set_referrer_signature from public.referral_visits where wallet = $1 order by created_at desc limit 1",
+    [wallet],
+  ).then(
+    (rows) => rows[0] ?? null,
+    () => null,
+  );
   if (!visit) return false;
   if (visit.set_referrer_signature) return false; // already confirmed
 
-  const { error: updErr } = await db
-    .from("referral_visits")
-    .update({
-      set_referrer_signature: signature,
-      set_referrer_at: new Date().toISOString(),
-    })
-    .eq("id", visit.id)
-    .is("set_referrer_signature", null);
-  if (updErr) return false;
-
-  const { data: code } = await db
-    .from("referral_codes")
-    .select("confirmed_count")
-    .eq("code", visit.code)
-    .single();
-  if (code) {
-    await db
-      .from("referral_codes")
-      .update({ confirmed_count: (code.confirmed_count ?? 0) + 1 })
-      .eq("code", visit.code);
+  try {
+    await query(
+      "update public.referral_visits set set_referrer_signature = $1, set_referrer_at = $3 where id = $2 and set_referrer_signature is null",
+      [signature, visit.id, new Date().toISOString()],
+    );
+  } catch {
+    return false;
   }
+
+  await query(
+    "update public.referral_codes set confirmed_count = coalesce(confirmed_count, 0) + 1 where code = $1",
+    [visit.code],
+  ).catch(() => undefined);
   return true;
 }

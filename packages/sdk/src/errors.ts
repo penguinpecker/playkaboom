@@ -2,12 +2,12 @@
  * Anchor's error codes for the kaboom program. The numeric value is
  * `6000 + index` (Anchor's offset for user errors).
  */
-// MUST stay in the EXACT order of `pub enum KaboomError` in
-// programs/kaboom/src/lib.rs (line ~2272). Anchor assigns user error codes
-// as `6000 + index`; an out-of-order entry here decodes the wrong name.
-// Last cross-checked against target/idl/kaboom.json on 2026-07-28 (55 entries,
-// codes 6000-6054). Verify with a diff against the IDL's `errors` array after
-// any change to the enum — a missing entry silently shifts every later name.
+// MUST stay in the EXACT order of `KaboomError` in the deployed Pinocchio
+// program (pinocchio/kaboom-p/src/error.rs). Codes are `6000 + index`; an
+// out-of-order entry here decodes the wrong name. 6000-6054 are the Anchor
+// IDL's 55 errors unchanged (target/idl/kaboom.json); 6055-6057 were appended
+// by the F1/F4 fixes and the VRF-only upgrade (pinocchio/spec/FIXES.md).
+// A missing entry silently shifts every later name.
 export const KABOOM_ERROR_NAMES = [
   "InvalidMineCount",
   "InvalidTileIndex",
@@ -66,6 +66,10 @@ export const KABOOM_ERROR_NAMES = [
   "GameStillDelegated",
   "VrfValidatorNotSet",
   "WrongVrfValidator",
+  // ─── Pinocchio port fixes (FIXES.md) ────────────────────────────────────
+  "NotDeployer", // 6055 F1: initialize_vault signed by someone other than the deployer
+  "WithdrawWindowExpired", // 6056 F4: complete_withdraw after unlock + 9,000 slots
+  "LegacyModeDisabled", // 6057 VRF-only: start_game always fails
 ] as const;
 
 export type KaboomErrorName = (typeof KABOOM_ERROR_NAMES)[number];

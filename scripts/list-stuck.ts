@@ -3,7 +3,7 @@ import { decodeGameSession } from "@playkaboom/sdk";
 
 // Proxy blocks getProgramAccounts. Use public Solana RPC for this enumeration.
 const RPC = "https://api.mainnet-beta.solana.com";
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
+const PROGRAM_ID = new PublicKey("Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju"); // relaunch program (old id closed)
 
 async function main() {
   const conn = new Connection(RPC, "confirmed");

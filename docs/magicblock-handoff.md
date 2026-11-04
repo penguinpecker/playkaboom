@@ -1,5 +1,7 @@
 # Magicblock ER Integration — Handoff
 
+> Historical (pre-2026-11-04 relaunch): Turnkey and Supabase described here are retired; see [HANDOFF.md](../HANDOFF.md) for the live system.
+
 **Status:** DEFERRED. Code ready, external blocker open.
 **Owner:** kaboomweb3@gmail.com
 **Last touched:** 2026-05-17

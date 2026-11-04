@@ -1,6 +1,9 @@
 -- Magicblock ER lazy-delegate state.
 --
--- /api/reveal runs delegate_game (Turnkey-signed, L1) on the first reveal
+-- Historical (pre-2026-11-04 relaunch): Supabase and the Turnkey house signer
+-- are retired; the live schema is db/migrations on Railway Postgres.
+--
+-- /api/reveal runs delegate_game (house-signed, L1) on the first reveal
 -- call for a Magicblock-routed game, then writes delegated_at so subsequent
 -- reveals skip the delegate step. NULL means "not yet delegated"; the row
 -- is created by /api/commit's storeSessionKey and the column stays NULL

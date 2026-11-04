@@ -17,6 +17,47 @@ interface PythPrice {
   publishTime: number;
 }
 
+// Keyless Hermes now answers 401 with no CORS header, which the browser
+// reports as a failed fetch. Once refused, stop asking until reload: every
+// 15 s retry only logged another console error (shakedown M3). The USD hints
+// already hide while the price is null.
+let hermesRefused = false;
+
+export async function fetchPythSolUsd(): Promise<PythPrice | null> {
+  if (hermesRefused) return null;
+  let res: Response;
+  try {
+    res = await fetch(HERMES_URL, { cache: "no-store" });
+  } catch {
+    // A CORS block throws like any network error; keep polling only when
+    // the browser reports itself offline.
+    if (typeof navigator === "undefined" || navigator.onLine !== false) hermesRefused = true;
+    return null;
+  }
+  if (res.status === 401 || res.status === 403) {
+    hermesRefused = true;
+    return null;
+  }
+  if (!res.ok) return null;
+  try {
+    const json = (await res.json()) as {
+      parsed?: Array<{
+        price?: { price: string; expo: number; conf: string; publish_time: number };
+      }>;
+    };
+    const p = json.parsed?.[0]?.price;
+    if (!p) return null;
+    const scale = Math.pow(10, p.expo); // expo is negative for USD prices
+    return {
+      usd: Number(p.price) * scale,
+      confidence: Number(p.conf) * scale,
+      publishTime: p.publish_time,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Polls Pyth Hermes every 15s for SOL/USD. Returns null until the first
  * fetch lands. Used for the "≈ $X.XX" overlay in BetControls + Vault.
@@ -24,29 +65,9 @@ interface PythPrice {
 export function usePythSolUsd() {
   return useQuery({
     queryKey: ["pyth", "sol-usd"],
-    refetchInterval: 15_000,
+    refetchInterval: () => (hermesRefused ? false : 15_000),
     refetchOnWindowFocus: true,
-    queryFn: async (): Promise<PythPrice | null> => {
-      try {
-        const res = await fetch(HERMES_URL, { cache: "no-store" });
-        if (!res.ok) return null;
-        const json = (await res.json()) as {
-          parsed?: Array<{
-            price?: { price: string; expo: number; conf: string; publish_time: number };
-          }>;
-        };
-        const p = json.parsed?.[0]?.price;
-        if (!p) return null;
-        const scale = Math.pow(10, p.expo); // expo is negative for USD prices
-        return {
-          usd: Number(p.price) * scale,
-          confidence: Number(p.conf) * scale,
-          publishTime: p.publish_time,
-        };
-      } catch {
-        return null;
-      }
-    },
+    queryFn: fetchPythSolUsd,
   });
 }
 

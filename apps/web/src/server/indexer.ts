@@ -4,8 +4,7 @@ import { extractEventsFromLogs, type KaboomEvent,
   derivePlayerStatsPda,
   decodePlayerStats
 } from "@playkaboom/sdk";
-import type { PostgrestError } from "@supabase/supabase-js";
-import { supabaseAdmin } from "./db/supabase";
+import { pgCode, query, rpc, upsert } from "./db/pg";
 import { getConnection } from "./connection";
 import { programId } from "./env";
 import { logger } from "./logger";
@@ -28,16 +27,33 @@ class IndexerApplyError extends Error {
   }
 }
 
-/** Throw on Postgrest errors so they surface in `ingestTransactions`'s catch
- * block (logged + counted) instead of being silently swallowed. The PG error
- * code is preserved on the thrown error so the outer loop can decide
- * whether a retry is meaningful (e.g. 23505 unique-violation will repeat
- * deterministically — keep the claim and skip future retries). */
-function check(table: string, ev: string, res: { error: PostgrestError | null }): void {
-  if (res.error) {
+/** Run a DB write and rethrow its error as IndexerApplyError so it surfaces in
+ * `ingestTransactions`'s catch block (logged + counted) instead of being
+ * silently swallowed. The PG error code is preserved on the thrown error so the
+ * outer loop can decide whether a retry is meaningful (e.g. 23505
+ * unique-violation will repeat deterministically — keep the claim and skip
+ * future retries). */
+async function check<T>(table: string, ev: string, op: Promise<T>): Promise<T> {
+  try {
+    return await op;
+  } catch (e) {
+    const code = pgCode(e);
     throw new IndexerApplyError(
-      `[${ev}→${table}] ${res.error.code ?? ""} ${res.error.message}`,
-      res.error.code ?? undefined,
+      `[${ev}→${table}] ${code ?? ""} ${e instanceof Error ? e.message : String(e)}`,
+      code,
+    );
+  }
+}
+
+/** Writes whose errors the Supabase version never looked at (supabase-js
+ * returned them instead of throwing). Still non-fatal, now logged. */
+async function unchecked(label: string, op: Promise<unknown>): Promise<void> {
+  try {
+    await op;
+  } catch (e) {
+    logger.warn(
+      { err: e instanceof Error ? e.message : String(e) },
+      `[indexer] ${label} failed (ignored)`,
     );
   }
 }
@@ -118,8 +134,8 @@ export async function recordVrfGame(args: {
   slot: number;
   blockTime: string;
 }): Promise<void> {
-  const db = supabaseAdmin();
-  const res = await db.from("games").upsert(
+  await check("games", "recordVrfGame.upsert", upsert(
+    "games",
     {
       signature: args.signature,
       game: args.gamePda,
@@ -139,9 +155,8 @@ export async function recordVrfGame(args: {
       settled_at: args.blockTime,
       slot: args.slot,
     },
-    { onConflict: "signature" },
-  );
-  check("games", "recordVrfGame.upsert", res);
+    ["signature"],
+  ));
 
   // MIRROR PLAYER STATS TOO.
   //
@@ -160,7 +175,7 @@ export async function recordVrfGame(args: {
     const info = await getConnection().getAccountInfo(statsPda, "confirmed");
     if (info) {
       const st = decodePlayerStats(info.data as Buffer);
-      const rpc = await db.rpc("idx_apply_stats", {
+      await check("player_stats", "recordVrfGame.stats", rpc("idx_apply_stats", {
         p_player: args.player,
         p_games_played: st.gamesPlayed.toString(),
         p_games_won: st.gamesWon.toString(),
@@ -171,8 +186,7 @@ export async function recordVrfGame(args: {
         p_best_streak: st.bestStreak,
         p_last_played: args.blockTime,
         p_event_slot: args.slot,
-      });
-      check("player_stats", "recordVrfGame.stats", rpc);
+      }));
     }
   } catch (e) {
     logger.error({ err: e, player: args.player }, "vrf player_stats mirror failed");
@@ -188,7 +202,6 @@ export async function recordVrfGame(args: {
 }
 
 export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResult> {
-  const db = supabaseAdmin();
   let processed = 0;
   let skipped = 0;
   let errors = 0;
@@ -207,24 +220,24 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
         skipped++;
         continue;
       }
-      // Attempt to claim this signature. If another concurrent ingest already
-      // inserted it, `inserted` will be empty array — skip without applying.
-      // The `.select()` after `.insert(..., { ignoreDuplicates: true })` returns
-      // the inserted rows (empty on conflict). This is the atomic claim.
-      const { data: inserted, error: insErr } = await db
-        .from("processed_events")
-        .insert(
-          { signature: tx.signature, ix_kind: events.map((e) => e.kind).join(",") },
-          { count: "exact" },
-        )
-        .select("signature");
-      if (insErr) {
+      // Attempt to claim this signature with a plain INSERT on the signature
+      // PK. If another concurrent ingest already inserted it, the insert fails
+      // with 23505 — skip without applying. This is the atomic claim.
+      let inserted: unknown[];
+      try {
+        inserted = await query(
+          "insert into public.processed_events (signature, ix_kind) values ($1, $2) returning signature",
+          [tx.signature, events.map((e) => e.kind).join(",")],
+        );
+      } catch (insErr) {
         // Unique-violation = already claimed by another ingest, skip silently.
-        if (insErr.code === "23505") {
+        if (pgCode(insErr) === "23505") {
           skipped++;
           continue;
         }
-        throw new Error(`[processed_events.insert] ${insErr.code ?? ""} ${insErr.message}`);
+        throw new Error(
+          `[processed_events.insert] ${pgCode(insErr) ?? ""} ${insErr instanceof Error ? insErr.message : String(insErr)}`,
+        );
       }
       if (!inserted || inserted.length === 0) {
         skipped++;
@@ -243,13 +256,11 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
           applyErr instanceof IndexerApplyError ? applyErr.pgCode : undefined;
         const isTerminal = pgCode !== undefined && TERMINAL_PG_CODES.has(pgCode);
         if (!isTerminal) {
-          const del = await db
-            .from("processed_events")
-            .delete()
-            .eq("signature", tx.signature);
-          if (del.error) {
+          try {
+            await query("delete from public.processed_events where signature = $1", [tx.signature]);
+          } catch (delErr) {
             logger.error(
-              { sig: tx.signature, err: del.error.message },
+              { sig: tx.signature, err: delErr instanceof Error ? delErr.message : String(delErr) },
               "[indexer] FAILED to release processed_events claim after apply error — sig will be skipped on retry",
             );
           }
@@ -276,7 +287,6 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
 }
 
 async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
-  const db = supabaseAdmin();
   const slot = Number(ev.slot ?? tx.slot ?? 0);
   const blockTime = new Date((tx.blockTime ?? Date.now() / 1000) * 1000).toISOString();
 
@@ -292,7 +302,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       // them exactly; Number() silently rounds anything above 2^53
       // (~9007 SOL). At realistic mainnet usage `total_wagered` /
       // `total_payouts` cross 2^53 over the lifetime of a player.
-      const rpc = await db.rpc("idx_apply_stats", {
+      await check("player_stats", "StatsUpdated.rpc", rpc("idx_apply_stats", {
         p_player: ev.player.toBase58(),
         p_games_played: ev.gamesPlayed.toString(),
         p_games_won: ev.gamesWon.toString(),
@@ -303,8 +313,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         p_best_streak: ev.currentStreak,
         p_last_played: blockTime,
         p_event_slot: slot,
-      });
-      check("player_stats", "StatsUpdated.rpc", rpc);
+      }));
       break;
     }
     case "GameSettled": {
@@ -324,7 +333,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       // the settle was silently lost and the verifier showed PENDING
       // forever even though the chain settled correctly.
       const game = ev.game.toBase58();
-      const rpc = await db.rpc("idx_apply_game_settled", {
+      const updatedRaw = await check("games", "GameSettled.rpc", rpc<number>("idx_apply_game_settled", {
         p_game: game,
         p_mine_layout: ev.mineLayout,
         p_mine_count: ev.mineCount,
@@ -332,9 +341,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         p_salt: ev.salt.toString("hex"),
         p_settle_signature: tx.signature,
         p_event_slot: slot,
-      });
-      check("games", "GameSettled.rpc", rpc);
-      const updated = (rpc.data as number | null) ?? 0;
+      }));
+      const updated = updatedRaw ?? 0;
       if (updated === 0) {
         // The cashout row doesn't exist yet — usually because the GameWon/
         // GameLost event in a SEPARATE earlier tx hasn't been ingested yet.
@@ -361,7 +369,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "GameWon": {
-      const res = await db.from("games").upsert(
+      await check("games", "GameWon.upsert", upsert(
+        "games",
         {
           signature: tx.signature,
           game: ev.game.toBase58(),
@@ -377,9 +386,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           settled_at: blockTime,
           slot,
         },
-        { onConflict: "signature" },
-      );
-      check("games", "GameWon.upsert", res);
+        ["signature"],
+      ));
       // Award XP. Idempotent on (sourceKey, source) — replaying this event
       // never double-credits. tier/streak/event multipliers default to 1.0×
       // until those feeders ship; we still capture the bet+edge in the row.
@@ -393,7 +401,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "GameLost": {
-      const res = await db.from("games").upsert(
+      await check("games", "GameLost.upsert", upsert(
+        "games",
         {
           signature: tx.signature,
           game: ev.game.toBase58(),
@@ -409,9 +418,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           settled_at: blockTime,
           slot,
         },
-        { onConflict: "signature" },
-      );
-      check("games", "GameLost.upsert", res);
+        ["signature"],
+      ));
       await awardPoints({
         player: ev.player.toBase58(),
         sourceKey: tx.signature,
@@ -424,23 +432,23 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
     case "ReferrerSet": {
       // On-chain set_referrer can only fire once per player (stats.referrer is
       // immutable after first set), so the RPC is first-write-wins.
-      const r1 = await db.rpc("idx_apply_referrer_set", {
+      await check("player_stats", "ReferrerSet.rpc", rpc("idx_apply_referrer_set", {
         p_player: ev.player.toBase58(),
         p_referrer: ev.referrer.toBase58(),
-      });
-      check("player_stats", "ReferrerSet.rpc", r1);
+      }));
       // Make sure the referrer row exists; ignore conflicts.
-      await db
-        .from("referrals")
-        .upsert(
-          { referrer: ev.referrer.toBase58() },
-          { onConflict: "referrer", ignoreDuplicates: true },
-        );
+      await unchecked("referrals.upsert", upsert(
+        "referrals",
+        { referrer: ev.referrer.toBase58() },
+        ["referrer"],
+        { ignoreDuplicates: true },
+      ));
       break;
     }
     case "ReferralAccrued": {
       // Event log table — keyed on signature PK, safe to upsert.
-      await db.from("referral_events").upsert(
+      await unchecked("referral_events.upsert", upsert(
+        "referral_events",
         {
           signature: tx.signature,
           referrer: ev.referrer.toBase58(),
@@ -450,38 +458,35 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           occurred_at: blockTime,
           slot,
         },
-        { onConflict: "signature" },
-      );
+        ["signature"],
+      ));
       // Atomic SQL increment via RPC — no read-modify-write race. The function
       // computes referred_volume from the tier bps (50/60/70), replacing the
       // old hard-coded × 200 (only correct for tier 0).
-      const rpc = await db.rpc("idx_apply_referral_accrued", {
+      await check("referrals", "ReferralAccrued.rpc", rpc("idx_apply_referral_accrued", {
         p_referrer: ev.referrer.toBase58(),
         p_amount: ev.amount.toString(),
         p_tier: ev.tier,
         p_event_slot: slot,
-      });
-      check("referrals", "ReferralAccrued.rpc", rpc);
+      }));
       break;
     }
     case "ReferralTierChanged": {
       // Slot-guarded inside the RPC — older deliveries no-op.
-      const rpc = await db.rpc("idx_apply_referral_tier", {
+      await check("referrals", "ReferralTierChanged.rpc", rpc("idx_apply_referral_tier", {
         p_referrer: ev.referrer.toBase58(),
         p_new_tier: ev.newTier,
         p_event_slot: slot,
-      });
-      check("referrals", "ReferralTierChanged.rpc", rpc);
+      }));
       break;
     }
     case "ReferralClaimed": {
       // Atomic decrement, clamped at 0 inside the RPC.
-      const rpc = await db.rpc("idx_apply_referral_claimed", {
+      await check("referrals", "ReferralClaimed.rpc", rpc("idx_apply_referral_claimed", {
         p_referrer: ev.referrer.toBase58(),
         p_amount: ev.amount.toString(),
         p_event_slot: slot,
-      });
-      check("referrals", "ReferralClaimed.rpc", rpc);
+      }));
       break;
     }
     // ─── Phase 2: LP vault events ─────────────────────────────────────────
@@ -489,7 +494,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       const userKey = ev.user.toBase58();
       const unitValue =
         ev.totalUnitsAfter > 0n ? (ev.vaultAssetsAfter * 10n ** 18n) / ev.totalUnitsAfter : 0n;
-      await db.from("lp_actions").upsert(
+      await unchecked("lp_actions.upsert", upsert(
+        "lp_actions",
         {
           signature: tx.signature,
           user_address: userKey,
@@ -500,22 +506,22 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           slot,
           block_time: blockTime,
         },
-        { onConflict: "signature" },
-      );
+        ["signature"],
+      ));
       // Atomic SQL increment — no RMW race even under concurrent webhook delivery.
-      const rpc = await db.rpc("idx_apply_lp_deposit", {
+      await check("lp_positions", "LpDeposited.rpc", rpc("idx_apply_lp_deposit", {
         p_user_address: userKey,
         p_units_delta: ev.unitsMinted.toString(),
         p_lamports_delta: ev.amountLamports.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
-      });
-      check("lp_positions", "LpDeposited.rpc", rpc);
+      }));
       break;
     }
     case "LpWithdrawRequested": {
       const userKey = ev.user.toBase58();
-      await db.from("lp_actions").upsert(
+      await unchecked("lp_actions.upsert", upsert(
+        "lp_actions",
         {
           signature: tx.signature,
           user_address: userKey,
@@ -526,21 +532,21 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           slot,
           block_time: blockTime,
         },
-        { onConflict: "signature" },
-      );
-      const rpc = await db.rpc("idx_apply_lp_request", {
+        ["signature"],
+      ));
+      await check("lp_positions", "LpWithdrawRequested.rpc", rpc("idx_apply_lp_request", {
         p_user_address: userKey,
         p_units: ev.units.toString(),
         p_unlock_slot: ev.unlockSlot.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
-      });
-      check("lp_positions", "LpWithdrawRequested.rpc", rpc);
+      }));
       break;
     }
     case "LpWithdrawCancelled": {
       const userKey = ev.user.toBase58();
-      await db.from("lp_actions").upsert(
+      await unchecked("lp_actions.upsert", upsert(
+        "lp_actions",
         {
           signature: tx.signature,
           user_address: userKey,
@@ -551,22 +557,22 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           slot,
           block_time: blockTime,
         },
-        { onConflict: "signature" },
-      );
-      const rpc = await db.rpc("idx_apply_lp_cancel", {
+        ["signature"],
+      ));
+      await check("lp_positions", "LpWithdrawCancelled.rpc", rpc("idx_apply_lp_cancel", {
         p_user_address: userKey,
         p_units_returned: ev.unitsReturned.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
-      });
-      check("lp_positions", "LpWithdrawCancelled.rpc", rpc);
+      }));
       break;
     }
     case "LpWithdrawCompleted": {
       const userKey = ev.user.toBase58();
       const unitValue =
         ev.totalUnitsAfter > 0n ? (ev.vaultAssetsAfter * 10n ** 18n) / ev.totalUnitsAfter : 0n;
-      await db.from("lp_actions").upsert(
+      await unchecked("lp_actions.upsert", upsert(
+        "lp_actions",
         {
           signature: tx.signature,
           user_address: userKey,
@@ -580,22 +586,22 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           slot,
           block_time: blockTime,
         },
-        { onConflict: "signature" },
-      );
-      const rpc = await db.rpc("idx_apply_lp_complete", {
+        ["signature"],
+      ));
+      await check("lp_positions", "LpWithdrawCompleted.rpc", rpc("idx_apply_lp_complete", {
         p_user_address: userKey,
         p_units_burned: ev.unitsBurned.toString(),
         p_lamports_out: ev.amountLamports.toString(),
         p_block_time: blockTime,
         p_event_slot: slot,
-      });
-      check("lp_positions", "LpWithdrawCompleted.rpc", rpc);
+      }));
       break;
     }
     case "VaultUnitValueUpdated": {
       const unitValue =
         ev.totalUnits > 0n ? (ev.vaultAssets * 10n ** 18n) / ev.totalUnits : 0n;
-      await db.from("vault_unit_value_history").upsert(
+      await unchecked("vault_unit_value_history.upsert", upsert(
+        "vault_unit_value_history",
         {
           slot,
           // vault_assets at SOL-scale TVL exceeds 2^53 lamports (9007 SOL).
@@ -606,8 +612,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
           health_bps: ev.healthBps,
           block_time: blockTime,
         },
-        { onConflict: "slot" },
-      );
+        ["slot"],
+      ));
       break;
     }
     case "HouseDeposited":
@@ -644,7 +650,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
             : ev.kind === "HouseWithdrawCompleted"
               ? (-ev.amountLamports).toString()
               : "0";
-        await db.from("lp_actions").upsert(
+        await unchecked("lp_actions.upsert", upsert(
+          "lp_actions",
           {
             signature: tx.signature,
             user_address: userKey,
@@ -655,8 +662,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
             slot,
             block_time: blockTime,
           },
-          { onConflict: "signature" },
-        );
+          ["signature"],
+        ));
       }
       break;
     }

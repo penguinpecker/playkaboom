@@ -45,7 +45,7 @@ export default function PrivacyPage() {
             </li>
             <li>
               <strong>Game history</strong> — settled games are public on the Solana mainnet.
-              We mirror this data into our indexer (Supabase Postgres) for fast leaderboard
+              We mirror this data into our indexer (Postgres on Railway) for fast leaderboard
               and history queries; nothing is stored that isn't already public on chain.
             </li>
             <li>
@@ -102,15 +102,10 @@ export default function PrivacyPage() {
               )
             </li>
             <li>
-              <strong>Turnkey</strong> — HSM-backed signing for the house authority key.
-              Turnkey never sees your data; only ours.
+              <strong>Railway</strong> — application and API hosting, and the Postgres
+              database holding our indexer cache.
             </li>
-            <li>
-              <strong>Supabase</strong> — Postgres database hosting our indexer cache.
-            </li>
-            <li>
-              <strong>Vercel</strong> — application and API hosting.
-            </li>
+
             <li>
               <strong>Alchemy</strong> — Solana RPC and WebSocket node provider.
             </li>
@@ -148,10 +143,9 @@ export default function PrivacyPage() {
             7. Security
           </h2>
           <p>
-            All sensitive secrets (Supabase service role, Turnkey API keys, session encryption
-            keys) are stored in Vercel environment variables marked as Sensitive (encrypted at
-            rest, write-only). The hot signing key for the on-chain house authority lives
-            inside a Turnkey HSM and never leaves the enclave.
+            All sensitive secrets (database credentials, the house signing key, session
+            encryption keys) are stored as Railway service variables, read only by our server
+            and never sent to your browser.
           </p>
         </section>
 

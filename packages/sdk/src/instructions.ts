@@ -80,6 +80,8 @@ export function buildFundVault(args: FundVaultArgs): TransactionInstruction {
 }
 
 // ── start_game ────────────────────────────────────────────────────────────────
+// Legacy commit-reveal start. The deployed program rejects it with 6057
+// LegacyModeDisabled (VRF-only upgrade); kept only so the ABI stays covered.
 export interface StartGameArgs {
   ctx: BuildContext;
   player: PublicKey;
@@ -323,6 +325,25 @@ export function buildRefundExpired(args: RefundExpiredArgs): TransactionInstruct
   });
 }
 
+// ── expire_game (F2) ──────────────────────────────────────────────────────────
+// Permissionless exit for an expired legacy game (slot > start + 300). Pays the
+// larger of refund / cash value to `game.player`; the player does not sign.
+export interface ExpireGameArgs {
+  ctx: BuildContext;
+  player: PublicKey;
+}
+
+export function buildExpireGame(args: ExpireGameArgs): TransactionInstruction {
+  const [vaultPda] = deriveVaultPda(args.ctx.programId);
+  const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
+  const [gamePda] = deriveGamePda(args.ctx.programId, args.player);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [writable(vaultPda), writable(v2StatePda), writable(gamePda), writable(args.player)],
+    data: ixDiscriminator("expire_game"),
+  });
+}
+
 // ── close_game ────────────────────────────────────────────────────────────────
 export interface CloseGameArgs {
   ctx: BuildContext;
@@ -539,7 +560,12 @@ interface UserLpActionArgs {
   user: PublicKey;
 }
 
-function buildUserLpAction(name: string, args: UserLpActionArgs, extra?: Buffer): TransactionInstruction {
+function buildUserLpAction(
+  name: string,
+  args: UserLpActionArgs,
+  extra?: Buffer,
+  userSigns = true,
+): TransactionInstruction {
   const [vaultPda] = deriveVaultPda(args.ctx.programId);
   const [v2StatePda] = deriveV2StatePda(args.ctx.programId);
   const [positionPda] = deriveLpPositionPda(args.ctx.programId, args.user);
@@ -550,7 +576,7 @@ function buildUserLpAction(name: string, args: UserLpActionArgs, extra?: Buffer)
       writable(vaultPda),
       writable(v2StatePda),
       writable(positionPda),
-      writable(args.user, true),
+      writable(args.user, userSigns),
     ],
     data,
   });
@@ -568,8 +594,17 @@ export function buildCancelWithdraw(args: UserLpActionArgs): TransactionInstruct
   return buildUserLpAction("cancel_withdraw", args);
 }
 
-export function buildCompleteWithdraw(args: UserLpActionArgs): TransactionInstruction {
-  return buildUserLpAction("complete_withdraw", args);
+export interface CompleteWithdrawArgs extends UserLpActionArgs {
+  /**
+   * F4: the program no longer checks the user's signature, so a keeper can
+   * complete a matured request (funds still go only to `position.user`).
+   * Default true (the LP's own button); the house cron passes false.
+   */
+  userSigns?: boolean;
+}
+
+export function buildCompleteWithdraw(args: CompleteWithdrawArgs): TransactionInstruction {
+  return buildUserLpAction("complete_withdraw", args, undefined, args.userSigns ?? true);
 }
 
 export interface CloseLpPositionArgs {

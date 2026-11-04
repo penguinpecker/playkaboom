@@ -20,12 +20,15 @@ tile does not exist until you tap it, and the whole round is replayed and re-ver
 L1 at settlement. There is no server-held secret and no hot signer in the game loop.
 
 The original commit-reveal engine (server commits `SHA-256(layout ‖ mine_count ‖ salt)`
-before the first tap, with each reveal signed by a Turnkey HSM) is still in the program as
-a legacy path, but it is no longer the way the game is played.
+before the first tap, with each reveal signed by the house key) is retired: the relaunched
+program rejects new commit-reveal games (`start_game` returns 6057 `LegacyModeDisabled`) and
+keeps only the instructions that wind down old ones.
 
-> **Status — 2026-10-05.** The mainnet program has been closed and the site is in
-> maintenance mode. The rest of this document describes the system as it ran on mainnet and
-> is kept as the reference for the next deployment, which will use a new program ID.
+> **Status — 2026-11-05.** Relaunched on mainnet under a new program ID,
+> `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` (a Pinocchio port, VRF-only). The old program
+> `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05. Turnkey and Supabase
+> are retired: the API, its database and the relay run on Railway, and the frontend runs on
+> Vercel. The live addresses and setup are in [HANDOFF.md](HANDOFF.md).
 
 ---
 
@@ -37,12 +40,15 @@ a legacy path, but it is no longer the way the game is played.
 | Public status | <https://status.playkaboom.gg> |
 | Cluster | `mainnet-beta` |
 | Rollup | MagicBlock ephemeral rollup, pinned validator + pinned VRF oracle queue |
-| Anchor version | 0.31.1 |
+| Program | `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` (Pinocchio, VRF-only) |
 
-Every admin, treasury and upgrade path sits behind a Squads V4 **2-of-2** multisig. The
-only key the server holds is the house key (kept in a Turnkey HSM in production), and in VRF
-mode it is confined to submitting settle and refund transactions — it cannot change config, move
-treasury funds, upgrade the program, or influence a single tile.
+The only key the server holds is the house key: a raw keypair kept only as a sealed variable
+on the Railway API service (never on Vercel, never in the repo). It is confined to bounded
+cleanup and settlement — VRF settle, force-undelegate and refund, legacy wind-down, and LP
+auto-complete. It cannot start a commit-reveal game, change config, move treasury funds,
+upgrade the program, or influence a single tile. The upgrade authority, `vault.owner` and
+`vault.treasury` are all the deployer key until they are handed over to a Squads V4 **2-of-2**
+multisig.
 
 ---
 
@@ -50,24 +56,24 @@ treasury funds, upgrade the program, or influence a single tile.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                             CLIENT (browser)                               │
+│                     CLIENT (browser) · served from Vercel                  │
 │   React 19 + Next.js 15 App Router · Tailwind · Privy embedded wallets      │
 │                                                                            │
 │   /play  /vault  /leaderboard  /referrals  /logs  /verify/[sig]  /profile   │
 │   version guard (auto-reload on new build)  ·  WS live feed                 │
 └────────────────────────────────────────────────────────────────────────────┘
         │                    │                          │
-        │ REST               │ Solana RPC (proxied)     │ WebSocket
+        │ REST via Vercel    │ Solana RPC (proxied)     │ WebSocket
         ▼                    ▼                          ▼
 ┌───────────────────────────────────────────┐   ┌────────────────────────────┐
-│      SERVER · Next.js on Vercel           │   │  RELAY · Railway           │
+│      API · Next.js on Railway             │   │  RELAY · Railway           │
 │                                           │   │  apps/realtime             │
 │  /api/vrf/{settle,refund}                 │   │                            │
-│  /api/vault/* /leaderboard /activity/*    │   │  fan-out of Supabase       │
-│  /api/status /version /health /ingest     │   │  Realtime → N browsers     │
-│  /api/cron/{index-events,vault-health,    │   │  + Alchemy logsSubscribe   │
-│             vrf-settle}                   │   │    push → /api/ingest      │
-│  /api/commit /reveal /settle  (legacy)    │   │  + 60s cron tickler        │
+│  /api/vault/* /leaderboard /activity/*    │   │  fan-out of Postgres       │
+│  /api/status /version /health /ingest     │   │  LISTEN → N browsers       │
+│  /api/cron/tick  (relay, every 60 s)      │   │  + Alchemy logsSubscribe   │
+│  /api/cron/index-events  /api/healthz     │   │    push → /api/ingest      │
+│  /api/cleanup  (legacy wind-down)         │   │  + 60s cron tickler        │
 │                                           │   └────────────────────────────┘
 │  Privy JWT · Zod · Pino · Upstash rate-   │
 │  limit · AES-256-GCM session encryption   │
@@ -76,7 +82,7 @@ treasury funds, upgrade the program, or influence a single tile.
         │ settle / refund (permissionless)     │ Postgres
         ▼                                      ▼
  ┌─────────────────────────┐            ┌─────────────┐
- │   Solana mainnet (L1)   │ ─── logs ▶ │  Supabase   │
+ │   Solana mainnet (L1)   │ ─── logs ▶ │  Postgres   │
  │   via Alchemy RPC       │            │  indexer    │
  └─────────────────────────┘            │  mirror     │
         │   ▲                           └─────────────┘
@@ -87,7 +93,7 @@ treasury funds, upgrade the program, or influence a single tile.
  │   per-click VRF oracle · instant taps · TEE-capable  │
  └──────────────────────────────────────────────────────┘
         │
-        │ Anchor 0.31 program (Rust, 41 instructions)
+        │ Pinocchio program (Rust), VRF-only
         ▼
  ┌──────────────────────────────────────────────────────┐
  │  Vault · VaultV2State · GameSession · GameSessionV2   │
@@ -100,19 +106,19 @@ treasury funds, upgrade the program, or influence a single tile.
 
 | Layer | Technology |
 |---|---|
-| Smart contract | [Anchor](https://www.anchor-lang.com/) 0.31.1 (Rust), Solana mainnet-beta — 41 instructions |
-| Rollup + randomness | [MagicBlock](https://magicblock.gg/) ephemeral rollups + ephemeral VRF, `ephemeral-rollups-sdk` 0.15.5 with the `vrf` feature |
+| Smart contract | [Pinocchio](https://github.com/anza-xyz/pinocchio) (Rust) port of the original Anchor program, Solana mainnet-beta, VRF-only |
+| Rollup + randomness | [MagicBlock](https://magicblock.gg/) ephemeral rollups + ephemeral VRF, `ephemeral-rollups-pinocchio` 0.17.3 |
 | TypeScript SDK | Hand-rolled instruction builders + account/event decoders (no IDL runtime dependency) |
-| Backend | [Next.js](https://nextjs.org/) 15 App Router, Vercel functions (Node.js runtime) |
+| Backend | [Next.js](https://nextjs.org/) 15 App Router on [Railway](https://railway.app/) (Node.js, `apps/web/Dockerfile`) |
 | Frontend | [React](https://react.dev/) 19, [Tailwind CSS](https://tailwindcss.com/), [Zustand](https://zustand-demo.pmnd.rs/), [TanStack Query](https://tanstack.com/query) |
 | Auth | [Privy](https://privy.io/) (embedded wallets + social login + server-side JWT verification) |
-| Database | [Supabase](https://supabase.com/) Postgres (indexer mirror, RLS-forced, public read / service-role write) |
+| Database | Railway Postgres (indexer mirror; the API connects as the non-superuser role `kaboom_app`, the relay as `kaboom_relay`, which can only `LISTEN`) |
 | Live feed | Railway WebSocket relay (`apps/realtime`) — one upstream connection fans out to every viewer |
 | RPC | [Alchemy](https://www.alchemy.com/) Solana mainnet (HTTP + WS) |
 | Rate limiting | [Upstash Redis](https://upstash.com/) sliding-window (per-IP + per-wallet) |
 | Price feed | [Pyth](https://pyth.network/) Hermes (SOL/USD overlay) |
-| Governance | [Squads V4](https://squads.so/) 2-of-2 — owner, treasury and upgrade authority |
-| Hosting | [Vercel](https://vercel.com/) (web) + [Railway](https://railway.app/) (relay) |
+| Governance | [Squads V4](https://squads.so/) 2-of-2 — target for owner, treasury and upgrade authority (handover pending; the deployer key holds them until then) |
+| Hosting | [Vercel](https://vercel.com/) (frontend only; proxies `/api/*` to Railway via `KABOOM_API_ORIGIN`) + [Railway](https://railway.app/) (API, Postgres, relay) |
 
 ---
 
@@ -147,16 +153,19 @@ The mine layout is never generated. Each tap draws its own randomness.
    the house key can refund the bet after `STALL_SLOTS`. A game stranded inside an
    unresponsive rollup has no refund path until it is undelegated. Games abandoned for
    `ABANDON_SLOTS` (~24 h) can have their vault reservation released by the owner
-   (`admin_release_vrf_claim`, a Squads vote).
+   (`admin_release_vrf_claim`, an owner action; a Squads vote after the handover).
 
-### Commit-reveal (legacy, retained in the program)
+### Commit-reveal (retired; wind-down only)
+
+The relaunched program rejects new commit-reveal games (`start_game` returns 6057). The steps
+below describe how old games worked; only their wind-down instructions remain.
 
 1. **Commit — `start_game`.** Server generates a 4×4 layout + 32-byte salt off chain, computes
    `commitment = SHA-256(layout ‖ mine_count ‖ salt)`, and broadcasts
    `start_game(mine_count, bet, commitment)`. Layout and salt stay server-side.
-2. **Reveal — `reveal_tile`.** Each tap is signed by the house key (a Turnkey HSM in
-   production). The encrypted session token is bound to the on-chain commitment, so a token
-   from a previous round cannot be replayed against a new one.
+2. **Reveal — `reveal_tile`.** Each tap is signed by the house key. The encrypted session
+   token is bound to the on-chain commitment, so a token from a previous round cannot be
+   replayed against a new one.
 3. **Settle — `settle_game`.** The program recomputes the hash from the published
    `(mine_layout, salt)` and **rejects** any settle whose hash doesn't match the original
    commitment, or any reveal inconsistent with the published layout.
@@ -209,7 +218,7 @@ stay live during the cooldown, still earning or losing.
   vault. Like the two above it is owner-configured; the live value of every parameter is
   on the [status page](https://status.playkaboom.gg) and in `/api/vault/state`.
 - **Treasury split** — 50% of each settle's house profit stays in the vault (raising unit
-  value for every LP); the other 50% goes to the Squads treasury.
+  value for every LP); the other 50% goes to the treasury.
 - **Live config** — every cap is recomputed from current vault state at start time. No
   staleness.
 
@@ -229,7 +238,7 @@ It reports, live:
 | Per-click VRF mode | whether VRF is armed, and its payout ceiling |
 | Stuck capital | any abandoned game still reserving vault capital, and for how long |
 | MagicBlock rollup | rollup slot and validator core version |
-| Database | Supabase reachable |
+| Database | Postgres (Railway) reachable |
 | Indexer | slots behind the program, minutes since the last mirrored game |
 | Realtime relay | Railway relay live, connected viewer count |
 
@@ -248,10 +257,10 @@ playkaboom/
 │   │   │                          /install, /terms, /privacy
 │   │   ├── src/app/api/    REST: vrf/*, vault/*, status, version, leaderboard,
 │   │   │                         activity/*, ref/*, cron/*, ingest, rpc/*,
-│   │   │                         commit, reveal, settle (legacy)
+│   │   │                         healthz, cleanup (legacy wind-down)
 │   │   ├── src/lib/vrf/    rollup client — atomic start, confirmation polling, undelegate
 │   │   ├── src/server/     server-only: env, auth, session-store, indexer, solana,
-│   │   │                                verify-vrf, ratelimit, legacy house signer
+│   │   │                                verify-vrf, ratelimit, house-signer
 │   │   ├── src/hooks/      use-vrf-game (rollup state machine), use-game-actions, …
 │   │   ├── src/components/ game grid, bet controls, recovery banner, providers
 │   │   └── src/middleware.ts  status-subdomain isolation
@@ -263,7 +272,8 @@ playkaboom/
 ├── packages/
 │   ├── sdk/                instruction builders, account/event decoders, PDAs, vrf, verify
 │   └── shared/             constants + zod schemas + multiplier math
-├── supabase/migrations/    indexer schema (player_stats, games, referrals, lp_*, …)
+├── db/migrations/          indexer schema on Railway Postgres (player_stats, games, referrals, lp_*, …)
+├── supabase/migrations/    retired (pre-relaunch Supabase schema, kept as history)
 ├── scripts/                ops + deploy tooling (see below)
 ├── docs/                   security reviews, MagicBlock handoff, operations runbooks
 ├── tests/                  Vitest unit tests + Anchor integration runner
@@ -292,8 +302,10 @@ fixture (`tests/fixtures/multiplier.json`) covering `mine_count` 1..15 × `safe_
 
 ### Deploying
 
-Production is **CLI-only** — the Vercel project has no git integration, so pushing to `main`
-does not deploy anything. Deploy and verification are deliberately one step:
+The API (`kaboom-web`), Postgres and the relay deploy on Railway; the runbook is
+`pinocchio/MIGRATION/DEPLOY.md`. The frontend deploys to Vercel and is **CLI-only** — the
+Vercel project has no git integration, so pushing to `main` does not deploy anything. Deploy
+and verification are deliberately one step:
 
 ```bash
 ./scripts/deploy.sh                          # build → deploy → verify, all or nothing
@@ -317,10 +329,11 @@ player is idle (a banner instead, mid-round), so a stale tab can't keep running 
 - **No hot signer in the game loop** — in VRF mode no house key signs a reveal. Taps are
   signed by a throwaway session key the player funds, the rollup's VRF oracle writes the
   randomness, the program derives the outcome, and L1 replays it. The house key only
-  submits settle (permissionless) and refund transactions, and prices nothing.
-- **Governance is 2-of-2** — `vault.owner`, `vault.treasury` and the BPF upgrade authority
-  are all the Squads V4 vault PDA. No single key can upgrade the program or move treasury
-  funds.
+  submits bounded cleanup and settlement transactions (settle, force-undelegate, refund,
+  legacy wind-down, LP auto-complete), and prices nothing.
+- **Governance: Squads 2-of-2 handover pending** — the BPF upgrade authority, `vault.owner`
+  and `vault.treasury` are still the deployer key; the target is the Squads V4 vault PDA,
+  after which no single key can upgrade the program, change config or move treasury funds.
 - **No custody** — wagers settle wallet ↔ vault PDA on chain. There is no deposit balance to
   drain, and the VRF path keeps every lamport on L1 while only gameplay state visits the
   rollup.
@@ -330,14 +343,15 @@ player is idle (a banner instead, mid-round), so a stale tab can't keep running 
 - **L1 re-verification** — `settle_vrf` never trusts committed rollup state for anything that
   prices a payout: bet, mine count and edge come from the never-delegated `VrfClaim`, the
   outcome is replayed from the recorded randomness, and `reserved` caps the payout absolutely.
-- **Legacy path is commitment-bound** — on the commit-reveal path the encrypted game token is
-  checked against the live on-chain commitment on every reveal, and the house key that signs
-  those reveals lives in a Turnkey HSM, never on disk.
-- **Server-only secrets** — sensitive Vercel env vars are marked `Sensitive` (encrypted at
-  rest, write-only after creation). Server modules `import "server-only"` so an accidental
-  client import fails the build.
+- **Legacy path is closed** — the relaunched program rejects new commit-reveal games, so the
+  house key cannot open one; only the wind-down of old games remains. The house key is a
+  sealed Railway variable on the API service, never on Vercel and never in the repo.
+- **Server-only secrets** — every server secret (house key, database URL, Privy secret, RPC
+  URL) is a sealed Railway variable on the API service. Vercel holds only the frontend's
+  build-time public values, stored as `Sensitive`. Server modules `import "server-only"` so
+  an accidental client import fails the build.
 - **Strict CSP** — same-origin scripts plus Privy, Turnstile, WalletConnect explorer, Alchemy,
-  Supabase, Pyth Hermes and MagicBlock. No third-party trackers.
+  the Railway relay, Pyth Hermes and MagicBlock. No third-party trackers.
 - **Rate limiting** — Upstash sliding window on per-IP and per-(IP, wallet) for every
   player-mutating route.
 - **Account hardening** — Anchor seed/bump validation throughout, discriminator

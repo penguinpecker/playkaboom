@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHash } from "node:crypto";
 import { assertProgramInvoked, extractEventsFromLogs } from "@playkaboom/sdk";
-import { verifyVrfSettle } from "@/server/verify-vrf";
+import { isTxSignature, verifyVrfSettle } from "@/server/verify-vrf";
 import { getConnection } from "@/server/connection";
 import { programId } from "@/server/env";
 import { jsonError } from "@/server/api-helpers";
@@ -34,7 +34,7 @@ interface RouteContext {
 export async function GET(_req: NextRequest, ctx: RouteContext) {
   try {
     const { signature } = await ctx.params;
-    if (!/^[1-9A-HJ-NP-Za-km-z]{64,128}$/.test(signature)) {
+    if (!isTxSignature(signature)) {
       return NextResponse.json({ error: "Invalid signature format" }, { status: 400 });
     }
     const conn = getConnection();
@@ -63,10 +63,10 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
       // here with a message telling the player to supply a settle signature
       // they had in fact just supplied. They are still fully verifiable, just
       // by different evidence: the transaction's own lamport movements.
-      if (logs.some((l) => l.includes("Instruction: SettleVrf"))) {
-        const vrf = await verifyVrfSettle(tx);
-        if (vrf) return NextResponse.json(vrf);
-      }
+      // verifyVrfSettle returns null unless the tx is a real, successful
+      // top-level settle_vrf (log text alone is spoofable).
+      const vrf = await verifyVrfSettle(tx);
+      if (vrf) return NextResponse.json(vrf);
       return NextResponse.json(
         {
           error:

@@ -1,0 +1,27 @@
+# Docker build context for apps/web/Dockerfile (kaboom-web on Railway).
+# Allow-list: everything is excluded unless named here, so keypairs/, .env*,
+# target/, pinocchio/, records and other operator files never reach an image.
+*
+
+!package.json
+!package-lock.json
+!.npmrc
+!tsconfig.base.json
+!apps/web
+!packages
+# npm ci validates every workspace in the lockfile, so their manifests ship.
+!apps/realtime/package.json
+!tests/sdk/package.json
+!tests/anchor/package.json
+# Migrations (preDeployCommand: node db/migrate.mjs) and the one-shot copy.
+!db
+# Read at runtime by the invariants cron pass.
+!scripts/known-corruption-allow.txt
+
+# Re-exclude inside the allowed folders.
+**/node_modules
+**/.next
+**/.turbo
+**/.env*
+**/*.tsbuildinfo
+apps/web/Dockerfile

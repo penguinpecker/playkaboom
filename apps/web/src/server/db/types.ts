@@ -1,9 +1,6 @@
 /**
- * Hand-rolled types matching the Supabase schema in
- * `supabase/migrations/20260505000001_init.sql`.
- *
- * Once the project is linked, regenerate via:
- *   supabase gen types typescript --linked > apps/web/src/server/db/types.ts
+ * Hand-rolled types matching the Postgres schema in
+ * `db/migrations/20260505000001_init.sql` (ported from supabase/migrations).
  */
 
 export interface PlayerStatsRow {

@@ -4,41 +4,13 @@ import "server-only";
  * deployment when one var is missing. Each accessor throws with a clear
  * message at first call instead.
  */
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
+import { KABOOM_PROGRAM_ID } from "@playkaboom/shared";
+import { getHouseSigner } from "./house-signer";
 
-let cachedHouseKey: Keypair | null = null;
-export function houseAuthority(): Keypair {
-  if (cachedHouseKey) return cachedHouseKey;
-  const raw = process.env.HOUSE_AUTHORITY_KEY;
-  if (!raw) throw new Error("HOUSE_AUTHORITY_KEY is not set");
-  let secret: number[];
-  try {
-    secret = JSON.parse(raw);
-  } catch {
-    throw new Error("HOUSE_AUTHORITY_KEY must be a JSON byte array");
-  }
-  if (!Array.isArray(secret) || secret.length !== 64) {
-    throw new Error("HOUSE_AUTHORITY_KEY must be 64 bytes");
-  }
-  cachedHouseKey = Keypair.fromSecretKey(Uint8Array.from(secret));
-  return cachedHouseKey;
-}
-
-export function useTurnkey(): boolean {
-  return (process.env.USE_TURNKEY ?? "").toLowerCase() === "true";
-}
-
-let cachedHousePubkey: PublicKey | null = null;
+/** The house signer's public key (= vault.house_authority on chain). */
 export function housePubkey(): PublicKey {
-  if (cachedHousePubkey) return cachedHousePubkey;
-  if (useTurnkey()) {
-    const raw = process.env.TURNKEY_HOUSE_PUBKEY;
-    if (!raw) throw new Error("TURNKEY_HOUSE_PUBKEY is not set");
-    cachedHousePubkey = new PublicKey(raw);
-  } else {
-    cachedHousePubkey = houseAuthority().publicKey;
-  }
-  return cachedHousePubkey;
+  return getHouseSigner().publicKey;
 }
 
 let cachedTreasuryPubkey: PublicKey | null = null;
@@ -53,28 +25,6 @@ export function treasuryPubkey(): PublicKey {
   if (!raw) throw new Error("TREASURY_PUBKEY is not set");
   cachedTreasuryPubkey = new PublicKey(raw);
   return cachedTreasuryPubkey;
-}
-
-export interface TurnkeyConfig {
-  organizationId: string;
-  apiPublicKey: string;
-  apiPrivateKey: string;
-  housePubkey: string;
-}
-
-let cachedTurnkeyConfig: TurnkeyConfig | null = null;
-export function turnkeyConfig(): TurnkeyConfig {
-  if (cachedTurnkeyConfig) return cachedTurnkeyConfig;
-  const organizationId = process.env.TURNKEY_ORG_ID;
-  const apiPublicKey = process.env.TURNKEY_API_PUBLIC_KEY;
-  const apiPrivateKey = process.env.TURNKEY_API_PRIVATE_KEY;
-  const housePubkey = process.env.TURNKEY_HOUSE_PUBKEY;
-  if (!organizationId) throw new Error("TURNKEY_ORG_ID is not set");
-  if (!apiPublicKey) throw new Error("TURNKEY_API_PUBLIC_KEY is not set");
-  if (!apiPrivateKey) throw new Error("TURNKEY_API_PRIVATE_KEY is not set");
-  if (!housePubkey) throw new Error("TURNKEY_HOUSE_PUBKEY is not set");
-  cachedTurnkeyConfig = { organizationId, apiPublicKey, apiPrivateKey, housePubkey };
-  return cachedTurnkeyConfig;
 }
 
 let cachedSessionKey: Buffer | null = null;
@@ -97,24 +47,39 @@ export function sessionEncKey(): Buffer {
 let cachedProgramId: PublicKey | null = null;
 export function programId(): PublicKey {
   if (cachedProgramId) return cachedProgramId;
-  const raw = process.env.PROGRAM_ID;
-  if (!raw) throw new Error("PROGRAM_ID is not set");
+  // Defaults to the relaunch program; any other value is a stale config (the
+  // old 9Xip2L... program is closed), so refuse it instead of sending to it.
+  const raw = process.env.PROGRAM_ID || KABOOM_PROGRAM_ID;
+  if (raw !== KABOOM_PROGRAM_ID) throw new Error(`PROGRAM_ID must be ${KABOOM_PROGRAM_ID} (or unset)`);
   cachedProgramId = new PublicKey(raw);
   return cachedProgramId;
 }
 
+/** Mainnet RPC. No default: a silent devnet fallback would point the house at the wrong chain. */
 export function solanaRpc(): string {
-  return process.env.SOLANA_RPC ?? "https://api.devnet.solana.com";
+  const url = process.env.SOLANA_RPC;
+  if (!url) throw new Error("SOLANA_RPC is not set");
+  return url;
+}
+
+/**
+ * MagicBlock ER endpoint for house-signed rollup txs (F3 force pass). Must name
+ * the same node as v2_state.vrf_validator (MAS1Dt9q... = https://as.magicblock.app/),
+ * so there is deliberately no default. ER_RPC wins; NEXT_PUBLIC_ER_RPC (the
+ * browser's value) is the fallback so one setting serves both.
+ */
+export function erRpc(): string {
+  const url = process.env.ER_RPC || process.env.NEXT_PUBLIC_ER_RPC;
+  if (!url) throw new Error("ER_RPC (or NEXT_PUBLIC_ER_RPC) is not set");
+  return url;
 }
 
 /**
  * SERVER-side kill switch for the VRF game mode.
  *
- * Deliberately separate from the client's NEXT_PUBLIC_VRF_MODE_ENABLED, which
- * is inlined at build time and only chooses which hook the UI calls — it does
- * not stop anyone from calling the money routes directly. This one does, and it
- * flips without a redeploy. Defaults to OFF: the mode must be switched on
- * explicitly, never by omission.
+ * VRF is the only mode, but this still gates the money routes (/api/vrf/*)
+ * and the cron's VRF passes, and flips without a redeploy. Defaults to OFF:
+ * the mode must be switched on explicitly, never by omission.
  */
 export function vrfModeEnabled(): boolean {
   return process.env.VRF_MODE_ENABLED === "true";

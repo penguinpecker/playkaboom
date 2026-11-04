@@ -1,7 +1,6 @@
 "use client";
 import { useEffect } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { getSupabaseBrowser } from "@/lib/supabase-browser";
 
 export interface GlobalGame {
   signature: string;
@@ -15,7 +14,7 @@ export interface GlobalGame {
   slot: number;
 }
 
-/** Shape of a Postgres `games` row delivered via Realtime payload.new. */
+/** Shape of the `games` row projection the relay sends in `data`. */
 interface GamesRow {
   signature: string;
   player: string;
@@ -45,8 +44,8 @@ const rowToGame = (row: GamesRow): GlobalGame => ({
  *  fight to be first without ever creating duplicates. */
 /** Insert OR update a game row in the cached list by signature. INSERTs go
  *  to the head; UPDATEs replace the existing row in-place. Both layers
- *  (Railway WS + Supabase Realtime) call this for every event so the
- *  fairness fields populate as soon as the GameSettled UPDATE lands. */
+ *  (relay WS + 60 s poll) feed this so the row updates as soon as the
+ *  GameSettled UPDATE lands. */
 function applyIncoming(
   queryClient: QueryClient,
   queryKey: readonly unknown[],
@@ -70,30 +69,23 @@ function applyIncoming(
 }
 
 /**
- * Global live-feed of settled games. Three layers of freshness, from
+ * Global live-feed of settled games. Two layers of freshness, from
  * fastest to most reliable:
  *
- *   1. Railway WebSocket relay (primary push) — set
- *      NEXT_PUBLIC_REALTIME_WS_URL to wss://<service>.up.railway.app.
- *      The relay listens to Postgres NOTIFY on `game_settled` (one
- *      Postgres connection serves all viewers) and broadcasts each
- *      payload over WS. Latency ~100ms from indexer write to client.
+ *   1. Railway WebSocket relay (push) — set NEXT_PUBLIC_REALTIME_WS_URL
+ *      to wss://<service>.up.railway.app. The relay LISTENs on the
+ *      Postgres `kaboom_events` channel (one DB connection serves all
+ *      viewers) and broadcasts each games INSERT/UPDATE over WS.
  *
- *   2. Supabase Realtime (fallback push) — postgres_changes listener
- *      on `public.games`. Activated by the 2026-05-09 migration that
- *      adds the table to the supabase_realtime publication. Burns one
- *      Supabase connection per client, so it's the cheaper path until
- *      we outgrow the 200-connection free-tier ceiling.
- *
- *   3. TanStack refetch @ 60s (last-resort poll) — kicks in only when
- *      both push paths are unreachable. Also handles the cold-start
- *      "what was the feed before the websocket connected" snapshot.
+ *   2. TanStack refetch @ 60s (safety-net poll via /api/activity/global)
+ *      — covers relay outages and NOTIFYs lost while the relay was
+ *      reconnecting. Also handles the cold-start snapshot.
  *      `refetchOnWindowFocus` + `refetchOnReconnect` cover mobile-tab
  *      suspension recovery.
  *
- * All three deliver into the same TanStack cache via setQueryData;
- * `applyIncoming` is signature-idempotent so the layers can run in
- * parallel without creating duplicates.
+ * The browser has no direct database access. Both layers deliver into the
+ * same TanStack cache; `applyIncoming` is signature-idempotent so they can
+ * run in parallel without creating duplicates.
  */
 export function useGlobalGames(limit = 200) {
   const queryClient = useQueryClient();
@@ -141,8 +133,7 @@ export function useGlobalGames(limit = 200) {
         }
         const msg = parsed as { type?: string; data?: unknown };
         if (msg.type === "game_settled" && msg.data) {
-          // Relay forwards Supabase Realtime's payload.new directly, so
-          // the row shape matches Layer 2 — same parser for both paths.
+          // Relay sends a fixed 12-column projection of the games row.
           applyIncoming(queryClient, queryKey, rowToGame(msg.data as GamesRow), limit);
         }
       };
@@ -178,32 +169,6 @@ export function useGlobalGames(limit = 200) {
       } catch {
         /* noop */
       }
-    };
-  }, [limit, queryClient]);
-
-  // ── Layer 2: Supabase Realtime fallback ──────────────────────────
-  useEffect(() => {
-    const sb = getSupabaseBrowser();
-    if (!sb) return;
-    const channel = sb
-      .channel("global-games-feed")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "games" },
-        (payload) => {
-          applyIncoming(queryClient, queryKey, rowToGame(payload.new as GamesRow), limit);
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "games" },
-        (payload) => {
-          applyIncoming(queryClient, queryKey, rowToGame(payload.new as GamesRow), limit);
-        },
-      )
-      .subscribe();
-    return () => {
-      void sb.removeChannel(channel);
     };
   }, [limit, queryClient]);
 

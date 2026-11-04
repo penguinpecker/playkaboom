@@ -53,15 +53,23 @@ const RPC_TIMEOUT_MS = 10_000;
 // same notification, and we'd rather skip the POST than spam the endpoint.
 // Authoritative dedup still happens in processed_events on the server.
 const RECENT_SIG_CACHE = 256;
+const KABOOM_PROGRAM_ID = "Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju";
 
 export function startAlchemyLogsSubscriber(): SubscriberHandle | null {
   const wsUrl = process.env.ALCHEMY_WS_URL;
-  const programId = process.env.KABOOM_PROGRAM_ID;
+  // Always the relaunch program: a stale env id (the closed 9Xip2L...) would
+  // subscribe to a dead program and silently push nothing, so it is ignored.
+  const programId = KABOOM_PROGRAM_ID;
+  if (process.env.KABOOM_PROGRAM_ID && process.env.KABOOM_PROGRAM_ID !== KABOOM_PROGRAM_ID) {
+    console.warn(
+      `[alchemy-logs] ignoring KABOOM_PROGRAM_ID=${process.env.KABOOM_PROGRAM_ID}; using the relaunch program ${KABOOM_PROGRAM_ID}`,
+    );
+  }
   const ingestUrl = process.env.INGEST_URL;
   const ingestAuth = process.env.INGEST_AUTH;
-  if (!wsUrl || !programId || !ingestUrl || !ingestAuth) {
+  if (!wsUrl || !ingestUrl || !ingestAuth) {
     console.log(
-      "[alchemy-logs] disabled — set ALCHEMY_WS_URL, KABOOM_PROGRAM_ID, INGEST_URL, INGEST_AUTH to enable",
+      "[alchemy-logs] disabled — set ALCHEMY_WS_URL, INGEST_URL, INGEST_AUTH to enable",
     );
     return null;
   }

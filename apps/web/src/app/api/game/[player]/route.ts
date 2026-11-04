@@ -8,9 +8,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ player: string }> }) {
+  const { player } = await params;
+  let playerPk: PublicKey;
   try {
-    const { player } = await params;
-    const playerPk = new PublicKey(player);
+    playerPk = new PublicKey(player);
+  } catch {
+    return NextResponse.json({ error: "Invalid player pubkey" }, { status: 400 });
+  }
+  try {
     const [pda] = deriveGamePda(programId(), playerPk);
     const info = await getConnection().getAccountInfo(pda, "confirmed");
     if (!info) return NextResponse.json({ active: false });

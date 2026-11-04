@@ -80,44 +80,6 @@ async function post<TIn extends object, TOut>(path: string, body: TIn): Promise<
   return json as TOut;
 }
 
-export interface CommitResponse {
-  commitment: string;
-  instruction: SerializedIx;
-  gameToken: string;
-}
-export async function apiCommit(input: {
-  player: string;
-  mineCount: number;
-  betLamports: bigint;
-}): Promise<CommitResponse> {
-  return post("/api/commit", { ...input, betLamports: input.betLamports.toString() });
-}
-
-export interface RevealResponse {
-  isMine: boolean;
-  tileIndex: number;
-  signature: string;
-  safeReveals: number;
-  gameToken: string;
-  closeInstruction?: SerializedIx;
-}
-export async function apiReveal(input: {
-  player: string;
-  tileIndex: number;
-  gameToken: string;
-}): Promise<RevealResponse> {
-  return post("/api/reveal", input);
-}
-
-export type SettleResponse =
-  | { phase: "cashout"; instruction: SerializedIx }
-  | { signature: string; mineLayout: number; verified: true };
-export async function apiSettle(
-  input: { player: string; gameToken: string; phase?: "cashout" | "settle" },
-): Promise<SettleResponse> {
-  return post("/api/settle", input);
-}
-
 // ── VRF mode ──────────────────────────────────────────────────────────────────
 // NOTE: there is no session-funding helper. The per-game session key is funded
 // by the player inside the start transaction (lib/vrf/client.ts). The former
@@ -177,6 +139,8 @@ export interface VaultStateResponse {
   v2Initialized: boolean;
   programId: string;
   vaultPda: string;
+  /** vault.house_authority (the house signer's public key). */
+  houseAuthority?: string;
   vaultBalanceLamports: string;
   vaultAssetsLamports?: string;
   vaultBalanceSol: number;

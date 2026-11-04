@@ -1,21 +1,81 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot to pick up where the last session left off. Refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
+A self-contained snapshot to pick up where the last session left off. Top section refreshed **2026-11-05** (relaunch); the rest was refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
+
+## STATUS — 2026-11-05: RELAUNCHED (Pinocchio, VRF-only, Railway API + Vercel frontend)
+
+**Live on Solana mainnet at <https://playkaboom.gg> under a new program ID.** The program is a Pinocchio port of the old one and is VRF-only: legacy `start_game` returns 6057 `LegacyModeDisabled`, and only the legacy wind-down instructions remain. There is no Turnkey and no Supabase anywhere in the live system.
+
+**Every section below this one (2026-10-17 and older) is pre-relaunch history.** Wherever it describes Turnkey, Supabase, commit-reveal play, the API on Vercel, or program `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh`, that is not the live system.
+
+| Item | Address / value | Note |
+|---|---|---|
+| Program ID | `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` | Pinocchio port, VRF-only |
+| BPF upgrade authority | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | the deployer, for now. Squads handover pending |
+| Squads vault (handover target) | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | |
+| Vault PDA | `7dPQVB4GPQMGLWiuvALUFrnrWip83Csj2Qjgb2kYTeg7` | |
+| `vault.owner` | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | the deployer, temporarily (config, house rotation, admin release) |
+| `vault.house_authority` | `8h7a62wscqmnmDaLeuCnaB9NgQHrWivnDRfUGAmA289D` | raw house key (below) |
+| `vault.treasury` | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | the deployer, temporarily |
+| Vault V2 State | `Gtkn8TeTHgMF6bhEYmXy3cDcmmQyjbbY3WHXtY3td8Ue` | |
+| VRF validator | `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57` | `as.magicblock.app` |
+| `vrf_max_payout_bps` | 1000 (10%) | |
+
+**House key.** A raw keypair, held only as the sealed Railway variable `HOUSE_SECRET_KEY` on the kaboom-web service (`apps/web/src/server/house-signer.ts`). It can only do bounded cleanup and settlement: VRF settle, force-undelegate and refund, legacy wind-down, and LP auto-complete. Because the program is VRF-only, it cannot start a commit-reveal game. It is never on Vercel and never in the repo.
+
+| Layer | Where |
+|---|---|
+| Frontend | Vercel: `playkaboom.gg`, `www`, `status`. Built with `KABOOM_API_ORIGIN`, so every `/api/*` except `/api/version` is proxied to Railway. Vercel holds no server secret. |
+| API + crons | Railway service kaboom-web (`kaboom-web-production.up.railway.app`). Holds `DATABASE_URL`, the house key, the Privy secret and the RPC URL. |
+| DB | Railway Postgres; kaboom-web connects as role `kaboom_app` |
+| Relay | Railway, `apps/realtime` (`kaboom-realtime-production.up.railway.app`). Postgres `LISTEN` as role `kaboom_relay`; calls `/api/cron/tick` every 60 s |
+| Retired | Supabase, Turnkey, the API on Vercel |
+
+Runbook: `pinocchio/MIGRATION/DEPLOY.md` (DNS stays on Vercel; there is no DNS move). Secrets inventory: `docs/security/secrets.md`.
+
+Owner to-dos:
+- The old Turnkey house wallet `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` is retired but still holds ~0.97 SOL. Sweep it from the Turnkey dashboard.
+- Hand the upgrade authority, `vault.owner` and `vault.treasury` over to the Squads vault above.
+
+The old program `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05 (section below).
+
+## STATUS — 2026-10-17: REDEPLOY SIZING (nothing deployed; corrected 2026-10-22)
+
+**What a redeploy costs, program only.** Every row needs a new program ID.
+
+| Build | ELF bytes | ProgramData rent | Change needed |
+|---|---|---|---|
+| Anchor HEAD as is | 1,037,320 | 5.27 SOL | **do not deploy**: SDK bug below |
+| **Anchor, `ephemeral-rollups-sdk` 0.16.2 + `opt-level = "z"` + `no-idl`** | **741,232** | **3.77 SOL** | one version bump, one profile line, one feature flag |
+| Pinocchio port (ESTIMATE; probe builds measured 110,368–160,096 bytes) | 150,000–220,000 | 0.76–1.12 SOL | full rewrite, ~10–15 days, fresh audit |
+
+Add about 0.01 SOL for the program account, the vault and v2-state accounts, and write fees. Rent is `(elf_bytes + 173) × 5,080` lamports today; it was 6,960 per byte when the old program was allocated, so always re-query it. Going live also needs at least 1 SOL in the vault before `initialize_v2` (`ANTI_INFLATION_SEED_LAMPORTS`, locked as seed units). That is bankroll, not deploy cost.
+
+- **Bump `ephemeral-rollups-sdk` to 0.16.2 or later before any redeploy.** 0.15.5's undelegation callback does not check that the buffer is the account's own undelegate-buffer PDA. Upstream fixed it in 0.16.2 after it was exploited elsewhere in July 2026. 0.16.2 builds with no code change; 0.17.3 needs one renamed VRF import.
+- **The old ID cannot come back on today's mainnet.** Agave 4.3 abandoned loader-v4 and removed the loader-v3 `Migrate` instruction. The only future path is SIMD-0432 (spec merged, implementation not shipped), which would let the old program keypair free the address. Keep that keypair.
+- **There is no bytecode compression on Solana.** Cost only falls by making the ELF smaller.
+- **Safe build settings:** `opt-level = "z"` (no logic change) and `no-idl` (removes Anchor's IDL-account instructions; the app and SDK never load the IDL).
+- **Do not use `no-log-ix-name`.** Both `/api/verify` routes find VRF settlements by searching logs for `Instruction: SettleVrf`. A Pinocchio port must log that line too.
+- **Do not strip `emit!`.** The SDK decodes 19 of the 34 events for the indexer and UI.
+- **Unmeasured:** compute units under `opt-level = "z"`. The client sets a 200,000 CU limit. Measure `settle_game`, `settle_vrf`, `start_game_vrf` and `lp_deposit` before deploying a z build.
+- **A Pinocchio port keeps the frontend working** if it keeps the existing instruction and account discriminators, per-instruction account order, PDA seeds, Borsh layouts, event bytes and error codes, because the SDK hand-codes all of them. Use `ephemeral-rollups-pinocchio` 0.16.2 or later.
+
+Full measurements, the reproduction script, the recovered probe sources and the port notes are in the local archive under `redeploy/sizing/`.
 
 ## STATUS — 2026-10-05: PROGRAM CLOSED
 
-**The mainnet program `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05 and its rent reclaimed.** The site stays up with a maintenance banner; every on-chain game/vault call now fails. Everything below this section describes the pre-close system and is kept for a future redeploy. That redeploy needs a **new program ID** (a closed upgradeable program cannot be redeployed at the same address); keep the old program keypair anyway. The full decommission record, backups and redeploy guide live outside the repo in the local archive `~/Projects/kaboom-archive-2026-10-05/` (start with its `HANDOFF.md`).
+**The mainnet program `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05 and its rent reclaimed.** The site stays up with a maintenance banner; every on-chain game/vault call now fails. Everything below this section describes the pre-close system and is kept for a future redeploy. That redeploy needs a **new program ID** (a closed upgradeable program cannot be redeployed at the same address); keep the old program keypair anyway (see the 2026-10-17 section for why). The full decommission record, backups and redeploy guide live outside the repo in the local archive `~/Projects/kaboom-archive-2026-10-05/` (start with its `HANDOFF.md`).
 
 ## STATUS — 2026-08-09 (pre-close)
 
-**Live on Solana mainnet at <https://playkaboom.gg>.** Per-click VRF over MagicBlock ephemeral rollups is the default game mode and is armed on chain. Commit-reveal remains as the legacy path. All admin/treasury/upgrade authorities are on Squads 2-of-2; the hot game-ix signer is a Turnkey HSM. Public health page at <https://status.playkaboom.gg>.
+**Live on Solana mainnet at <https://playkaboom.gg>.** Per-click VRF over MagicBlock ephemeral rollups is the default game mode and is armed on chain. Commit-reveal remains as the legacy path. All admin/treasury/upgrade authorities are on Squads 2-of-2; the hot game-ix signer is a Turnkey HSM (retired 2026-11-04). Public health page at <https://status.playkaboom.gg>.
 
 | Authority | Address | Type |
 |---|---|---|
 | `vault.owner` | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
 | `vault.treasury` | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
 | BPF upgrade authority | `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | Squads vault PDA |
-| `vault.house_authority` | `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` | Turnkey HSM (game ixs only) |
+| `vault.house_authority` | `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` | Turnkey HSM (game ixs only) (retired 2026-11-04) |
 | Squads multisig config | `H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm` | threshold 2-of-2, time_lock 0 |
 | Program ID | `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` | 41 instructions |
 | ProgramData | `8TTVAvxig6dQfLiHcDXrXUs8sjiGTAxk6viNPC1y1SJb` | |
@@ -25,7 +85,7 @@ A self-contained snapshot to pick up where the last session left off. Refreshed 
 | Pinned ER validator | `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57` | in `VaultV2State` |
 | Deployer wallet | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | zero admin powers — fee-payer only |
 
-**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey signs gameplay instructions only; admin, treasury and upgrade all need Squads 2-of-2.
+**Key implication:** a stolen deployer or Turnkey key gets you nothing material. Turnkey signs gameplay instructions only; admin, treasury and upgrade all need Squads 2-of-2. (Pre-relaunch only: Turnkey was retired on 2026-11-04, and since the relaunch the deployer is the upgrade authority; see the top section.)
 
 ## Live config — verified on chain 2026-08-04
 
@@ -63,7 +123,7 @@ Multiplier math is `C(16,s)/C(16−m,s) × (1 − edge)`, edge applied once. Rus
 
 **VRF startup overhead: 11,795,760 lamports (~0.0118 SOL) on top of the bet**, nearly all refundable when the round closes but required in the wallet at bet time. Breakdown: VrfClaim rent 1,371,120 · VrfGame rent 5,213,040 · session funding 2,000,000 · delegation 3,206,600 · fee ~10,000. This is a **12× onboarding floor** against the 0.001 SOL minimum bet — VrfGame rent and session funding are 61% of it and are the two levers worth pulling.
 
-**Commit-reveal (legacy).** Server commits `SHA-256(layout ‖ mine_count ‖ salt)`, Turnkey signs each reveal, `settle_game` rejects any settle whose hash doesn't match. Session tokens are bound to the on-chain commitment (see Security below).
+**Commit-reveal (legacy).** Server commits `SHA-256(layout ‖ mine_count ‖ salt)`, Turnkey signs each reveal (retired 2026-11-04), `settle_game` rejects any settle whose hash doesn't match. Session tokens are bound to the on-chain commitment (see Security below).
 
 ## Stack & infra
 
@@ -72,13 +132,13 @@ Multiplier math is `C(16,s)/C(16−m,s) × (1 − edge)`, edge applied once. Rus
 | Frontend | Next.js 15 App Router, React 19, Tailwind, Zustand, Privy embedded wallets |
 | Rollup | MagicBlock ephemeral rollups, `ephemeral-rollups-sdk` 0.15.5 (`vrf` feature) |
 | RPC | Alchemy mainnet (HTTP + WS) |
-| Indexer | Alchemy `logsSubscribe` push via the Railway relay → `/api/ingest` → Supabase. VRF settles emit no event, so they are mirrored explicitly at settle time. Cron sweep as backstop. |
-| Realtime | Railway WS relay (`apps/realtime`); Supabase Realtime as layer-2 fallback; 60s polling as layer-3 |
-| House signing | Turnkey HSM — gameplay ixs only |
-| Hosting | Vercel, `kaboomweb3` team (**never** penguinpeckers-projects) |
+| Indexer | Alchemy `logsSubscribe` push via the Railway relay → `/api/ingest` → Supabase (retired 2026-11-04). VRF settles emit no event, so they are mirrored explicitly at settle time. Cron sweep as backstop. |
+| Realtime | Railway WS relay (`apps/realtime`); Supabase Realtime as layer-2 fallback (retired 2026-11-04); 60s polling as layer-3 |
+| House signing | Turnkey HSM — gameplay ixs only (retired 2026-11-04) |
+| Hosting | Vercel, `kaboomweb3` team (**never** penguinpeckers-projects). Since 2026-11-04 Vercel hosts the frontend only; the API is on Railway |
 | **Deploys** | **CLI-only. There is NO git integration — pushing to `main` deploys nothing.** |
-| DB | Supabase Postgres (project ref in `NEXT_PUBLIC_SUPABASE_URL`) |
-| Secrets | Vercel encrypted env, `Sensitive` (unreadable by API by design). Local keystore files under `~/.keystores/` — never in the repo. |
+| DB | Supabase Postgres (project ref in `NEXT_PUBLIC_SUPABASE_URL`) (retired 2026-11-04) |
+| Secrets | Vercel encrypted env, `Sensitive` (unreadable by API by design). Since 2026-11-04 server secrets are sealed Railway variables (`docs/security/secrets.md`). Local keystore files under `~/.keystores/` — never in the repo. |
 
 ## Deploying
 
@@ -99,7 +159,7 @@ Config that lives outside the repo (it is public): `~/.keystores/kaboom-vercel.i
 
 ## Security posture
 
-- Governance 2-of-2 on owner, treasury and upgrade authority; Turnkey confined to gameplay.
+- Governance 2-of-2 on owner, treasury and upgrade authority; Turnkey confined to gameplay (retired 2026-11-04).
 - **Session tokens are commitment-bound** — `/api/reveal` compares the token's commitment against the live on-chain one and returns 409 on mismatch. This closed a vault-drain vector where a token from a settled round could be replayed against a new game.
 - VRF fail-closed: oracle queue is a program constant, validator is pinned in vault state, and both `vrf_mode_enabled` and a non-zero pinned validator must be set deliberately before any VRF game can open.
 - `settle_vrf` trusts no committed rollup value that prices a payout.
@@ -183,7 +243,7 @@ playkaboom/
 │   │   ├── src/app/api/        commit, reveal, settle, vrf/*, vault/*, status,
 │   │   │                       version, ref/*, cron/*, ingest, rpc/*, verify/*
 │   │   ├── src/lib/vrf/        rollup client — atomic start, confirm polling, undelegate
-│   │   ├── src/server/         env, auth, session-store, indexer, solana, turnkey,
+│   │   ├── src/server/         env, auth, session-store, indexer, solana, turnkey (retired 2026-11-04),
 │   │   │                       verify-vrf, ratelimit
 │   │   ├── src/hooks/          use-vrf-game (rollup state machine), use-game-actions
 │   │   └── src/middleware.ts   status-subdomain host isolation
@@ -193,7 +253,7 @@ playkaboom/
 │   └── vrf_mode.rs             VrfClaim/VrfGame, delegation, per-click VRF, L1 replay
 ├── packages/sdk/               ix builders, decoders, PDAs, vrf, verify
 ├── packages/shared/            constants + zod schemas + multiplier math
-├── supabase/migrations/
+├── supabase/migrations/       (retired 2026-11-04; live schema is db/migrations/)
 ├── scripts/                    deploy.sh, verify-deploy.sh, watch-deploy.sh + ops scripts
 ├── docs/security/              audit fix threads
 ├── tests/                      Vitest + Anchor integration + multiplier fixture

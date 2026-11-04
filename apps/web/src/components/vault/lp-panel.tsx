@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { WITHDRAW_CLAIM_WINDOW_SLOTS } from "@playkaboom/shared";
 import {
   useLpActions,
   useLpPosition,
@@ -19,7 +20,7 @@ const fmtPct = (v: number | null | undefined) =>
 export function VaultLpPanel() {
   const { connection } = useConnection();
   const { data: state } = useVaultState();
-  const { authenticated, login, walletAddress, deposit, requestWithdraw, cancelWithdraw, completeWithdraw } = useLpActions();
+  const { authenticated, login, walletAddress, deposit, requestWithdraw, cancelWithdraw, completeWithdraw, restartWithdraw } = useLpActions();
   const { data: position } = useLpPosition(walletAddress);
   const { toast } = useToast();
 
@@ -86,10 +87,16 @@ export function VaultLpPanel() {
     pendingUnits > 0n && currentSlot != null
       ? Math.max(0, unlockSlot - currentSlot)
       : 0;
-  const cooldownReady = pendingUnits > 0n && slotsLeft === 0;
+  // F4: a matured request can be completed only within 9,000 slots (~1 h) of
+  // unlock; the house completes it automatically in that window. After it the
+  // request lapses (6056) and must be restarted.
+  const withdrawExpired =
+    pendingUnits > 0n && currentSlot != null && currentSlot > unlockSlot + WITHDRAW_CLAIM_WINDOW_SLOTS;
+  const cooldownReady = pendingUnits > 0n && slotsLeft === 0 && !withdrawExpired;
   const cooldownLabel = (() => {
     if (pendingUnits === 0n) return null;
-    if (slotsLeft === 0) return "Ready to claim";
+    if (withdrawExpired) return "Expired — restart";
+    if (slotsLeft === 0) return "Ready — completes automatically";
     const seconds = slotsLeft * 0.4;
     if (seconds < 60) return `${seconds.toFixed(0)}s`;
     if (seconds < 3600) return `${(seconds / 60).toFixed(0)}m`;
@@ -361,6 +368,25 @@ export function VaultLpPanel() {
                 >
                   COMPLETE WITHDRAWAL
                 </button>
+              )}
+              {cooldownReady && (
+                <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-2">
+                  Completes automatically within a few minutes · or claim it now
+                </p>
+              )}
+              {withdrawExpired && (
+                <>
+                  <button
+                    disabled={busy}
+                    onClick={run("Restart withdrawal", () => restartWithdraw(pendingUnits))}
+                    className="w-full mt-2 py-2.5 border border-tertiary text-tertiary font-headline font-bold text-xs tracking-widest hover:bg-tertiary/10 active:scale-95 transition-all disabled:opacity-50"
+                  >
+                    RESTART WITHDRAWAL
+                  </button>
+                  <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-2">
+                    The claim window (~1 h after unlock) passed · restarting re-requests the same units with a new cooldown
+                  </p>
+                </>
               )}
             </div>
           )}

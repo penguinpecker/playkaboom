@@ -114,7 +114,11 @@ export function GameRecoveryBanner({ info }: Props) {
   // Decide which on-chain ix this banner offers based on the on-chain
   // state. cash_out and close_game are always instant; refund_expired
   // and close_unsettled_game gate on slot timers.
+  // F3: a VRF round the house closed for inactivity with nothing revealed.
+  // Terminal and refundable at once (the house cron also refunds it).
+  const voided = info.vrf && info.status === "Void";
   const action: Action = (() => {
+    if (voided) return { kind: "refundExpired", secondsUntilReady: 0 };
     const safeReveals = popcount(info.revealedSafeMask);
     const betLamports = info.betLamports ? BigInt(info.betLamports) : 0n;
     const payoutSol =
@@ -239,8 +243,9 @@ export function GameRecoveryBanner({ info }: Props) {
 
   const sectionDot =
     action.kind === "cashOut" ? "bg-emerald" : action.kind === "closeGame" ? "bg-primary" : "bg-tertiary";
-  const sectionHeader =
-    action.kind === "cashOut"
+  const sectionHeader = voided
+    ? "ROUND CLOSED FOR INACTIVITY"
+    : action.kind === "cashOut"
       ? "IN-FLIGHT GAME — CASH OUT"
       : action.kind === "refundExpired"
         ? "IN-FLIGHT GAME — REFUND"
@@ -253,8 +258,9 @@ export function GameRecoveryBanner({ info }: Props) {
       : action.kind === "refundExpired"
         ? "REFUND YOUR BET"
         : "UNBLOCK YOUR WALLET";
-  const sectionBody =
-    action.kind === "cashOut"
+  const sectionBody = voided
+    ? `Your ${fmtSol(info.betLamports)} round sat idle with no tiles flipped, so it was closed. Your full bet is refunded — automatically within a minute, or now.`
+    : action.kind === "cashOut"
       ? `Active ${fmtSol(info.betLamports)} game with ${popcount(info.revealedSafeMask)} safe tile${popcount(info.revealedSafeMask) === 1 ? "" : "s"} flipped. Cash out at ${info.multiplier.toFixed(2)}× — your wallet receives ${action.payoutSol.toFixed(4)} SOL.`
       : action.kind === "refundExpired"
         ? `On-chain bet of ${fmtSol(info.betLamports)} with no tiles flipped. ${isReady ? "Ready to refund." : `Refundable in ${countdownLabel(action.secondsUntilReady)}.`}`

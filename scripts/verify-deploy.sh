@@ -13,6 +13,11 @@
 # reports FAIL on a build that shipped correctly.
 #
 # Exit 0 = everything green. Exit 1 = at least one FAIL.
+#
+# RAILWAY NOTE (relaunch): sections 1 and 3 read the Vercel API and do not
+# apply to the Railway deploy (kaboom-web); they fail without a Vercel token.
+# The chain and HTTP checks still describe the relaunch program. See
+# pinocchio/MIGRATION/chain.md.
 
 set -uo pipefail
 
@@ -25,7 +30,7 @@ PRJ="${VERCEL_PROJECT_ID:-}"
 TEAM="${VERCEL_TEAM_ID:-}"
 TOKEN_FILE="${VERCEL_TOKEN_FILE:-$HOME/.keystores/vercel-kaboomweb3.token}"
 RPC_FILE="${KABOOM_RPC_FILE:-$HOME/.keystores/kaboom-deploy-rpc.txt}"
-PROGRAM_ID="9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh"
+PROGRAM_ID="Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju"
 
 FAILED=0
 pass() { printf '  \033[32m✔\033[0m %s\n' "$1"; }

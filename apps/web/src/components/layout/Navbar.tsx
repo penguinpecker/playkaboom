@@ -83,15 +83,22 @@ export function Navbar() {
     const h = (e: MouseEvent) => {
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) setShowNotif(false);
     };
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowNotif(false);
+    };
     document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
+    document.addEventListener("keydown", k);
+    return () => {
+      document.removeEventListener("mousedown", h);
+      document.removeEventListener("keydown", k);
+    };
   }, []);
 
   return (
     <>
       <header className="sticky top-0 w-full z-50 flex justify-between items-center px-3 sm:px-6 h-14 sm:h-16 bg-surface-container-low/90 backdrop-blur-xl shadow-[0_0_20px_rgba(208,188,255,0.1)]">
         <div className="flex items-center gap-3 sm:gap-8 min-w-0">
-          <button className="lg:hidden flex-shrink-0" onClick={() => setShowMobile(true)} aria-label="Menu">
+          <button className="lg:hidden flex-shrink-0" onClick={() => setShowMobile(true)} aria-label="Menu" aria-expanded={showMobile}>
             <span
               className="material-symbols-outlined text-on-surface-variant"
               style={{ fontSize: 24 }}
@@ -130,9 +137,10 @@ export function Navbar() {
           )}
           <button
             onClick={() => (isConnected ? open("profile") : login())}
+            aria-label={isConnected ? `Wallet ${shortAddr}` : "Connect"}
             className="bg-gradient-to-br from-primary to-primary-container text-on-primary px-3 sm:px-5 py-1.5 sm:py-2 font-headline text-xs font-bold uppercase tracking-widest hover:shadow-[0_0_15px_rgba(164,201,255,0.4)] transition-all active:scale-95 flex items-center gap-2 flex-shrink-0"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }} aria-hidden="true">
               {isConnected ? "person" : "account_balance_wallet"}
             </span>
             <span className="hidden sm:inline">{isConnected ? shortAddr : "Connect"}</span>
@@ -140,11 +148,13 @@ export function Navbar() {
           <div className="relative hidden sm:block" ref={notifRef}>
             <button
               onClick={() => setShowNotif(!showNotif)}
+              aria-label="System status"
               className="relative p-2 hover:bg-surface-container-highest rounded-lg transition-all"
             >
               <span
                 className="material-symbols-outlined text-on-surface-variant"
                 style={{ fontSize: 22 }}
+                aria-hidden="true"
               >
                 notifications
               </span>
@@ -187,11 +197,13 @@ export function Navbar() {
           </div>
           <button
             onClick={() => open("settings")}
+            aria-label="Settings"
             className="hidden lg:block p-2 hover:bg-surface-container-highest rounded-lg transition-all"
           >
             <span
               className="material-symbols-outlined text-on-surface-variant"
               style={{ fontSize: 22 }}
+              aria-hidden="true"
             >
               settings
             </span>
@@ -207,7 +219,7 @@ function NR({ icon, color, label, msg }: { icon: string; color: string; label: s
   return (
     <div className="px-4 py-3 border-b border-outline-variant/[0.05]">
       <div className="flex items-center gap-2 mb-1">
-        <span className={`material-symbols-outlined mi ${color}`} style={{ fontSize: 16 }}>
+        <span className={`material-symbols-outlined mi ${color}`} style={{ fontSize: 16 }} aria-hidden="true">
           {icon}
         </span>
         <span className={`font-headline text-[10px] ${color} tracking-widest`}>{label}</span>

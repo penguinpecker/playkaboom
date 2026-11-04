@@ -48,7 +48,7 @@ function FeatureMatrix() {
     {
       icon: "lock",
       title: "NON-CUSTODIAL",
-      body: "Your wallet, your keys. House signing on Turnkey HSM. Treasury withdrawals allowlisted on-chain.",
+      body: "Your wallet, your keys. Treasury withdrawals allowlisted on-chain.",
       color: "primary",
     },
     {

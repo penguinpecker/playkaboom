@@ -1,7 +1,7 @@
 import { Connection, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
 import { decodeReferralAccount } from "@playkaboom/sdk";
 
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
+const PROGRAM_ID = new PublicKey("Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju"); // relaunch program (old id closed)
 const REFERRAL_SEED = Buffer.from("kaboom_referral");
 
 async function main() {

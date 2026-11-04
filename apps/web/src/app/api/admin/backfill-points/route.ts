@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jsonError } from "@/server/api-helpers";
-import { supabaseAdmin } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 import { awardPoints } from "@/server/points";
 import { logger } from "@/server/logger";
 
@@ -50,7 +50,6 @@ export async function GET(req: NextRequest) {
     const limitParam = url.searchParams.get("limit");
     const hardLimit = limitParam ? Math.max(1, Number(limitParam)) : Infinity;
 
-    const db = supabaseAdmin();
     let offset = 0;
     let totalRows = 0;
     let inserted = 0;
@@ -61,13 +60,10 @@ export async function GET(req: NextRequest) {
 
     for (;;) {
       if (totalRows >= hardLimit) break;
-      const { data, error } = await db
-        .from("games")
-        .select("signature, player, bet, outcome, settled_at")
-        .order("settled_at", { ascending: true })
-        .range(offset, offset + PAGE - 1);
-      if (error) throw new Error(error.message);
-      const rows = data ?? [];
+      const rows = await query(
+        "select signature, player, bet, outcome, settled_at from public.games order by settled_at asc offset $1 limit $2",
+        [offset, PAGE],
+      );
       if (rows.length === 0) break;
 
       for (const r of rows as Array<{

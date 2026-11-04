@@ -1,5 +1,13 @@
 /** @type {import('next').NextConfig} */
 
+import { apiOrigin } from "./src/lib/api-origin.mjs";
+
+// Frontend-only deploy (Vercel, KABOOM_API_ORIGIN set): src/middleware.ts
+// proxies every /api call except /api/version to the Railway server, which
+// alone holds the database and the house key. Validate here too so a bad value
+// fails the build instead of every API call.
+apiOrigin();
+
 const isProd = process.env.NODE_ENV === "production";
 
 // Content Security Policy. Tightened for production; relaxed in dev for HMR.
@@ -14,12 +22,24 @@ const isProd = process.env.NODE_ENV === "production";
 //   - Privy SDK + auth iframe + Cloudflare Turnstile (Privy bundles it for bot defense)
 //   - Alchemy Solana RPC (https + wss)
 //   - Public Solana RPC fallbacks (mainnet/devnet) — used only if Alchemy is down
-//   - Supabase REST + realtime
+//   - Railway realtime relay (live feed + /rpc-ws proxy); no database host —
+//     the browser never talks to Postgres
 //   - Pyth Hermes for live price feed
 //   - frame-ancestors 'none' blocks clickjacking
 //   - object-src 'none' blocks legacy plugins
 //   - require-trusted-types-for 'script' opts into Trusted Types where the
 //     browser supports it (Chrome 83+); harmless otherwise
+// The live-feed relay origin as built (NEXT_PUBLIC_REALTIME_WS_URL), so the
+// CSP cannot drift from the socket the browser actually opens.
+const relayOrigin = (() => {
+  try {
+    const u = new URL(process.env.NEXT_PUBLIC_REALTIME_WS_URL ?? "");
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "";
+  }
+})();
+
 const csp = [
   "default-src 'self'",
   // 'unsafe-inline' is required by Next.js's inline runtime hydration script.
@@ -35,8 +55,6 @@ const csp = [
     "connect-src 'self'",
     "https://*.privy.io",
     "wss://*.privy.io",
-    "https://*.supabase.co",
-    "wss://*.supabase.co",
     "https://api.mainnet-beta.solana.com",
     "https://api.devnet.solana.com",
     "https://*.g.alchemy.com",
@@ -47,7 +65,11 @@ const csp = [
     // NEXT_PUBLIC_REALTIME_WS_URL exactly — the host changed on 2026-07-29
     // when the service was rebuilt, and a stale entry here blocks the socket
     // silently in the browser with nothing in any server log.
+    // The /rpc-ws proxy host is hardcoded in src/lib/cluster.ts (WS_URL).
     "wss://kaboom-realtime-production.up.railway.app",
+    ...(relayOrigin && relayOrigin !== "wss://kaboom-realtime-production.up.railway.app"
+      ? [relayOrigin]
+      : []),
     "https://hermes.pyth.network",
     // MagicBlock Ephemeral Rollup — the VRF game mode talks DIRECTLY to this
     // node from the browser (per-click reveals, cash-out, and the

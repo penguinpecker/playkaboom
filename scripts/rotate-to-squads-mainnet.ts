@@ -28,7 +28,7 @@ import {
   deriveVaultPda,
 } from "@playkaboom/sdk";
 
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
+const PROGRAM_ID = new PublicKey("Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju"); // relaunch program (old id closed)
 const SQUADS_VAULT = new PublicKey("464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5");
 const RPC = process.env.SOLANA_MAINNET_RPC
   ?? (() => {

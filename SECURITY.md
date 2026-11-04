@@ -16,6 +16,10 @@ input to the impact — that is what lets us reproduce and fix it quickly.
 
 ## Threat model
 
+> Historical: the threat model and protocol sections below describe the original commit-reveal design. Since the
+> 2026-11-05 relaunch the program is VRF-only (`start_game` returns 6057) and the house key signs only bounded
+> cleanup and settlement. Live keys and where they are held: [docs/security/secrets.md](docs/security/secrets.md).
+
 | Actor | Powers |
 |---|---|
 | Player | Place bets, click tiles, cash out, refund expired games |
@@ -88,7 +92,7 @@ Anyone can hit the endpoints, but only the true owner of a wallet can drive its 
 
 ### Server-only modules
 
-`server/auth.ts`, `server/env.ts`, `server/session.ts`, `server/solana.ts`, `server/db/supabase.ts`, `server/game.ts`, `server/player.ts`, `server/webhook-auth.ts` all start with `import "server-only"`. Any accidental import from a client component fails the build, preventing service-role keys or house-authority secrets from leaking into the browser bundle.
+`server/auth.ts`, `server/env.ts`, `server/session.ts`, `server/solana.ts`, `server/db/pg.ts`, `server/game.ts`, `server/player.ts`, `server/webhook-auth.ts` all start with `import "server-only"`. Any accidental import from a client component fails the build, preventing service-role keys or house-authority secrets from leaking into the browser bundle.
 
 ### Database — RLS + role grants
 
@@ -114,7 +118,7 @@ Set in `apps/web/next.config.mjs` for every response:
 
 | Header | Value |
 |---|---|
-| `Content-Security-Policy` | strict allow-list (self + Privy + Solana + Supabase + Pyth + WalletConnect) |
+| `Content-Security-Policy` | strict allow-list (self + Privy + Solana + Railway relay + MagicBlock + Pyth + WalletConnect) |
 | `X-Frame-Options` | `DENY` |
 | `frame-ancestors` (CSP) | `'none'` |
 | `X-Content-Type-Options` | `nosniff` |
@@ -134,12 +138,11 @@ Sliding-window 30 req / 10s per `(IP, player)` tuple via Upstash. Defends agains
 
 | Key | Storage | Rotation |
 |---|---|---|
-| `HOUSE_AUTHORITY_KEY` | env var, Vercel encrypted secrets | manual; rotate after personnel change |
-| `SESSION_ENC_KEY` | env var, encrypted | rotate every 30 days |
-| `SUPABASE_SERVICE_ROLE_KEY` | env var, server-only | rotate via Supabase dashboard if exposed |
-| `PRIVY_APP_SECRET` | env var, server-only | rotate via Privy dashboard if exposed |
-| Treasury private key | Squads multisig (cold) | per-key holder rotation in Squads |
-| Owner private key | Squads multisig | per-key holder rotation in Squads |
+| `HOUSE_SECRET_KEY` | sealed Railway variable on the API service only (never Vercel, never the repo) | new keypair + `update_vault` by the owner; see `docs/security/secrets.md` |
+| `SESSION_ENC_KEY` | sealed Railway variable | rotate every 30 days |
+| `DATABASE_URL` | sealed Railway variable (non-superuser role) | new role password via `db/roles.mjs` |
+| `PRIVY_APP_SECRET` | sealed Railway variable | rotate via Privy dashboard if exposed |
+| Owner, treasury and upgrade authority | the deployer key for now; Squads 2-of-2 handover pending | hand over to the Squads vault |
 
 ### Key management — roadmap
 
@@ -167,7 +170,7 @@ Sliding-window 30 req / 10s per `(IP, player)` tuple via Upstash. Defends agains
 
 ## Key management
 
-- `HOUSE_AUTHORITY_KEY` — ed25519 secret key, signs `reveal_tile` and `settle_game`. **Never used as an encryption key.**
+- `HOUSE_SECRET_KEY` — ed25519 secret key (`vault.house_authority`). Since the VRF-only relaunch it signs only settle, force-undelegate, refund, legacy wind-down and LP auto-complete. **Never used as an encryption key.**
 - `SESSION_ENC_KEY` — 32 random bytes, AES-GCM key for game tokens. Independent rotation cycle.
 - Vault `owner` and `treasury` should be separate signers (multisig recommended for treasury).
 

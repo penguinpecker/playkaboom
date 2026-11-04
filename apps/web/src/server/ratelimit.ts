@@ -61,26 +61,30 @@ const MAX_HITS = 30;
 const MAX_KEYS = 10_000;
 const localHits = new Map<string, number[]>();
 
-function localLimit(key: string): { ok: boolean; remaining: number } {
+function localLimit(key: string, cost: number): { ok: boolean; remaining: number } {
   const now = Date.now();
   if (localHits.size > MAX_KEYS) localHits.clear();
   const hits = (localHits.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  if (hits.length >= MAX_HITS) {
+  if (hits.length + cost > MAX_HITS) {
     localHits.set(key, hits);
     return { ok: false, remaining: 0 };
   }
-  hits.push(now);
+  for (let i = 0; i < cost; i++) hits.push(now);
   localHits.set(key, hits);
   return { ok: true, remaining: MAX_HITS - hits.length };
 }
 
-export async function enforceRateLimit(key: string): Promise<{ ok: boolean; remaining: number }> {
+/** `cost` = how many hits this request spends (e.g. calls in a JSON-RPC batch). */
+export async function enforceRateLimit(
+  key: string,
+  cost = 1,
+): Promise<{ ok: boolean; remaining: number }> {
   const limiter = getLimiter();
   // Not configured: fall back to the in-process limiter rather than waving
   // every request through. Provisioning Upstash replaces this automatically.
-  if (!limiter) return localLimit(key);
+  if (!limiter) return localLimit(key, cost);
   try {
-    const r = await limiter.limit(key);
+    const r = await limiter.limit(key, { rate: cost });
     return { ok: r.success, remaining: r.remaining };
   } catch (err) {
     // Upstash IS configured but the call failed (network, quota, auth).

@@ -17,7 +17,7 @@ import { verifyPlayerAuth } from "@/server/auth";
 import { getConnection } from "@/server/connection";
 import { loadSession } from "@/server/session-store";
 import { encryptSession } from "@/server/session";
-import { programId } from "@/server/env";
+import { programId, vrfModeEnabled } from "@/server/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,7 +49,7 @@ const VRF_STALL_SLOTS = 25;
  * correct affordance, since a lost session key is exactly when this matters.
  */
 async function vrfSessionState(conn: Connection, pk: PublicKey) {
-  if (process.env.VRF_MODE_ENABLED !== "true") return null;
+  if (!vrfModeEnabled()) return null;
   const [claimPda] = deriveVrfClaimPda(programId(), pk);
   // DO NOT swallow the RPC error here. `.catch(() => null)` made a failed READ
   // indistinguishable from "this player has no game", and the client treats
@@ -68,17 +68,24 @@ async function vrfSessionState(conn: Connection, pk: PublicKey) {
   if (claim.settled) return null;
 
   // While delegated the authoritative game state lives in the rollup; L1 holds
-  // a stale copy. Read the rollup when we can, but never fail the whole probe
-  // on it — the banner is more useful with partial data than absent.
+  // a stale copy. Once undelegated (program-owned again) L1 is the truth: a
+  // forced game reads Won or Void there. Never fail the whole probe on the
+  // rollup — the banner is more useful with partial data than absent.
   let status = "Playing";
   let revealedMask = 0;
   let revealedSafeMask = 0;
   let multiplierBps = "10000";
-  const erUrl = process.env.NEXT_PUBLIC_ER_RPC;
-  if (erUrl) {
+  const [gPda] = deriveVrfGamePda(programId(), pk);
+  const l1Game = await conn.getAccountInfo(gPda, "confirmed");
+  const erUrl = process.env.ER_RPC || process.env.NEXT_PUBLIC_ER_RPC;
+  if (l1Game || erUrl) {
     try {
-      const [gPda] = deriveVrfGamePda(programId(), pk);
-      const gi = await new Connection(erUrl, "confirmed").getAccountInfo(gPda);
+      const gi =
+        l1Game && l1Game.owner.equals(programId())
+          ? l1Game
+          : erUrl
+            ? await new Connection(erUrl, "confirmed").getAccountInfo(gPda)
+            : null;
       if (gi) {
         const g = decodeVrfGame(gi.data);
         status = g.status;

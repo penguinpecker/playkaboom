@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import { useEffect } from "react";
 import { useModal } from "@/hooks/useModal";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
 
@@ -14,6 +15,15 @@ const LINKS = [
 
 export function MobileDrawer({ onClose }: { onClose: () => void }) {
   const { open } = useModal();
+
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-[95] modal-backdrop"
@@ -33,7 +43,7 @@ export function MobileDrawer({ onClose }: { onClose: () => void }) {
               onClick={onClose}
               className="flex items-center gap-3 px-3 py-2.5 font-headline text-xs font-bold uppercase tracking-widest text-on-surface-variant hover:text-primary hover:bg-surface-container-highest/40 transition-all"
             >
-              <span className="material-symbols-outlined text-lg mi">{l.icon}</span>
+              <span className="material-symbols-outlined text-lg mi" aria-hidden="true">{l.icon}</span>
               {l.label}
             </Link>
           ))}
@@ -46,7 +56,7 @@ export function MobileDrawer({ onClose }: { onClose: () => void }) {
             }}
             className="flex items-center gap-3 px-3 py-1.5 font-headline text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/50 hover:text-primary w-full"
           >
-            <span className="material-symbols-outlined text-sm">verified_user</span>Provably Fair
+            <span className="material-symbols-outlined text-sm" aria-hidden="true">verified_user</span>Provably Fair
           </button>
         </div>
       </div>

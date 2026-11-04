@@ -1,5 +1,6 @@
 /**
- * Phase E2 — initialize_v2 on MAINNET (deployer-signed, single tx).
+ * initialize_v2 on MAINNET (deployer-signed, single tx), relaunch program.
+ * Order: init-vault-mainnet.ts -> fund_vault (>= 1 SOL) -> this -> enable-vrf-mainnet.ts.
  *
  *   DRY_RUN=1 npx tsx scripts/init-v2-mainnet.ts   # preview
  *   npx tsx scripts/init-v2-mainnet.ts             # send
@@ -11,15 +12,16 @@
  *   min_house_share_bps     = 5000  (50%)
  *   max_user_position_bps   = 1000  (10%)
  *   min_health_bps          = 1000  (10%)
- *   withdraw_cooldown_slots = 648000 (~3 days @ 400ms slots)
+ *   withdraw_cooldown_slots = 648000 (~3 days @ 400ms slots; F4 rule: keep >= 450,000)
  *   min_lp_deposit          = 10_000_000 (0.01 SOL)
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { buildInitializeV2, deriveV2StatePda, deriveVaultPda } from "@playkaboom/sdk";
+import { KABOOM_PROGRAM_ID } from "@playkaboom/shared";
 
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
+const PROGRAM_ID = new PublicKey(KABOOM_PROGRAM_ID);
 const RPC = process.env.SOLANA_MAINNET_RPC
   ?? (() => {
     throw new Error(
@@ -54,10 +56,13 @@ async function main() {
     return;
   }
 
-  const vaultBal = await conn.getBalance(vaultPda, "confirmed");
+  const vaultInfo = await conn.getAccountInfo(vaultPda, "confirmed");
+  if (!vaultInfo) throw new Error("vault not initialized — run init-vault-mainnet.ts first");
+  const vaultBal = vaultInfo.lamports;
+  const need = (await conn.getMinimumBalanceForRentExemption(vaultInfo.data.length)) + 1_000_000_000;
   console.log("  Vault balance :", (vaultBal / 1e9).toFixed(8), "SOL");
-  if (vaultBal < 1_003_869_760) {
-    throw new Error(`Vault has ${vaultBal} lamports — need >= 1 SOL above rent`);
+  if (vaultBal < need) {
+    throw new Error(`Vault has ${vaultBal} lamports — need >= ${need} (1 SOL above rent); fund_vault first`);
   }
 
   const ix = buildInitializeV2({ ctx: { programId: PROGRAM_ID }, owner: deployer.publicKey });

@@ -1,7 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { decodePlayerStats } from "@playkaboom/sdk";
 
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
+const PROGRAM_ID = new PublicKey("Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju"); // relaunch program (old id closed)
 const PLAYER_STATS_SIZE = 203;
 
 async function main() {

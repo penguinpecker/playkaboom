@@ -1,5 +1,5 @@
 import "server-only";
-import { supabaseAdmin } from "./db/supabase";
+import { upsert } from "./db/pg";
 import { logger } from "./logger";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,10 +108,10 @@ export async function awardPoints(args: AwardPointsInput): Promise<AwardResult> 
     eventMultBps: args.eventMultBps,
   });
 
-  const db = supabaseAdmin();
-  const { error, data } = await db
-    .from("points_ledger")
-    .upsert(
+  let data: unknown[];
+  try {
+    data = await upsert(
+      "points_ledger",
       {
         player: args.player,
         source_key: args.sourceKey,
@@ -126,15 +126,19 @@ export async function awardPoints(args: AwardPointsInput): Promise<AwardResult> 
         signer: args.signer ?? null,
         notes: args.notes ?? null,
       },
-      { onConflict: "source_key,source", ignoreDuplicates: true },
-    )
-    .select("id");
-
-  if (error) {
+      ["source_key", "source"],
+      { ignoreDuplicates: true, returning: ["id"] },
+    );
+  } catch (error) {
     // Don't throw — we don't want a points-ledger hiccup to break game
     // indexing. Log and move on; the row is recoverable via backfill.
     logger.error(
-      { err: error.message, player: args.player, source: args.source, sourceKey: args.sourceKey },
+      {
+        err: error instanceof Error ? error.message : String(error),
+        player: args.player,
+        source: args.source,
+        sourceKey: args.sourceKey,
+      },
       "points_ledger insert failed",
     );
     return { basePoints, totalPoints, inserted: false };

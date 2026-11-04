@@ -1,22 +1,24 @@
 /**
- * Rotate the on-chain vault `house_authority` to the Turnkey-controlled wallet.
+ * Rotate the on-chain vault `house_authority` to a new raw house keypair's
+ * PUBLIC key (mainnet, relaunch program). Never pass the secret here.
  *
- *   PROGRAM_ID=<pubkey> npx tsx --env-file=apps/web/.env.local scripts/rotate-house.ts
+ *   SOLANA_MAINNET_RPC=... npx tsx scripts/rotate-house.ts --house <NEW_HOUSE_PUBKEY>
  *
  * Reads:
- *   ~/.config/solana/id.json     → owner / payer / signer (must equal vault.owner)
- *   PROGRAM_ID env               → deployed program id
- *   TURNKEY_HOUSE_PUBKEY env     → new house_authority (base58)
- *   SOLANA_RPC env (optional)    → defaults to devnet
+ *   OWNER_KEYPAIR (default keypairs/mainnet-deployer.json) → owner / payer / signer
+ *     (must equal vault.owner; once ownership is with Squads, propose update_vault
+ *     there instead)
+ *   --house                       → new house_authority (base58 pubkey)
+ *   SOLANA_MAINNET_RPC            → required, no devnet default
  *
- * Idempotent: skips the call if the vault's house_authority already equals
- * TURNKEY_HOUSE_PUBKEY.
+ * Idempotent: skips the call if the vault's house_authority already equals it.
  *
- * After rotation, all sendHouseTx calls must come from the Turnkey signer
- * (USE_TURNKEY=true on Vercel) — the old raw key will be rejected on-chain.
+ * Order for a key rotation: set the new HOUSE_SECRET_KEY on kaboom-web and
+ * this update in the same window — every house-signed tx (settle, refunds,
+ * the F3 force, LP auto-complete) is rejected (6007) while they disagree, and
+ * the tick's vault-health pass alerts on the mismatch.
  */
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
   Connection,
@@ -25,6 +27,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { buildUpdateVault, decodeVault, deriveVaultPda } from "@playkaboom/sdk";
+import { KABOOM_PROGRAM_ID } from "@playkaboom/shared";
 
 function envOrThrow(name: string): string {
   const v = process.env[name];
@@ -38,14 +41,16 @@ function loadKeypair(path: string): Keypair {
 }
 
 async function main() {
-  const programId = new PublicKey(envOrThrow("PROGRAM_ID"));
-  const newHouse = new PublicKey(envOrThrow("TURNKEY_HOUSE_PUBKEY"));
-  const rpc = process.env.SOLANA_RPC ?? "https://api.devnet.solana.com";
+  const programId = new PublicKey(KABOOM_PROGRAM_ID);
+  const i = process.argv.indexOf("--house");
+  if (i < 0 || !process.argv[i + 1]) throw new Error("--house <NEW_HOUSE_PUBKEY> is required");
+  const newHouse = new PublicKey(process.argv[i + 1]!);
+  const rpc = envOrThrow("SOLANA_MAINNET_RPC");
 
-  const owner = loadKeypair(resolve(homedir(), ".config/solana/id.json"));
+  const owner = loadKeypair(resolve(process.cwd(), process.env.OWNER_KEYPAIR ?? "keypairs/mainnet-deployer.json"));
 
   console.log("─ Rotate house_authority ─");
-  console.log("  RPC      :", rpc);
+  console.log("  RPC host :", new URL(rpc).host); // the URL carries an API key
   console.log("  Program  :", programId.toBase58());
   console.log("  Owner    :", owner.publicKey.toBase58());
   console.log("  New house:", newHouse.toBase58());

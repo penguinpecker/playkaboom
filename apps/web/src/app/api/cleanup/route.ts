@@ -18,6 +18,7 @@ import { sendHouseTx } from "@/server/solana";
 import { getConnection } from "@/server/connection";
 import { housePubkey, programId, treasuryPubkey } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
+import { fetchPlayerReferrer } from "@/server/player";
 import { logger } from "@/server/logger";
 
 export const runtime = "nodejs";
@@ -83,6 +84,9 @@ export async function POST(req: NextRequest) {
               treasury: treasuryPubkey(),
               mineLayout: session.mineLayout,
               salt: saltBuffer(session),
+              // Was omitted, which skipped the referrer's cut. Throws on an
+              // RPC error (caught below) rather than settling without it.
+              referrer: (await fetchPlayerReferrer(playerPk)) ?? undefined,
             }),
           ]);
           // Refresh state — settle should have flipped settled=true.

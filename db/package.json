@@ -1,0 +1,11 @@
+{
+  "name": "@playkaboom/db",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "migrate": "node migrate.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  }
+}

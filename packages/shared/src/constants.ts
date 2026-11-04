@@ -10,6 +10,17 @@ export const MIN_MINES = 1;
 export const MAX_MINES = 15;
 export const BPS = 10_000;
 
+/** The relaunch program (Pinocchio port, mainnet). The old Anchor id 9Xip2L... is closed. */
+export const KABOOM_PROGRAM_ID = "Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju";
+/** F1: the only key the program lets sign `initialize_vault` (kaboom-p consts::DEPLOYER). */
+export const KABOOM_DEPLOYER = "qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG";
+/**
+ * F4: a matured LP withdrawal can be completed only while
+ * `unlock <= slot <= unlock + WITHDRAW_CLAIM_WINDOW_SLOTS` (~1 h); after that
+ * it fails 6056 and the LP restarts it with [cancel_withdraw, request_withdraw].
+ */
+export const WITHDRAW_CLAIM_WINDOW_SLOTS = 9_000;
+
 export const GAME_EXPIRY_SLOTS = 300;
 export const APPROX_SLOT_MS = 400;
 export const GAME_EXPIRY_MS = GAME_EXPIRY_SLOTS * APPROX_SLOT_MS;

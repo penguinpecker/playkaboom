@@ -1,6 +1,6 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
-import { supabaseAdmin } from "./db/supabase";
+import { pgCode, query } from "./db/pg";
 
 // Drops i, l, o, u (look like 1/0) so codes are easy to read aloud and
 // transcribe without confusion. 30 chars total, 6-char codes = 30^6 ≈ 729M.
@@ -31,39 +31,43 @@ export interface ReferralCodeRow {
  * one. Race-safe via the (wallet) UNIQUE constraint — if two requests
  * race the second insert errors with 23505 and we re-read the winner.
  */
-export async function getOrCreateCodeForWallet(wallet: string): Promise<ReferralCodeRow> {
-  const db = supabaseAdmin();
+// A failed lookup reads as "not found", as it did with supabase-js.
+const byWallet = (wallet: string) =>
+  query<ReferralCodeRow>("select * from public.referral_codes where wallet = $1", [wallet]).then(
+    (rows) => rows[0] ?? null,
+    () => null,
+  );
 
-  const existing = await db
-    .from("referral_codes")
-    .select("*")
-    .eq("wallet", wallet)
-    .maybeSingle();
-  if (existing.data) return existing.data as ReferralCodeRow;
+export async function getOrCreateCodeForWallet(wallet: string): Promise<ReferralCodeRow> {
+  const existing = await byWallet(wallet);
+  if (existing) return existing;
 
   for (let attempt = 0; attempt < MAX_INSERT_RETRIES; attempt++) {
     const code = generateCode();
-    const insert = await db
-      .from("referral_codes")
-      .insert({ code, wallet })
-      .select("*")
-      .single();
-    if (insert.data) return insert.data as ReferralCodeRow;
+    let error: unknown;
+    try {
+      const [row] = await query<ReferralCodeRow>(
+        "insert into public.referral_codes (code, wallet) values ($1, $2) returning *",
+        [code, wallet],
+      );
+      if (row) return row;
+    } catch (e) {
+      error = e;
+    }
     // 23505 = unique_violation. Could be either:
     //   - code collision → retry with a new code
     //   - wallet conflict (race with a sibling request) → re-read existing
-    const code23505 = insert.error?.code === "23505";
-    const isWalletConflict = code23505 && insert.error?.message.includes("one_code_per_wallet");
+    const code23505 = pgCode(error) === "23505";
+    const isWalletConflict =
+      code23505 && error instanceof Error && error.message.includes("one_code_per_wallet");
     if (isWalletConflict) {
-      const reread = await db
-        .from("referral_codes")
-        .select("*")
-        .eq("wallet", wallet)
-        .single();
-      if (reread.data) return reread.data as ReferralCodeRow;
+      const reread = await byWallet(wallet);
+      if (reread) return reread;
     }
     if (!code23505) {
-      throw new Error(`referral_codes insert failed: ${insert.error?.message ?? "unknown"}`);
+      throw new Error(
+        `referral_codes insert failed: ${error instanceof Error ? error.message : "unknown"}`,
+      );
     }
     // else fall through and retry with a fresh code
   }
@@ -76,22 +80,21 @@ export async function getOrCreateCodeForWallet(wallet: string): Promise<Referral
  * already on-chain so revealing it is not a leak).
  */
 export async function resolveAndCountVisit(code: string): Promise<ReferralCodeRow | null> {
-  const db = supabaseAdmin();
   // Read first so we can return immediately if not found.
-  const found = await db
-    .from("referral_codes")
-    .select("*")
-    .eq("code", code)
-    .maybeSingle();
-  if (!found.data) return null;
+  const found = await query<ReferralCodeRow>(
+    "select * from public.referral_codes where code = $1",
+    [code],
+  ).then(
+    (rows) => rows[0] ?? null,
+    () => null,
+  );
+  if (!found) return null;
   // Best-effort update — if it fails the resolve still succeeds. We
   // don't await on the response path (would add ~50ms to redirect).
-  void db
-    .from("referral_codes")
-    .update({
-      click_count: (found.data.click_count ?? 0) + 1,
-      last_visited_at: new Date().toISOString(),
-    })
-    .eq("code", code);
-  return found.data as ReferralCodeRow;
+  // In-SQL increment: concurrent clicks no longer overwrite each other.
+  void query(
+    "update public.referral_codes set click_count = coalesce(click_count, 0) + 1, last_visited_at = $2 where code = $1",
+    [code, new Date().toISOString()],
+  ).catch(() => undefined);
+  return found;
 }

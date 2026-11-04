@@ -6,7 +6,7 @@ import {
 } from "@playkaboom/sdk";
 import { programId } from "@/server/env";
 import { getConnection } from "@/server/connection";
-import { supabasePublic } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 import { jsonError } from "@/server/api-helpers";
 import {
   effectiveMaxBetLamports,
@@ -51,6 +51,7 @@ export async function GET() {
         v2Initialized: false,
         programId: programId().toBase58(),
         vaultPda: vaultPda.toBase58(),
+        houseAuthority: vault.houseAuthority.toBase58(),
         vaultBalanceLamports: lamports.toString(),
         vaultAssetsLamports: vaultAssets.toString(),
         vaultBalanceSol: lamportsToSol(lamports),
@@ -65,13 +66,10 @@ export async function GET() {
     // APY: lookup unit_value at now − 30 days, annualise.
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-    const sb = supabasePublic();
-    const { data: history } = await sb
-      .from("vault_unit_value_history")
-      .select("unit_value_e18, block_time")
-      .lte("block_time", thirtyDaysAgo.toISOString())
-      .order("block_time", { ascending: false })
-      .limit(1);
+    const history = await query<{ unit_value_e18: number; block_time: string }>(
+      "select unit_value_e18, block_time from public.vault_unit_value_history where block_time <= $1 order by block_time desc limit 1",
+      [thirtyDaysAgo.toISOString()],
+    ).catch(() => null);
 
     let apy30d: number | null = null;
     if (history && history.length > 0 && uvE18 > 0n && history[0]) {
@@ -89,6 +87,8 @@ export async function GET() {
       v2Initialized: true,
       programId: programId().toBase58(),
       vaultPda: vaultPda.toBase58(),
+      // The house signer, read from chain (public key only).
+      houseAuthority: vault.houseAuthority.toBase58(),
       vaultBalanceLamports: lamports.toString(),
       vaultAssetsLamports: vaultAssets.toString(),
       vaultBalanceSol: lamportsToSol(lamports),
@@ -116,8 +116,6 @@ export async function GET() {
       minLpDepositLamports: v2.minLpDeposit.toString(),
       apy30d,
       timestamp: now.toISOString(),
-      // Used internally; never display in UX (rule from VAULT_LP_PLAN.md §1.7).
-      __internal: { suppress: "house_units, seed_units" },
     });
   } catch (err) {
     return jsonError(err);

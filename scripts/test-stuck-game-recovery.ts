@@ -14,9 +14,13 @@
  *      the recovery banner used to dispatch close_unsettled_game for
  *      every stuck state, throwing 6018 on Playing games.
  *
- * Path B (close_unsettled_game on Won/Lost) requires Turnkey to sign
- * a reveal_tile during setup. We exercise that exhaustively in the
- * full-game-smoke instead — no point duplicating Turnkey deps here.
+ * Path B (close_unsettled_game on Won/Lost) requires the house key to sign
+ * a reveal_tile during setup. It was covered by full-game-smoke (deleted at
+ * the 2026-11-04 relaunch, along with the retired Turnkey signer).
+ *
+ * Historical: paths A and C call start_game, which the VRF-only relaunch
+ * program rejects (6057 LegacyModeDisabled), so this script only works
+ * against a build that still accepts commit-reveal games.
  *
  * Total runtime ~2.5 minutes (one 300-slot wait).
  */

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { supabasePublic } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 import { jsonError } from "@/server/api-helpers";
 
 export const runtime = "nodejs";
@@ -23,11 +23,10 @@ export async function GET(req: NextRequest) {
           ? "leaderboard_streaks"
           : "leaderboard_alltime";
 
-    const db = supabasePublic();
-    const { data, error } = await db.from(table).select("*").limit(50);
-    if (error) throw error;
+    // `table` is one of three fixed view names above, never request text.
+    const rows = await query(`select * from public.${table} limit 50`);
 
-    return NextResponse.json({ view, rows: data ?? [] });
+    return NextResponse.json({ view, rows });
   } catch (err) {
     return jsonError(err);
   }

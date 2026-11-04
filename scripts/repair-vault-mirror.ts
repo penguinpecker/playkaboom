@@ -42,7 +42,7 @@ const RPC =
 // a non-rate-limited endpoint; in prod both are the same Alchemy URL.)
 const TX_RPC = process.env.SOLANA_TX_RPC ?? RPC;
 const PROGRAM_ID = new PublicKey(
-  process.env.PROGRAM_ID ?? "9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh",
+  process.env.PROGRAM_ID ?? "Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju",
 );
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;

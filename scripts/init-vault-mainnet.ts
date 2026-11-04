@@ -1,22 +1,27 @@
 /**
- * Mainnet vault bootstrap — minimal one-tx initialize_vault.
+ * Mainnet vault bootstrap — minimal one-tx initialize_vault (relaunch program).
  *
- *   DRY_RUN=1 npx tsx scripts/init-vault-mainnet.ts   # preview
- *   npx tsx scripts/init-vault-mainnet.ts             # send
+ *   DRY_RUN=1 npx tsx scripts/init-vault-mainnet.ts --house <HOUSE_PUBKEY>   # preview
+ *   npx tsx scripts/init-vault-mainnet.ts --house <HOUSE_PUBKEY>             # send
  *
- * Sends a single tx: initialize_vault with deployer as owner+treasury,
- * Turnkey HSM as house_authority. No fund_vault, no allowlist_add — those
- * happen later (Phase D rotation + Phase E vault funding).
+ * Sends a single tx: initialize_vault with the deployer as owner+treasury and
+ * the house signer's PUBLIC key as house_authority. The house key is the raw
+ * keypair the web server holds as HOUSE_SECRET_KEY; pass only its pubkey here
+ * (e.g. `solana-keygen pubkey <file>`), never the secret. No fund_vault, no
+ * allowlist_add — those happen later.
  *
  * Hard-coded mainnet inputs (auditable; no env-var tampering):
- *   PROGRAM         9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh
- *   DEPLOYER        keypairs/mainnet-deployer.json
- *   TURNKEY HOUSE   7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp
+ *   PROGRAM    Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju
+ *   DEPLOYER   keypairs/mainnet-deployer.json, must be qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG
+ *              (F1: the program fails 6055 NotDeployer for any other owner)
+ *
+ * Preflight (read-only): the deployed program must already be the VRF-only
+ * build (a simulated start_game must fail 6057 LegacyModeDisabled). Initializing
+ * the vault on the earlier build would let commit-reveal games start with a raw
+ * house key on the server, which is exactly what the VRF-only upgrade closes.
  *
  * The RPC endpoint is the ONE input that is deliberately NOT hard-coded: it
  * carries an API key, and this repo is public. Supply it via SOLANA_MAINNET_RPC.
- * Pinning the addresses above is what makes this script auditable — the RPC is
- * not a trust input, only a transport.
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -26,10 +31,21 @@ import {
   PublicKey,
   Transaction,
 } from "@solana/web3.js";
-import { buildInitializeVault, decodeVault, deriveVaultPda } from "@playkaboom/sdk";
+import { buildInitializeVault, buildStartGame, decodeVault, deriveVaultPda } from "@playkaboom/sdk";
+import { KABOOM_DEPLOYER, KABOOM_PROGRAM_ID } from "@playkaboom/shared";
 
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
-const TURNKEY_HOUSE = new PublicKey("7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp");
+const PROGRAM_ID = new PublicKey(KABOOM_PROGRAM_ID);
+const DEPLOYER = new PublicKey(KABOOM_DEPLOYER);
+
+function argValue(flag: string): string | undefined {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+const HOUSE = (() => {
+  const raw = argValue("--house");
+  if (!raw) throw new Error("--house <HOUSE_PUBKEY> is required (the public key of HOUSE_SECRET_KEY)");
+  return new PublicKey(raw);
+})();
 const RPC = process.env.SOLANA_MAINNET_RPC
   ?? (() => {
     throw new Error(
@@ -45,16 +61,41 @@ function loadKeypair(path: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(bytes));
 }
 
+/** True iff the deployed program rejects start_game with 6057 (VRF-only build). Read-only simulate. */
+async function isVrfOnlyBuild(conn: Connection, feePayer: PublicKey): Promise<boolean> {
+  const tx = new Transaction().add(
+    buildStartGame({
+      ctx: { programId: PROGRAM_ID },
+      player: feePayer,
+      mineCount: 1,
+      betLamports: 1_000_000n,
+      commitment: Buffer.alloc(32),
+    }),
+  );
+  tx.feePayer = feePayer;
+  tx.recentBlockhash = (await conn.getLatestBlockhash("confirmed")).blockhash;
+  const sim = await conn.simulateTransaction(tx);
+  return JSON.stringify(sim.value.err ?? null).includes('"Custom":6057');
+}
+
 async function main() {
   const dryRun = !!process.env.DRY_RUN;
   const deployer = loadKeypair(resolve(process.cwd(), DEPLOYER_PATH));
   const conn = new Connection(RPC, "confirmed");
   const [vaultPda] = deriveVaultPda(PROGRAM_ID);
 
-  console.log("─ Phase C — initialize_vault on MAINNET ─");
+  console.log("─ initialize_vault on MAINNET ─");
   console.log("  Program       :", PROGRAM_ID.toBase58());
   console.log("  Deployer      :", deployer.publicKey.toBase58());
-  console.log("  House (Turnkey):", TURNKEY_HOUSE.toBase58());
+  console.log("  House signer  :", HOUSE.toBase58());
+  if (!deployer.publicKey.equals(DEPLOYER)) {
+    throw new Error(`${DEPLOYER_PATH} is ${deployer.publicKey.toBase58()}, not the F1 deployer ${DEPLOYER.toBase58()} (would fail 6055)`);
+  }
+  if (HOUSE.equals(deployer.publicKey)) throw new Error("--house must not be the deployer key");
+  if (!(await isVrfOnlyBuild(conn, deployer.publicKey))) {
+    throw new Error("deployed program is not the VRF-only build (start_game did not fail 6057): upgrade it first");
+  }
+  console.log("  Program build : VRF-only (start_game -> 6057) ✓");
   console.log("  Treasury (temp):", deployer.publicKey.toBase58());
   console.log("  Vault PDA     :", vaultPda.toBase58());
   console.log("  Args          : houseEdgeBps=200, maxBetBps=200, maxPayoutBps=5000");
@@ -75,7 +116,7 @@ async function main() {
   const ix = buildInitializeVault({
     ctx: { programId: PROGRAM_ID },
     owner: deployer.publicKey,
-    houseAuthority: TURNKEY_HOUSE,
+    houseAuthority: HOUSE,
     treasury: deployer.publicKey,
     houseEdgeBps: 200,
     maxBetBps: 200,

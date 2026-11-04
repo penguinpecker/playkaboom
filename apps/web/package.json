@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
+    "test": "node --conditions=react-server --import tsx --test src/server/house-signer.test.ts src/server/cron/vrf-passes.test.ts src/server/verify-vrf.test.ts src/server/rpc-proxy.test.ts src/server/proxy-ip.test.ts src/server/public-api-input.test.ts && node --import tsx --test src/hooks/use-pyth.test.ts",
+    "test:db": "node --conditions=react-server --import tsx --test src/server/db/data-layer.test.ts src/server/cron/tick.test.ts",
     "clean": "rimraf .next .turbo node_modules/.cache"
   },
   "dependencies": {
@@ -20,14 +22,12 @@
     "@solana/spl-token": "^0.4.14",
     "@solana/wallet-adapter-react": "^0.15.35",
     "@solana/web3.js": "^1.95.4",
-    "@supabase/supabase-js": "^2.105.3",
     "@tanstack/react-query": "^5.62.7",
-    "@turnkey/sdk-server": "^5.3.0",
-    "@turnkey/solana": "^1.1.28",
     "@upstash/ratelimit": "^2.0.5",
     "@upstash/redis": "^1.34.3",
     "material-symbols": "^0.27.0",
     "next": "15.1.11",
+    "pg": "^8.23.1",
     "pino": "^9.5.0",
     "react": "19.0.0",
     "react-dom": "19.0.0",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",
     "@types/ws": "^8.18.1",

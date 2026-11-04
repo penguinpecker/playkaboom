@@ -241,6 +241,12 @@ export async function startVrfGame(
    * delegated game is deliberately not refundable. The bet would be stranded.
    */
   onSession?: (session: Keypair) => void,
+  /**
+   * Instructions to run first in the same atomic tx (set_referrer on a
+   * referred player's first game: one signature, and settle_vrf can then
+   * always find the referral PDA).
+   */
+  preIxs: TransactionInstruction[] = [],
 ): Promise<StartedVrfGame> {
   const session = Keypair.generate();
   onSession?.(session);
@@ -265,6 +271,7 @@ export async function startVrfGame(
   const sig = await sendIx(
     cfg.l1,
     [
+      ...preIxs,
       buildStartGameVrf({ ctx, player, mineCount, betLamports, sessionKey: session.publicKey }),
       SystemProgram.transfer({
         fromPubkey: player,
@@ -439,13 +446,16 @@ export async function sweepSession(
   }
 }
 
-/** Wait for the committed (undelegated) game to show a terminal status on L1. */
+/**
+ * Wait for the committed (undelegated) game to show a terminal status on L1:
+ * Won, Lost, or Void (F3: an undelegate of a zero-progress round ends it Void).
+ */
 export async function waitForCommittedResult(
   cfg: VrfEngineConfig,
   player: PublicKey,
   timeoutMs = 60_000,
 ): Promise<VrfGameAccount | null> {
-  return pollVrfGame(cfg.l1, cfg.programId, player, (g) => g.status === "Won" || g.status === "Lost", timeoutMs);
+  return pollVrfGame(cfg.l1, cfg.programId, player, (g) => g.status !== "Playing", timeoutMs);
 }
 
 /**
@@ -455,7 +465,8 @@ export async function waitForCommittedResult(
  * TERMINAL status (Won/Lost), and a game being refunded stays `Playing`
  * forever — so the predicate can never pass and the caller eats the entire
  * timeout before doing anything. That was a flat ~32s of dead waiting on every
- * refund, measured twice on chain to the second.
+ * refund, measured twice on chain to the second. (Since the F3 round-2 fix an
+ * undelegated zero-progress game reads Void, not Playing; refund takes both.)
  *
  * Undelegation is the only precondition that actually matters here, because
  * refund_stalled_vrf refuses while the account is still owned by the

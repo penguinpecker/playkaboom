@@ -8,7 +8,7 @@ import {
 } from "@playkaboom/sdk";
 import { createClient } from "@supabase/supabase-js";
 
-const PROGRAM_ID = new PublicKey("9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh");
+const PROGRAM_ID = new PublicKey("Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju"); // relaunch program (old id closed)
 const GAMESESSION_DATASIZE = 180;
 
 async function main() {

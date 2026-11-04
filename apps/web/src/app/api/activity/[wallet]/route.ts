@@ -1,10 +1,20 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { jsonError } from "@/server/api-helpers";
-import { supabasePublic } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// Columns selected below; every list carries signature + slot and one time column.
+type Row = {
+  signature: string;
+  slot: number;
+  settled_at?: string | null;
+  block_time?: string | null;
+  occurred_at?: string | null;
+  [col: string]: unknown;
+};
 
 interface RouteContext {
   params: Promise<{ wallet: string }>;
@@ -12,7 +22,7 @@ interface RouteContext {
 
 /**
  * Unified activity feed: games + LP actions + referral events for a wallet.
- * Public — uses the public anon Supabase client (RLS allows reads). Sorted
+ * Public read through the server pool (the browser has no DB access). Sorted
  * newest first.
  */
 export async function GET(_req: NextRequest, ctx: RouteContext) {
@@ -23,40 +33,28 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
     } catch {
       return NextResponse.json({ error: "Invalid wallet" }, { status: 400 });
     }
-    const sb = supabasePublic();
-
     const limit = 50;
+    // Each list degrades to empty on a query error, as it did with supabase-js.
+    const rows = (sql: string) =>
+      query<Row>(sql, [wallet, limit]).then(
+        (data) => ({ data }),
+        () => ({ data: [] as Row[] }),
+      );
     const [games, lp, refClaims, refAccrued] = await Promise.all([
-      sb
-        .from("games")
-        .select(
-          "signature, outcome, bet, payout, multiplier_bps, mine_count, settled_at, slot",
-        )
-        .eq("player", wallet)
-        .order("slot", { ascending: false })
-        .limit(limit),
-      sb
-        .from("lp_actions")
-        .select(
-          "signature, action, units_delta, lamports_delta, unit_value_lamports, slot, block_time",
-        )
-        .eq("user_address", wallet)
-        .order("slot", { ascending: false })
-        .limit(limit),
+      rows(
+        "select signature, outcome, bet, payout, multiplier_bps, mine_count, settled_at, slot from public.games where player = $1 order by slot desc limit $2",
+      ),
+      rows(
+        "select signature, action, units_delta, lamports_delta, unit_value_lamports, slot, block_time from public.lp_actions where user_address = $1 order by slot desc limit $2",
+      ),
       // referral payouts received by this wallet (as referrer)
-      sb
-        .from("referral_events")
-        .select("signature, referrer, player, amount, tier, occurred_at, slot")
-        .eq("referrer", wallet)
-        .order("slot", { ascending: false })
-        .limit(limit),
+      rows(
+        "select signature, referrer, player, amount, tier, occurred_at, slot from public.referral_events where referrer = $1 order by slot desc limit $2",
+      ),
       // referral payouts the player triggered (volume credited to *their* referrer)
-      sb
-        .from("referral_events")
-        .select("signature, referrer, player, amount, tier, occurred_at, slot")
-        .eq("player", wallet)
-        .order("slot", { ascending: false })
-        .limit(limit),
+      rows(
+        "select signature, referrer, player, amount, tier, occurred_at, slot from public.referral_events where player = $1 order by slot desc limit $2",
+      ),
     ]);
 
     const events: Array<{
@@ -72,7 +70,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
         kind: "game",
         signature: g.signature,
         slot: g.slot,
-        time: g.settled_at,
+        time: g.settled_at ?? null,
         payload: g,
       });
     }
@@ -81,7 +79,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
         kind: "lp",
         signature: a.signature,
         slot: a.slot,
-        time: a.block_time,
+        time: a.block_time ?? null,
         payload: a,
       });
     }
@@ -90,7 +88,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
         kind: "ref_received",
         signature: r.signature,
         slot: r.slot,
-        time: r.occurred_at,
+        time: r.occurred_at ?? null,
         payload: r,
       });
     }
@@ -103,7 +101,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
           kind: "ref_paid",
           signature: r.signature,
           slot: r.slot,
-          time: r.occurred_at,
+          time: r.occurred_at ?? null,
           payload: r,
         });
       }

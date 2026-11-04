@@ -12,7 +12,8 @@ import { useGameStore } from "@/stores/game-store";
 // against an existing on-chain GameSession and hit the 409 loop.
 const AUTH_RESET_DEBOUNCE_MS = 2_000;
 
-export type OnChainGameStatus = "Playing" | "Won" | "Lost" | "Expired";
+/** "Void" is VRF-only (F3): closed for inactivity with no progress, bet refundable. */
+export type OnChainGameStatus = "Playing" | "Won" | "Lost" | "Expired" | "Void";
 
 export interface StuckGameInfo {
   active: boolean;

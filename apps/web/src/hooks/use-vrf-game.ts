@@ -1,7 +1,7 @@
 "use client";
 // VRF-mode game actions. Same shape as the commit-reveal actions in
 // use-game-actions.ts, driving the SAME game store so Grid/Tile/BetControls
-// work unchanged. Selected by the VRF_MODE_ENABLED flag (see use-game-actions).
+// work unchanged. VRF is the only game mode (see use-game-actions).
 //
 // Player wallet (Privy) signs start_game_vrf + delegate_vrf; a per-game session
 // keypair signs every reveal in the rollup (no popups). Session funding +
@@ -17,6 +17,7 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   Transaction,
+  type TransactionInstruction,
 } from "@solana/web3.js";
 import {
   startVrfGame,
@@ -32,7 +33,16 @@ import {
   type SignTx,
   type VrfEngineConfig,
 } from "@/lib/vrf/client";
-import { deriveVrfClaimPda, deriveVrfGamePda, decodeVrfClaim, decodeVrfGame } from "@playkaboom/sdk";
+import {
+  buildSetReferrer,
+  decodePlayerStats,
+  derivePlayerStatsPda,
+  deriveVrfClaimPda,
+  deriveVrfGamePda,
+  decodeVrfClaim,
+  decodeVrfGame,
+} from "@playkaboom/sdk";
+import { clearPendingReferrer, getPendingReferrer } from "./use-referral";
 import { apiVrfSettle, apiVrfRefund, ApiClientError } from "@/lib/api";
 import { PROGRAM_ID, ER_RPC_URL, ER_WS_URL, VRF_QUEUE, VRF_MODE_ENABLED } from "@/lib/cluster";
 import { useGameStore } from "@/stores/game-store";
@@ -55,6 +65,14 @@ export interface VrfActions {
  */
 function friendlyVrfError(e: unknown): string {
   const m = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
+  if (isGameNotPlaying(e))
+    return "This round was closed for inactivity — wins are paid at your current multiplier, an untouched bet is refunded.";
+  if (m.includes("0x179c"))
+    return "The randomness draw is still resolving — try again in a moment.";
+  if (m.includes("0x17a2") || m.includes("gamealreadyresolved"))
+    return "This round is already finished — reload to see the result.";
+  if (m.includes("0x17a9") || m.includes("legacymodedisabled"))
+    return "Classic mode is retired — reload the page to play.";
   if (m.includes("0x179b") || m.includes("badsessionkey"))
     return "This browser no longer holds the key for that round — use Recover to close it out.";
   if (m.includes("0x1776") || m.includes("vaultinsufficientfunds"))
@@ -68,8 +86,32 @@ function friendlyVrfError(e: unknown): string {
   return "Something went wrong with that action. Please try again.";
 }
 
+/**
+ * 6003 GameNotPlaying from a session-key reveal or cash-out: the game is no
+ * longer PLAYING on the rollup. In practice the house force-closed it for
+ * inactivity (F3): progress became WON, no progress became VOID.
+ */
+function isGameNotPlaying(e: unknown): boolean {
+  const m = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
+  return m.includes("0x1773") || m.includes("gamenotplaying");
+}
+
+/**
+ * False only when the player's VrfClaim is confirmed gone (or settled): the
+ * round is fully closed, e.g. the house forced it and a later cron tick paid or
+ * refunded it. An RPC error counts as open, so nothing is closed on a guess.
+ */
+async function claimOpen(connection: Connection, player: PublicKey): Promise<boolean> {
+  try {
+    const info = await connection.getAccountInfo(deriveVrfClaimPda(PROGRAM_ID, player)[0], "confirmed");
+    return info !== null && !decodeVrfClaim(info.data as Buffer).settled;
+  } catch {
+    return true;
+  }
+}
+
 export function useVrfGame(): VrfActions {
-  const { authenticated } = usePrivy();
+  const { authenticated, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
   const { signTransaction } = useSignTransaction();
   const { connection } = useConnection();
@@ -80,6 +122,9 @@ export function useVrfGame(): VrfActions {
   const sessionRef = useRef<Keypair | null>(null);
   const inflightRef = useRef(false);
   const recoveredRef = useRef<string | null>(null);
+  // revealTile / cashOut are defined before cleanupStuck; they reach it here.
+  const cleanupRef = useRef<() => Promise<boolean>>(async () => false);
+  const closeForcedRef = useRef(false);
 
   // The session key is the ONLY key that can bring a game back out of the
   // rollup. Held in memory alone, closing the tab stranded the bet outright:
@@ -284,6 +329,26 @@ export function useVrfGame(): VrfActions {
         }
       }
       store.setStatus("starting");
+      // Referral link: bundle set_referrer into the player's first start (one
+      // signature, atomic). Skipped on any error; /referrals keeps the manual
+      // "Confirm referrer" button as the fallback.
+      const preIxs: TransactionInstruction[] = [];
+      const pendingRef = getPendingReferrer();
+      if (pendingRef && pendingRef !== wallet.address) {
+        try {
+          const [statsPda] = derivePlayerStatsPda(PROGRAM_ID, player);
+          const info = await connection.getAccountInfo(statsPda, "confirmed");
+          const hasReferrer =
+            info && info.owner.equals(PROGRAM_ID) ? decodePlayerStats(info.data as Buffer).referrer !== null : false;
+          if (!hasReferrer) {
+            preIxs.push(
+              buildSetReferrer({ ctx: { programId: PROGRAM_ID }, player, referrer: new PublicKey(pendingRef) }),
+            );
+          }
+        } catch {
+          /* start without it */
+        }
+      }
       // The session key is funded inside the start transaction (player-paid,
       // atomic with start_game_vrf) — no separate funding round-trip. It is
       // persisted via the callback BEFORE anything is sent, so a send that
@@ -295,8 +360,28 @@ export function useVrfGame(): VrfActions {
         store.mineCount,
         betLamports,
         rememberSession,
+        preIxs,
       );
       store.beginGame(started.gamePda.toBase58(), started.startSig);
+      if (preIxs.length > 0) {
+        // The on-chain set_referrer is what counts; /api/ref/confirm only
+        // decorates the referral_visits row. Best-effort.
+        clearPendingReferrer();
+        void (async () => {
+          try {
+            const token = await getAccessToken();
+            if (!token) return;
+            await fetch("/api/ref/confirm", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ wallet: wallet.address, signature: started.startSig }),
+              credentials: "include",
+            });
+          } catch {
+            /* analytics — silent */
+          }
+        })();
+      }
     } catch (e) {
       // LAST-DITCH: the start is ONE atomic transaction now, so if the game is
       // delegated on chain then everything succeeded — bet locked, session key
@@ -304,8 +389,14 @@ export function useVrfGame(): VrfActions {
       // the player into the live game rather than an error they cannot act on.
       try {
         const [gamePda] = deriveVrfGamePda(PROGRAM_ID, player);
-        const gi = await connection.getAccountInfo(gamePda, "confirmed");
-        if (gi && !gi.owner.equals(PROGRAM_ID)) {
+        const [claimPda] = deriveVrfClaimPda(PROGRAM_ID, player);
+        const [gi, ci] = await Promise.all([
+          connection.getAccountInfo(gamePda, "confirmed"),
+          connection.getAccountInfo(claimPda, "confirmed"),
+        ]);
+        // F6: a DLP-owned game with no claim is an orphan of an admin
+        // release, not this start; only a live claim proves the start landed.
+        if (gi && !gi.owner.equals(PROGRAM_ID) && ci) {
           store.beginGame(gamePda.toBase58(), "");
           return;
         }
@@ -318,7 +409,7 @@ export function useVrfGame(): VrfActions {
     } finally {
       inflightRef.current = false;
     }
-  }, [cfg, wallet, authenticated, store, signPlayer, connection]);
+  }, [cfg, wallet, authenticated, store, signPlayer, connection, rememberSession, getAccessToken]);
 
   const revealTile = useCallback(
     async (idx: number) => {
@@ -377,11 +468,23 @@ export function useVrfGame(): VrfActions {
         store.setPendingTile(null);
         if (useGameStore.getState().status === "revealing") store.setStatus("playing");
         store.setError(friendlyVrfError(e));
+        // F3: the house force-closed this round (WON or VOID). Re-read the
+        // game and close it out instead of leaving a board that rejects taps.
+        // The cron may also have finished the round already (claim gone), in which
+        // case the ER can refuse the reveal with some other error.
+        if (isGameNotPlaying(e) || !(await claimOpen(connection, player))) closeForcedRef.current = true;
       } finally {
         inflightRef.current = false;
       }
+      if (closeForcedRef.current) {
+        closeForcedRef.current = false;
+        if (await cleanupRef.current()) {
+          store.reset();
+          toast("Round closed for inactivity — any win was paid, an untouched bet refunded.", "amber");
+        }
+      }
     },
-    [cfg, wallet, store, settleFlow, loadSession],
+    [cfg, wallet, store, settleFlow, loadSession, toast, connection],
   );
 
   const cashOut = useCallback(async () => {
@@ -408,10 +511,18 @@ export function useVrfGame(): VrfActions {
       // the win on chain, so only step back if we are still mid-cash-out.
       if (useGameStore.getState().status === "cashing") store.setStatus("playing");
       store.setError(friendlyVrfError(e));
+      if (isGameNotPlaying(e) || !(await claimOpen(connection, player))) closeForcedRef.current = true;
     } finally {
       inflightRef.current = false;
     }
-  }, [cfg, wallet, store, settleFlow, loadSession]);
+    if (closeForcedRef.current) {
+      closeForcedRef.current = false;
+      if (await cleanupRef.current()) {
+        store.reset();
+        toast("Round closed for inactivity — any win was paid, an untouched bet refunded.", "amber");
+      }
+    }
+  }, [cfg, wallet, store, settleFlow, loadSession, toast, connection]);
 
   const resetGame = useCallback(() => {
     rememberSession(null);
@@ -435,6 +546,20 @@ export function useVrfGame(): VrfActions {
     const player = wallet.address;
     const playerKey = new PublicKey(player);
     const stored = loadSession();
+    // F3: a round the house forced and a later tick already settled/refunded
+    // has no claim left; both L1 routes would 404. It is resolved: sweep the
+    // key and report success so the board resets.
+    if (!(await claimOpen(connection, playerKey))) {
+      if (cfg && stored) {
+        try {
+          await sweepSession(cfg, stored, playerKey);
+        } catch (e) {
+          console.warn("[vrf] session dust sweep failed:", e);
+        }
+      }
+      rememberSession(null);
+      return true;
+    }
     // A STORED KEY IS NOT NECESSARILY THIS GAME'S KEY. localStorage survives
     // across rounds, so it can hold a session key from an earlier game. The
     // program checks `signer == g.session_key` exactly and rejects anything
@@ -537,18 +662,35 @@ export function useVrfGame(): VrfActions {
         );
         return false;
       }
+      let undelegateErr: unknown = null;
       try {
         if (session) await settleAndUndelegateVrf(cfg, playerKey, session);
         else await settleAndUndelegateVrfAsPlayer(cfg, playerKey, signPlayerEr);
-        // Wait for UNDELEGATION, not for a terminal result. A game being
-        // refunded stays `Playing`, so waiting on Won/Lost could only ever
-        // time out — a flat ~32s of doing nothing before the refund fired.
-        await waitForUndelegation(cfg, playerKey, 20_000);
       } catch (e) {
+        // A round the house already force-closed (F3) has its undelegation
+        // scheduled, so ours may be refused; the wait below still sees it land.
+        undelegateErr = e;
         console.warn("[vrf] undelegate step failed:", e);
+      }
+      // Wait for UNDELEGATION, not for a terminal result: a refund needs only
+      // the account back on L1 (Playing/Void), not Won/Lost.
+      const back = await waitForUndelegation(cfg, playerKey, 20_000);
+      if (!back && undelegateErr) {
         store.setError(
-          `Could not bring the game back from the rollup: ${(e as Error)?.message ?? "unknown"}`,
+          `Could not bring the game back from the rollup: ${(undelegateErr as Error)?.message ?? "unknown"}`,
         );
+      }
+      // The committed L1 copy is now the truth (a forced game reads Won/Void).
+      if (back) {
+        try {
+          const gi = await connection.getAccountInfo(deriveVrfGamePda(PROGRAM_ID, playerKey)[0], "confirmed");
+          if (gi && gi.owner.equals(PROGRAM_ID)) {
+            committed = decodeVrfGame(gi.data as Buffer);
+            delegated = false;
+          }
+        } catch {
+          /* keep the rollup copy */
+        }
       }
     }
     const finish = async () => {
@@ -572,7 +714,10 @@ export function useVrfGame(): VrfActions {
     // `state` is whichever copy is authoritative: the rollup's while
     // delegated, the committed L1 copy once it is back.
     const state = delegated ? live : committed;
-    const refundOnly = state !== null && state.status === "Playing" && state.safeReveals === 0;
+    // VOID (F3: closed for inactivity, nothing revealed) is refund-only too.
+    const refundOnly =
+      state !== null &&
+      (state.status === "Void" || (state.status === "Playing" && state.safeReveals === 0));
     if (!refundOnly) {
       try {
         await apiVrfSettle({ player });
@@ -589,7 +734,8 @@ export function useVrfGame(): VrfActions {
     } catch {
       return false;
     }
-  }, [wallet, cfg, loadSession, rememberSession, signPlayerEr, store]);
+  }, [wallet, cfg, connection, loadSession, rememberSession, signPlayerEr, store]);
+  cleanupRef.current = cleanupStuck;
 
   // Run recovery once per wallet on mount: a leftover claim means a previous
   // visit started a game and never finished it. Without this the funds sit

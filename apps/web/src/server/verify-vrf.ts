@@ -1,8 +1,50 @@
-import { PublicKey } from "@solana/web3.js";
-import { decodeVault, deriveVaultPda } from "@playkaboom/sdk";
+import { ComputeBudgetProgram, PublicKey } from "@solana/web3.js";
+import bs58 from "bs58";
+import { decodeVault, deriveVaultPda, ixDiscriminator } from "@playkaboom/sdk";
 import { calcMultiplierBps } from "@playkaboom/shared";
 import { getConnection } from "./connection";
 import { programId } from "./env";
+
+type VrfSettleTx = {
+  slot: number;
+  meta?: { err: unknown; preBalances: number[]; postBalances: number[] } | null;
+  transaction: {
+    message: {
+      getAccountKeys: () => { staticAccountKeys: PublicKey[] };
+      compiledInstructions: { programIdIndex: number; accountKeyIndexes: number[]; data: Uint8Array }[];
+    };
+  };
+};
+
+const SETTLE_VRF_DISC = ixDiscriminator("settle_vrf");
+
+/**
+ * The accounts of the tx's settle_vrf, or null if this is not a successful
+ * transaction made of exactly one top-level Kaboom settle_vrf plus compute-
+ * budget ixs. Log text is not evidence (any program, even a Memo, can print
+ * "Instruction: SettleVrf"), and balance deltas are tx-wide, so any other
+ * top-level ix could tune the vault/treasury deltas the solver reads.
+ * Account order: buildSettleVrf in packages/sdk/src/vrf.ts.
+ */
+export function settleVrfAccounts(
+  tx: VrfSettleTx,
+  pid: PublicKey,
+): { player: PublicKey; claim: PublicKey; game: PublicKey; treasury: PublicKey } | null {
+  if (!tx.meta || tx.meta.err != null) return null;
+  const msg = tx.transaction.message;
+  const keys = msg.getAccountKeys().staticAccountKeys;
+  let found: ReturnType<typeof settleVrfAccounts> = null;
+  for (const ix of msg.compiledInstructions) {
+    const prog = keys[ix.programIdIndex];
+    if (prog?.equals(ComputeBudgetProgram.programId)) continue;
+    if (found || !prog?.equals(pid)) return null;
+    if (!Buffer.from(ix.data).subarray(0, 8).equals(SETTLE_VRF_DISC)) return null;
+    const a = ix.accountKeyIndexes.map((i) => keys[i]);
+    if (a.length < 9 || a.some((k) => !k)) return null;
+    found = { player: a[1]!, claim: a[2]!, game: a[3]!, treasury: a[6]! };
+  }
+  return found;
+}
 
 /**
  * Verify a VRF settle from the transaction's lamport movements alone.
@@ -22,20 +64,24 @@ import { programId } from "./env";
  * follow the published table and `verified` is false — which is the finding
  * that matters. Every input comes from the transaction the caller named.
  */
-export async function verifyVrfSettle(tx: {
-  slot: number;
-  meta?: { preBalances: number[]; postBalances: number[] } | null;
-  transaction: { message: { getAccountKeys: () => { staticAccountKeys: PublicKey[] } } };
-}): Promise<Record<string, unknown> | null> {
+export async function verifyVrfSettle(tx: VrfSettleTx): Promise<Record<string, unknown> | null> {
   const meta = tx.meta;
   if (!meta) return null;
-  const conn = getConnection();
   const pid = programId();
+  const ixAccounts = settleVrfAccounts(tx, pid);
+  if (!ixAccounts) return null;
+  const conn = getConnection();
   const [vaultPda] = deriveVaultPda(pid);
 
   const vi = await conn.getAccountInfo(vaultPda, "confirmed");
   if (!vi) return null;
   const vault = decodeVault(vi.data as Buffer);
+  // From the ix, not balances: the program checked these when the tx landed.
+  const accountsOut = {
+    player: ixAccounts.player.toBase58(),
+    game: ixAccounts.game.toBase58(),
+    claim: ixAccounts.claim.toBase58(),
+  };
   const edgeBps = vault.houseEdgeBps;
   const splitBps = vault.treasurySplitBps;
 
@@ -45,7 +91,7 @@ export async function verifyVrfSettle(tx: {
     return i >= 0 ? meta.postBalances[i]! - meta.preBalances[i]! : 0;
   };
   const vaultDelta = delta(vaultPda);
-  const treasuryCut = delta(vault.treasury);
+  const treasuryCut = delta(ixAccounts.treasury);
   if (treasuryCut <= 0 || vaultDelta >= 0) return null;
 
   // treasury_cut = bet x edge_bps/1e4 x split_bps/1e4
@@ -69,6 +115,7 @@ export async function verifyVrfSettle(tx: {
         mode: "vrf",
         verified: true,
         outcome: "lost",
+        ...accountsOut,
         slot: String(tx.slot),
         betLamports: String(bet),
         payoutLamports: "0",
@@ -104,6 +151,7 @@ export async function verifyVrfSettle(tx: {
     mode: "vrf",
     verified: solution !== null,
     outcome: solution ? "won" : "unknown",
+    ...accountsOut,
     slot: String(tx.slot),
     betLamports: String(bet),
     vaultPaidLamports: String(paidOut),
@@ -126,4 +174,18 @@ export async function verifyVrfSettle(tx: {
     note:
       "Every figure above was derived from this transaction's own balance changes. Re-derive them yourself with: solana confirm -v <signature>",
   };
+}
+
+/**
+ * True for a base58 string that decodes to the 64 bytes of a Solana tx
+ * signature. Both verify routes check this before calling the RPC, which
+ * otherwise answers a malformed sig with a raw error ("Invalid param:
+ * WrongSize") that the route returned as a 500.
+ */
+export function isTxSignature(s: string): boolean {
+  try {
+    return bs58.decode(s).length === 64;
+  } catch {
+    return false;
+  }
 }

@@ -20,9 +20,11 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   return NextResponse.json(
     {
-      // Vercel stamps this per deployment. Falls back to the Next build id so
-      // this still works in local dev / self-hosted.
+      // Railway stamps this per deployment (an old tab then reloads instead
+      // of calling the retired commit-reveal routes). Falls back to the build
+      // id so this still works in local dev.
       buildId:
+        process.env.RAILWAY_DEPLOYMENT_ID ??
         process.env.VERCEL_DEPLOYMENT_ID ??
         process.env.NEXT_PUBLIC_BUILD_ID ??
         "dev",

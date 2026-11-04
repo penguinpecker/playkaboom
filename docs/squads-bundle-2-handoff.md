@@ -1,5 +1,7 @@
 # Squads bundle #2 — handoff (2026-05-16)
 
+> Historical (pre-2026-11-04 relaunch): Turnkey and Supabase described here are retired; see [HANDOFF.md](../HANDOFF.md) for the live system.
+
 Everything needed to execute the four bundled changes via Squads 2/2:
 
 1. **Magicblock ER program upgrade** (already on main since PR #2)

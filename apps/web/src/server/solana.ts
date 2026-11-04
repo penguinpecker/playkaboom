@@ -1,21 +1,15 @@
 import "server-only";
 import {
-  type AccountInfo,
   ComputeBudgetProgram,
-  PublicKey,
   Transaction,
   type TransactionInstruction,
 } from "@solana/web3.js";
 import { programId } from "./env";
-import { getConnection } from "./connection";
-import { getHouseSigner } from "./turnkey-signer";
-import {
-  decodeGameSession,
-  deriveGamePda,
-  extractAnchorFrameworkError,
-  isAccountNotInitializedError,
-} from "@playkaboom/sdk";
+import { getConnection, getErConnection } from "./connection";
+import { getHouseSigner } from "./house-signer";
+import { extractAnchorFrameworkError, isAccountNotInitializedError } from "@playkaboom/sdk";
 import { logger } from "./logger";
+import { assertTickLockHeld } from "./cron/tick";
 
 /**
  * Typed wrapper for SendTransactionError shapes we know how to handle.
@@ -116,6 +110,7 @@ async function computePriorityFee(): Promise<number> {
 export async function sendHouseTx(
   instructions: TransactionInstruction[],
 ): Promise<string> {
+  await assertTickLockHeld(); // a cron pass whose lock was lost must not send
   const conn = getConnection();
   const house = getHouseSigner();
   const priceMicroLamports = await computePriorityFee();
@@ -166,109 +161,40 @@ export async function sendHouseTx(
 }
 
 /**
- * Block until a house transaction is irreversible enough to disclose its
- * outcome, or report that it is not.
- *
- * Why this exists: `sendHouseTx` returns the moment the RPC accepts the bytes,
- * so a route that answers immediately tells the player the result while the
- * game is still `Playing` on chain. On a LOSING reveal that is exploitable —
- * the player now knows they lost and can broadcast their own `cash_out` with a
- * higher priority fee and land it before our settle, converting the loss into
- * a full payout. Confirming first removes the window; the player learns the
- * outcome only once it can no longer be changed.
- *
- * Falls back to reading the game account: if the PDA is gone or is no longer
- * `Playing`, the round is decided regardless of what the status API says.
- * Returns false if neither could be established inside the budget — callers
- * must then fail closed and disclose nothing.
+ * House-signed transaction on the MagicBlock ephemeral rollup (F3 force pass).
+ * No compute-budget instructions and no priority fee: the ER has neither fee
+ * market nor `getRecentPrioritizationFees`. Blockhash comes from the ER itself.
+ * Preflight on, so a deterministic failure (6044 pending, 6007) throws here.
  */
-export async function confirmOutcomeSettled(
-  signature: string,
-  player: PublicKey,
-  timeoutMs = 20_000,
-): Promise<boolean> {
-  const conn = getConnection();
-  const deadline = Date.now() + timeoutMs;
-  const [pda] = deriveGamePda(programId(), player);
-
-  while (Date.now() < deadline) {
-    try {
-      const { value } = await conn.getSignatureStatuses([signature], {
-        searchTransactionHistory: true,
-      });
-      const st = value[0];
-      if (st?.err) return true; // settle failed; nothing was decided in the player's favour
-      if (st?.confirmationStatus === "confirmed" || st?.confirmationStatus === "finalized") {
-        return true;
-      }
-    } catch {
-      /* transient RPC error — fall through to the account probe */
-    }
-
-    try {
-      // Authoritative even when the signature lookup is lagging: an absent or
-      // non-Playing game can no longer be cashed out.
-      const info = await conn.getAccountInfo(pda, "confirmed");
-      if (info === null) return true;
-      // Use the SDK decoder, never hand-rolled byte offsets: GameSession has
-      // `bump` before `status`, and an off-by-one here would silently read the
-      // wrong field and disclose an outcome that is still racing.
-      if (decodeGameSession(info.data).status !== "Playing") return true;
-    } catch {
-      /* ignore and retry */
-    }
-
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  return false;
-}
-
-export async function playerHasActiveGame(player: PublicKey): Promise<boolean> {
-  const [pda] = deriveGamePda(programId(), player);
-  const info = await getConnection().getAccountInfo(pda, "confirmed");
-  return info !== null;
+export async function sendHouseErTx(instructions: TransactionInstruction[]): Promise<string> {
+  await assertTickLockHeld();
+  const conn = getErConnection();
+  const house = getHouseSigner();
+  const tx = new Transaction();
+  for (const ix of instructions) tx.add(ix);
+  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = house.publicKey;
+  const signed = await house.signTransaction(tx);
+  return conn.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
 }
 
 /**
- * Probe the GameSession PDA with bounded retries.
- *
- * Returns the account if it exists at "confirmed", or null after retries
- * if the RPC consistently reports the account is absent. RPC errors are
- * retried up to `attempts` times and re-thrown if all fail — a clean
- * `null` is reserved for "RPC confirmed the account does not exist".
- *
- * The retry exists for the start_game-propagation race: the client flips
- * UI to "playing" the instant Alchemy ACKs the start_game send (~200ms),
- * but a tile click landing in the next ~500-800ms may arrive before the
- * validator has processed start_game. Three attempts at 250ms gives
- * ~750ms of headroom — well within typical p99 propagation, well under
- * the blockhash window.
+ * Poll until `sig` is confirmed. Returns true on confirmed/finalized, false on
+ * an on-chain error or when `timeoutMs` passes (dropped or still in flight).
  */
-export interface RequireActiveGameOpts {
-  attempts?: number;
-  backoffMs?: number;
-}
-export async function requireActiveGame(
-  player: PublicKey,
-  opts: RequireActiveGameOpts = {},
-): Promise<AccountInfo<Buffer> | null> {
-  const attempts = Math.max(1, opts.attempts ?? 3);
-  const backoffMs = Math.max(0, opts.backoffMs ?? 250);
-  const [pda] = deriveGamePda(programId(), player);
-  const conn = getConnection();
-  let lastErr: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const info = await conn.getAccountInfo(pda, "confirmed");
-      if (info) return info as AccountInfo<Buffer>;
-      lastErr = undefined;
-    } catch (err) {
-      lastErr = err;
-    }
-    if (i < attempts - 1 && backoffMs > 0) {
-      await new Promise((r) => setTimeout(r, backoffMs));
-    }
+export async function waitConfirmed(
+  sig: string,
+  timeoutMs = 30_000,
+  conn = getConnection(),
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const st = (await conn.getSignatureStatuses([sig]).catch(() => null))?.value?.[0];
+    if (st?.err) return false;
+    if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 1_000));
   }
-  if (lastErr) throw lastErr;
-  return null;
 }

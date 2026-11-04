@@ -1,0 +1,19 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "// source": "Service kaboom-web. Root directory = repo root (npm workspaces); set the service's Railway config file path to /apps/web/railway.json. Build steps live in apps/web/Dockerfile (Node 22, npm ci + next build of @playkaboom/web only).",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "apps/web/Dockerfile",
+    "watchPatterns": ["apps/web/**", "packages/**", "db/**", "package.json", "package-lock.json"]
+  },
+  "deploy": {
+    "// preDeployCommand": "Applies pending db/migrations before the new deployment takes traffic (idempotent, advisory-locked). Runs from WORKDIR apps/web.",
+    "preDeployCommand": "node /app/db/migrate.mjs",
+    "healthcheckPath": "/api/healthz",
+    "healthcheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5,
+    "// numReplicas": "Pinned to 1: the cron passes run in-process (relay ticks /api/cron/tick every 60 s). The tick's advisory lock keeps passes from overlapping across replicas, but per-pass cadence lives in process memory and the rate limiter falls back to in-process without Upstash.",
+    "numReplicas": 1
+  }
+}

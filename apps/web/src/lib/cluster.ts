@@ -1,11 +1,17 @@
 import { PublicKey } from "@solana/web3.js";
-import { ACCOUNT_EXPLORERS, EXPLORERS, type SolanaCluster } from "@playkaboom/shared";
+import {
+  ACCOUNT_EXPLORERS,
+  EXPLORERS,
+  KABOOM_PROGRAM_ID,
+  type SolanaCluster,
+} from "@playkaboom/shared";
 
-const RAW_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER ?? "devnet";
+// Mainnet is the default: the relaunch program exists only there.
+const RAW_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER ?? "mainnet-beta";
 export const CLUSTER: SolanaCluster =
   RAW_CLUSTER === "mainnet-beta" || RAW_CLUSTER === "devnet" || RAW_CLUSTER === "testnet"
     ? RAW_CLUSTER
-    : "devnet";
+    : "mainnet-beta";
 
 /**
  * Client-facing RPC URL.
@@ -97,10 +103,14 @@ const DEV_WS_OVERRIDE =
 
 export const WS_URL = DEV_WS_OVERRIDE !== null ? DEV_WS_OVERRIDE : RAILWAY_WS_PROXY[CLUSTER];
 
-const RAW_PROGRAM_ID = process.env.NEXT_PUBLIC_PROGRAM_ID;
-export const PROGRAM_ID = RAW_PROGRAM_ID
-  ? new PublicKey(RAW_PROGRAM_ID)
-  : new PublicKey("Kab1TestProgam11111111111111111111111111111");
+// Defaults to the relaunch program. A different value fails the build: an old
+// id (the closed 9Xip2L... program) inlined into the bundle would send every
+// player tx to a dead program.
+const RAW_PROGRAM_ID = process.env.NEXT_PUBLIC_PROGRAM_ID || KABOOM_PROGRAM_ID;
+if (RAW_PROGRAM_ID !== KABOOM_PROGRAM_ID) {
+  throw new Error(`NEXT_PUBLIC_PROGRAM_ID must be ${KABOOM_PROGRAM_ID} (or unset)`);
+}
+export const PROGRAM_ID = new PublicKey(RAW_PROGRAM_ID);
 
 // ── MagicBlock Ephemeral-Rollup (VRF mode) config ────────────────────────────
 //
@@ -165,21 +175,13 @@ export const VRF_QUEUE: PublicKey = new PublicKey(
 );
 
 /**
- * Client-side kill switch for the VRF game mode. When false the app drives the
- * existing commit-reveal flow only. Pairs with the on-chain `vrf_mode_enabled`
- * flag and the backend routing — any of the three being off disables VRF.
+ * VRF is the only game mode (the program rejects the legacy start with 6057).
+ * The mode is usable only with an explicit ER endpoint: without one the app
+ * cannot reach the rollup, and starting a game would lock a bet with no way to
+ * play it out. The server flag VRF_MODE_ENABLED gates the money routes, and the
+ * on-chain vrf_validator / vrf_max_payout_bps gate the program itself.
  */
-/**
- * Client-side VRF mode switch. Requires an explicit ER endpoint too: without
- * one the app cannot reach the rollup, and starting a game in that state would
- * lock a bet with no way to play it out. Both must be set deliberately.
- *
- * This is a UI-routing flag only — the server flag VRF_MODE_ENABLED gates the
- * money routes, and the on-chain vrf_validator / vrf_max_payout_bps gate the
- * program itself.
- */
-export const VRF_MODE_ENABLED =
-  process.env.NEXT_PUBLIC_VRF_MODE_ENABLED === "true" && ER_RPC_URL.length > 0;
+export const VRF_MODE_ENABLED = ER_RPC_URL.length > 0;
 
 export const txExplorer = (sig: string) => EXPLORERS[CLUSTER](sig);
 export const accountExplorer = (addr: string) => ACCOUNT_EXPLORERS[CLUSTER](addr);

@@ -1,20 +1,19 @@
 /**
  * Live-feed WebSocket relay for playkaboom.gg.
  *
- * Subscribes to Supabase Realtime postgres_changes upstream (one
- * connection for the whole relay), and fans out each event over
- * WebSocket to every connected browser client. This decouples viewer
- * count from Supabase's per-client connection quota: 1000 viewers on
- * the relay = 1 upstream Supabase connection.
+ * LISTENs on the Postgres `kaboom_events` channel (one connection for the
+ * whole relay; a trigger on public.games sends each INSERT/UPDATE, see
+ * db/migrations/20261104000001_pg_notify_relay.sql) and fans out each event
+ * over WebSocket to every connected browser client. 1000 viewers on the
+ * relay = 1 database connection.
  *
- * The web client ALSO subscribes to Supabase Realtime directly as a
- * fallback (and polls at 60s as a last-resort safety net), so a
- * Railway redeploy / brief drop doesn't make the feed stale.
+ * The web client also polls /api/activity/global every 60s as a safety net,
+ * so a Railway redeploy / brief drop doesn't make the feed stale (NOTIFY has
+ * no replay: events sent while the relay is disconnected are not resent).
  *
  * Required env:
- *   SUPABASE_URL          https://<project>.supabase.co
- *   SUPABASE_ANON_KEY     anon JWT (RLS-enforced; tables already grant
- *                         SELECT to anon)
+ *   DATABASE_URL          Railway Postgres URL (private network URL; add
+ *                         ?sslmode=no-verify for the public TCP proxy)
  *   PORT                  Set automatically by Railway. Defaults 8080.
  *   ALLOWED_ORIGINS       Comma-separated list. Defaults to prod
  *                         playkaboom.gg origins.
@@ -22,20 +21,20 @@
  * Optional env:
  *   CRON_TICK_URL         If set, the relay polls this URL on a 60s
  *                         interval and forwards CRON_TICK_AUTH as the
- *                         Authorization header. This is the playkaboom.gg
- *                         /api/cron/index-events tickler — replaces the
- *                         GitHub-Actions cron schedule which fires every
- *                         1-3h on free tier. Railway containers run 24/7
- *                         so cadence is reliable.
- *   CRON_TICK_AUTH        Bearer token for the CRON_TICK_URL request.
- *                         For playkaboom.gg, this is the CRON_SECRET that
- *                         the /api/cron/index-events route validates.
+ *                         Authorization header. Point it at the kaboom-web
+ *                         /api/cron/tick route: the ONE house scheduler
+ *                         (indexer, VRF settle/force/refund, legacy expire,
+ *                         LP auto-complete, vault health, invariants).
+ *                         Railway containers run 24/7 so cadence is reliable.
+ *   CRON_TICK_AUTH        Bearer token for the CRON_TICK_URL request: the
+ *                         web's CRON_TICK_SECRET.
  *   ALCHEMY_WS_URL        Full Alchemy Solana mainnet WS URL incl. API key.
- *                         When set with KABOOM_PROGRAM_ID + INGEST_URL +
+ *                         When set with INGEST_URL +
  *                         INGEST_AUTH, the relay also runs an Alchemy
  *                         logsSubscribe push path that replaces the deleted
  *                         Helius enhanced-webhook. See ./alchemy-logs.ts.
- *   KABOOM_PROGRAM_ID     On-chain program ID for the logsSubscribe filter.
+ *   KABOOM_PROGRAM_ID     On-chain program ID for the logsSubscribe filter
+ *                         (defaults to the relaunch program Ednka8...).
  *   INGEST_URL            POST endpoint that ingests one signature at a
  *                         time (the playkaboom.gg /api/ingest route).
  *   INGEST_AUTH           Bearer token for INGEST_URL — same value as
@@ -44,12 +43,11 @@
  */
 import http from "node:http";
 import { WebSocket as UpstreamWS, WebSocketServer, type WebSocket } from "ws";
-import { createClient, type RealtimeChannel } from "@supabase/supabase-js";
+import pg from "pg";
 import { startAlchemyLogsSubscriber } from "./alchemy-logs.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const DATABASE_URL = process.env.DATABASE_URL;
 const ALLOWED_ORIGINS = (
   process.env.ALLOWED_ORIGINS ??
   "https://playkaboom.gg,https://www.playkaboom.gg,http://localhost:3000"
@@ -58,12 +56,8 @@ const ALLOWED_ORIGINS = (
   .map((s) => s.trim())
   .filter(Boolean);
 
-if (!SUPABASE_URL) {
-  console.error("[fatal] SUPABASE_URL is not set");
-  process.exit(1);
-}
-if (!SUPABASE_ANON_KEY) {
-  console.error("[fatal] SUPABASE_ANON_KEY is not set");
+if (!DATABASE_URL) {
+  console.error("[fatal] DATABASE_URL is not set");
   process.exit(1);
 }
 
@@ -97,8 +91,11 @@ const httpServer = http.createServer((req, res) => {
 //                    (added 2026-05-21 — keeps the paid Alchemy key in
 //                    Railway env so it never enters the browser bundle)
 // Both use `noServer: true` so we can branch in the upgrade handler.
-const wssRelay = new WebSocketServer({ noServer: true });
-const wssProxy = new WebSocketServer({ noServer: true });
+// maxPayload: ws defaults to 100 MiB and buffers a whole message before any
+// handler sees it, so a size check inside a handler is already too late.
+// '/' clients never send data frames; /rpc-ws matches RPC_MAX_FRAME_BYTES.
+const wssRelay = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 });
+const wssProxy = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
 const RPC_PROXY_PATH = "/rpc-ws";
 
@@ -117,6 +114,37 @@ function isAllowedOrigin(origin: string | undefined): boolean {
  * unbounded upstream connections on the operator's paid key.
  */
 const MAX_RPC_PROXY_CLIENTS = 150;
+
+/**
+ * Memory caps. This process is also the only house cron driver, so a client
+ * must never be able to grow its heap until it dies:
+ *   - a socket whose unsent output passes MAX_CLIENT_BUFFERED_BYTES has
+ *     stopped reading; it is closed instead of buffered for;
+ *   - connection counts are capped globally and per IP. The IP is the first
+ *     X-Forwarded-For hop (Railway's edge sets it), else the socket address.
+ */
+const MAX_CLIENT_BUFFERED_BYTES = 1024 * 1024;
+const MAX_RELAY_CLIENTS = 2000;
+const MAX_RELAY_PER_IP = 20;
+const MAX_RPC_PROXY_PER_IP = 5;
+const relayPerIp = new Map<string, number>();
+const rpcProxyPerIp = new Map<string, number>();
+
+function clientIp(req: http.IncomingMessage): string {
+  const xff = req.headers["x-forwarded-for"];
+  const first = (Array.isArray(xff) ? xff[0] : xff)?.split(",")[0]?.trim();
+  return first || req.socket.remoteAddress || "unknown";
+}
+
+/** Count `ws` against `ip` until it closes. */
+function countPerIp(counts: Map<string, number>, ip: string, ws: WebSocket): void {
+  counts.set(ip, (counts.get(ip) ?? 0) + 1);
+  ws.once("close", () => {
+    const n = (counts.get(ip) ?? 1) - 1;
+    if (n > 0) counts.set(ip, n);
+    else counts.delete(ip);
+  });
+}
 
 /**
  * What a browser may ask the upstream for through this socket.
@@ -163,6 +191,8 @@ const RPC_BURST = 40;
 const RPC_MAX_FRAME_BYTES = 64 * 1024;
 const RPC_MAX_BATCH = 10;
 const RPC_MAX_PENDING = 50;
+/** Live upstream subscriptions per connection; each one is a notification stream. */
+const RPC_MAX_SUBSCRIPTIONS = 32;
 
 httpServer.on("upgrade", (req, socket, head) => {
   const origin = req.headers.origin as string | undefined;
@@ -177,7 +207,14 @@ httpServer.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (isProxyPath && rpcProxyActive.size >= MAX_RPC_PROXY_CLIENTS) {
+  const ip = clientIp(req);
+  const perIp = isProxyPath ? rpcProxyPerIp : relayPerIp;
+  if (
+    (isProxyPath
+      ? rpcProxyActive.size >= MAX_RPC_PROXY_CLIENTS
+      : clients.size >= MAX_RELAY_CLIENTS) ||
+    (perIp.get(ip) ?? 0) >= (isProxyPath ? MAX_RPC_PROXY_PER_IP : MAX_RELAY_PER_IP)
+  ) {
     socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
     socket.destroy();
     return;
@@ -186,12 +223,14 @@ httpServer.on("upgrade", (req, socket, head) => {
   const pathname = (req.url ?? "/").split("?")[0];
   if (pathname === RPC_PROXY_PATH) {
     wssProxy.handleUpgrade(req, socket, head, (ws) => {
+      countPerIp(perIp, ip, ws);
       handleRpcProxyConnection(ws);
     });
     return;
   }
   // Default: relay broadcast (existing behaviour).
   wssRelay.handleUpgrade(req, socket, head, (ws) => {
+    countPerIp(perIp, ip, ws);
     handleRelayConnection(ws);
   });
 });
@@ -236,6 +275,9 @@ function handleRelayConnection(ws: WebSocket): void {
 const rpcProxyActive = new Set<WebSocket>();
 
 function handleRpcProxyConnection(client: WebSocket): void {
+  // An unhandled 'error' (e.g. an oversize frame on an early-return path below)
+  // would throw and take the whole process, cron driver included, down.
+  client.on("error", () => {});
   const alchemyUrl = process.env.ALCHEMY_WS_URL;
   if (!alchemyUrl) {
     client.send(JSON.stringify({ error: "rpc proxy not configured" }));
@@ -259,6 +301,9 @@ function handleRpcProxyConnection(client: WebSocket): void {
   const closeBoth = (code = 1000, reason = ""): void => {
     if (closed) return;
     closed = true;
+    // 1005/1006 report a close that had no close frame; ws throws if asked to
+    // send them, which left the other socket (and its subscriptions) open.
+    if (code === 1005 || code === 1006) code = 1000;
     rpcProxyActive.delete(client);
     try {
       if (client.readyState === client.OPEN) client.close(code, reason);
@@ -279,8 +324,58 @@ function handleRpcProxyConnection(client: WebSocket): void {
     for (const m of pending) upstream.send(m);
     pending.length = 0;
   });
+  // Subscription accounting. A subscription counts from the moment its request
+  // is forwarded until upstream confirms the unsubscribe, or (signature subs)
+  // sends the final notification, after which the server drops it on its own.
+  // Matching responses to requests needs every in-flight id to be unique on
+  // this connection, so a repeated in-flight id is refused.
+  const inflight = new Map<string, { method: string; unsubId?: unknown }>();
+  const subs = new Set<unknown>(); // live upstream subscription ids
+  let pendingSubs = 0;
+  const idKey = (id: unknown): string | null =>
+    typeof id === "number" || typeof id === "string" ? JSON.stringify(id) : null;
+  const noteUpstream = (data: unknown): void => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(data));
+    } catch {
+      return;
+    }
+    for (const m of (Array.isArray(parsed) ? parsed : [parsed]) as Array<{
+      id?: unknown;
+      result?: unknown;
+      error?: unknown;
+      method?: unknown;
+      params?: { subscription?: unknown; result?: { value?: unknown } };
+    } | null>) {
+      if (m?.method === "signatureNotification") {
+        if (m.params?.result?.value !== "receivedSignature") subs.delete(m.params?.subscription);
+        continue;
+      }
+      const key = idKey(m?.id);
+      const call = key === null ? undefined : inflight.get(key);
+      if (!m || !call) continue;
+      inflight.delete(key as string);
+      if (call.method.endsWith("Unsubscribe")) {
+        if (m.result === true) subs.delete(call.unsubId);
+      } else if (call.method.endsWith("Subscribe")) {
+        pendingSubs--;
+        if (m.error === undefined && m.result !== undefined) subs.add(m.result);
+      }
+    }
+  };
+
+  // A client that stops reading makes every send pile up in this process.
+  const backedUp = (): boolean => {
+    if (client.bufferedAmount <= MAX_CLIENT_BUFFERED_BYTES) return false;
+    closeBoth(1013, "client too slow");
+    return true;
+  };
+
   upstream.on("message", (data, isBinary) => {
     if (client.readyState !== client.OPEN) return;
+    if (backedUp()) return;
+    noteUpstream(data);
     try {
       client.send(data, { binary: isBinary });
     } catch {
@@ -297,6 +392,7 @@ function handleRpcProxyConnection(client: WebSocket): void {
 
   const rpcError = (id: unknown, code: number, message: string): void => {
     if (client.readyState !== client.OPEN) return;
+    if (backedUp()) return;
     try {
       client.send(JSON.stringify({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }));
     } catch {
@@ -329,6 +425,8 @@ function handleRpcProxyConnection(client: WebSocket): void {
       rpcError(null, -32600, "Invalid request");
       return;
     }
+    const batchKeys = new Set<string>();
+    let newSubs = 0;
     for (const call of calls) {
       const method = (call as { method?: unknown })?.method;
       const id = (call as { id?: unknown })?.id;
@@ -338,6 +436,22 @@ function handleRpcProxyConnection(client: WebSocket): void {
         rpcError(id, -32601, "Method not allowed");
         return;
       }
+      const key = idKey(id);
+      const isSub = method.endsWith("Subscribe");
+      // A subscribe needs a matchable id so its result can be counted.
+      if (key === null ? isSub : inflight.has(key) || batchKeys.has(key)) {
+        rpcError(id, -32600, "Invalid request");
+        return;
+      }
+      if (key !== null) batchKeys.add(key);
+      if (isSub && subs.size + pendingSubs + ++newSubs > RPC_MAX_SUBSCRIPTIONS) {
+        rpcError(id, -32005, "Too many subscriptions");
+        return;
+      }
+    }
+    if (inflight.size + batchKeys.size > RPC_MAX_PENDING) {
+      rpcError((calls[0] as { id?: unknown })?.id, -32005, "Too many pending requests");
+      return;
     }
 
     const now = Date.now();
@@ -348,6 +462,16 @@ function handleRpcProxyConnection(client: WebSocket): void {
       return;
     }
     tokens -= calls.length;
+
+    for (const call of calls as Array<{ id?: unknown; method: string; params?: unknown }>) {
+      const key = idKey(call.id);
+      if (key === null) continue;
+      if (call.method.endsWith("Subscribe")) pendingSubs++;
+      const unsubId = call.method.endsWith("Unsubscribe") && Array.isArray(call.params)
+        ? call.params[0]
+        : undefined;
+      inflight.set(key, { method: call.method, unsubId });
+    }
 
     if (!upstreamOpen) {
       if (pending.length >= RPC_MAX_PENDING) {
@@ -393,7 +517,9 @@ const broadcast = (payload: string) => {
   for (const ws of clients) {
     if (ws.readyState === ws.OPEN) {
       try {
-        ws.send(payload);
+        // A viewer that stopped reading is closed, not buffered for.
+        if (ws.bufferedAmount > MAX_CLIENT_BUFFERED_BYTES) ws.close(1013, "client too slow");
+        else ws.send(payload);
       } catch {
         clients.delete(ws);
       }
@@ -401,37 +527,24 @@ const broadcast = (payload: string) => {
   }
 };
 
-// ── Upstream: Supabase Realtime postgres_changes ─────────────────────
+// ── Upstream: Postgres LISTEN kaboom_events ──────────────────────────
 //
-// supabase-js maintains its own WS connection to Supabase, with built-
-// in reconnect + heartbeats. We don't need to roll our own retry loop.
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { params: { eventsPerSecond: 10 } },
-});
-
-let channel: RealtimeChannel | null = null;
+// SCOPE: both INSERT (cashout/loss row created with sentinel fairness
+// fields) and UPDATE (server settle sets mine_count / settle_signature)
+// must be relayed — otherwise clients see a row stuck on "settle pending"
+// even after settle landed.
+//
+// The trigger payload is {table, op, row} where `row` is already the
+// 12-column allowlist below; the fairness pre-image (mine_layout, salt,
+// commitment) is never in it. We still project through pickSafeCols so a
+// future trigger change cannot widen what the public relay broadcasts.
+const NOTIFY_CHANNEL = "kaboom_events";
+let upstream: pg.Client | null = null;
+let upstreamBackoffMs = 1_000;
+let upstreamPing: ReturnType<typeof setInterval> | null = null;
+let shuttingDown = false;
 
 function startUpstream() {
-  // SCOPE: Railway is the live-feed push path. Both INSERT (cashout/loss
-  // row created with sentinel fairness fields) and UPDATE (server settle
-  // sets mine_layout / mine_count / commitment / salt / settle_signature)
-  // must be relayed — otherwise clients see a row stuck on "settle
-  // pending" even after settle landed.
-  //
-  // 2026-05-11 fix: original code only listened on INSERT, so post-cashout
-  // UPDATEs from the GameSettled handler never reached the live feed.
-  // Players saw their win but the fairness fields stayed empty in real
-  // time; only a 60s polling refresh eventually filled them.
-  //
-  // 2026-05-21 hardening: the games table is published with
-  // `replica identity full`, so the postgres_changes payload carries
-  // the ENTIRE row — including mine_layout + salt as soon as the
-  // server-side GameSettled UPDATE writes them. Forwarding the raw row
-  // would broadcast every player's fairness pre-image to anyone listening
-  // on the public relay. We project to a closed allowlist of fields that
-  // the UI actually consumes; the fairness pre-image is left for the
-  // dedicated /verify endpoint (which reads chain-direct).
   type GameRow = {
     signature?: string | null;
     game?: string | null;
@@ -464,43 +577,65 @@ function startUpstream() {
       slot: (r.slot as number | null) ?? null,
     };
   };
-  const handler = (eventName: "game_inserted" | "game_updated") =>
-    (payload: { new?: unknown; old?: unknown }) => {
-      const data = pickSafeCols(payload.new ?? payload.old);
-      if (!data) return;
-      broadcast(
-        JSON.stringify({
-          // Legacy clients keyed on type==="game_settled" still receive
-          // both events. Newer code can branch on insert vs update.
-          type: "game_settled",
-          event: eventName,
-          data,
-          ts: Date.now(),
-        }),
-      );
-    };
-
-  channel = supabase
-    .channel("playkaboom-relay")
-    .on(
-      "postgres_changes",
-      { event: "INSERT", schema: "public", table: "games" },
-      handler("game_inserted"),
-    )
-    .on(
-      "postgres_changes",
-      { event: "UPDATE", schema: "public", table: "games" },
-      handler("game_updated"),
-    )
-    .subscribe((status, err) => {
-      if (status === "SUBSCRIBED") {
-        upstreamConnected = true;
-        console.log("[upstream] subscribed to postgres_changes (INSERT+UPDATE)");
-      } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
-        upstreamConnected = false;
-        console.warn("[upstream] status:", status, err?.message ?? "");
-      }
-    });
+  const client = new pg.Client({
+    connectionString: DATABASE_URL,
+    keepAlive: true,
+    query_timeout: 10_000, // so the ping below fails instead of hanging
+  });
+  upstream = client;
+  let dead = false;
+  const reconnect = (why: string) => {
+    if (dead) return;
+    dead = true;
+    upstreamConnected = false;
+    if (upstreamPing) clearInterval(upstreamPing);
+    upstreamPing = null;
+    client.removeAllListeners();
+    client.on("error", () => {}); // late socket errors after end()
+    void client.end().catch(() => {});
+    if (shuttingDown) return;
+    console.warn(`[upstream] ${why}; reconnecting in ${upstreamBackoffMs}ms`);
+    setTimeout(startUpstream, upstreamBackoffMs);
+    upstreamBackoffMs = Math.min(upstreamBackoffMs * 2, 30_000);
+  };
+  client.on("error", (err) => reconnect(`error: ${err.message}`));
+  client.on("end", () => reconnect("connection ended"));
+  client.on("notification", (msg) => {
+    if (msg.channel !== NOTIFY_CHANNEL || !msg.payload) return;
+    let ev: { table?: string; op?: string; row?: unknown };
+    try {
+      ev = JSON.parse(msg.payload);
+    } catch {
+      return;
+    }
+    if (ev.table !== "games" || (ev.op !== "INSERT" && ev.op !== "UPDATE")) return;
+    const data = pickSafeCols(ev.row);
+    if (!data) return;
+    broadcast(
+      JSON.stringify({
+        // Legacy clients keyed on type==="game_settled" still receive
+        // both events. Newer code can branch on insert vs update.
+        type: "game_settled",
+        event: ev.op === "INSERT" ? "game_inserted" : "game_updated",
+        data,
+        ts: Date.now(),
+      }),
+    );
+  });
+  client
+    .connect()
+    .then(() => client.query(`LISTEN ${NOTIFY_CHANNEL}`))
+    .then(() => {
+      if (dead) return;
+      upstreamConnected = true;
+      upstreamBackoffMs = 1_000;
+      console.log(`[upstream] listening on ${NOTIFY_CHANNEL}`);
+      // A half-open TCP connection fires no event; a cheap query does.
+      upstreamPing = setInterval(() => {
+        client.query("select 1").catch((e: Error) => reconnect(`ping failed: ${e.message}`));
+      }, 30_000);
+    })
+    .catch((err: Error) => reconnect(`connect failed: ${err.message}`));
 }
 
 startUpstream();
@@ -626,9 +761,9 @@ const shutdown = (sig: string) => {
       /* noop */
     }
   }
-  if (channel) {
-    void supabase.removeChannel(channel);
-  }
+  shuttingDown = true;
+  if (upstreamPing) clearInterval(upstreamPing);
+  void upstream?.end().catch(() => {});
   httpServer.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5_000).unref();
 };

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { z } from "zod";
-import { ApiError, jsonError, parseBody } from "@/server/api-helpers";
+import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { recordSignup, REF_SESSION_COOKIE } from "@/server/referral-tracking";
@@ -39,8 +39,7 @@ export async function POST(req: NextRequest) {
 
     // Rate-limit per-(ip, wallet). Without this, a single Privy user with
     // many rotating wallets could inflate signup_count across referral codes.
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-    const rl = await enforceRateLimit(`ref:signup:${ip}:${body.wallet}`);
+    const rl = await enforceRateLimit(`ref:signup:${clientIp(req)}:${body.wallet}`);
     if (!rl.ok) {
       return NextResponse.json({ error: "Rate limited" }, { status: 429 });
     }

@@ -1,0 +1,43 @@
+--- /Users/pp/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ephemeral-rollups-pinocchio-0.17.3/src/vrf/instruction.rs	2006-07-24 06:51:28
++++ /Users/pp/Projects/kaboom-archive-2026-10-05/redeploy/sizing/pinocchio-probe/vendor/ephemeral-rollups-pinocchio-0.17.3/src/vrf/instruction.rs	2026-10-22 07:43:42
+@@ -60,11 +60,11 @@
+         &'b self,
+         data: &'b mut [u8],
+         account_metas: &'b mut [MaybeUninit<InstructionAccount<'b>>; REQUEST_RANDOMNESS_ACCOUNTS],
+-    ) -> InstructionView<'b, 'b, 'b, 'b> {
++    ) -> Result<InstructionView<'b, 'b, 'b, 'b>, pinocchio::error::ProgramError> {
+         let data_len = self
+             .request
+             .serialize_into(data, self.discriminator())
+-            .expect("Failed to serialize request randomness");
++            ?;
+ 
+         unsafe {
+             account_metas
+@@ -86,7 +86,7 @@
+                 .write(InstructionAccount::readonly(self.slot_hashes.address()));
+         }
+ 
+-        InstructionView {
++        Ok(InstructionView {
+             program_id: self.vrf_program.address(),
+             accounts: unsafe {
+                 core::slice::from_raw_parts(
+@@ -95,7 +95,7 @@
+                 )
+             },
+             data: &data[..data_len],
+-        }
++        })
+     }
+ 
+     /// Issue the CPI. Expecting the caller to provide the program identity as a signer.
+@@ -105,7 +105,7 @@
+     pub fn invoke_signed(&self, data_buf: &mut [u8], signers: &[Signer<'_, '_>]) -> ProgramResult {
+         const UNINIT: MaybeUninit<InstructionAccount> = MaybeUninit::<InstructionAccount>::uninit();
+         let mut account_metas = [UNINIT; REQUEST_RANDOMNESS_ACCOUNTS];
+-        let instruction = self.instruction(data_buf, &mut account_metas);
++        let instruction = self.instruction(data_buf, &mut account_metas)?;
+ 
+         let account_infos: [&AccountView; REQUEST_RANDOMNESS_ACCOUNTS] = [
+             self.payer,

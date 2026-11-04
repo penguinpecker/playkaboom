@@ -10,7 +10,7 @@ import {
 } from "@playkaboom/sdk";
 import { programId } from "@/server/env";
 import { getConnection } from "@/server/connection";
-import { supabasePublic } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 import { jsonError } from "@/server/api-helpers";
 import { lamportsToSol, unitsToLamports } from "@/server/vault-math";
 
@@ -76,21 +76,19 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
     const value = unitsToLamports(totalUnits, vaultAssets, v2.totalUnits);
 
     // Pull deposit/withdrawal history from indexer.
-    const sb = supabasePublic();
-    const [{ data: posRow }, { data: actions }] = await Promise.all([
-      sb
-        .from("lp_positions")
-        .select("cumulative_deposited, cumulative_withdrawn")
-        .eq("user_address", walletStr)
-        .maybeSingle(),
-      sb
-        .from("lp_actions")
-        .select(
-          "signature, action, units_delta, lamports_delta, unit_value_lamports, slot, block_time",
-        )
-        .eq("user_address", walletStr)
-        .order("block_time", { ascending: false })
-        .limit(50),
+    // Either read degrades to empty on error, as it did with supabase-js.
+    const [posRow, actions] = await Promise.all([
+      query<{ cumulative_deposited: number; cumulative_withdrawn: number }>(
+        "select cumulative_deposited, cumulative_withdrawn from public.lp_positions where user_address = $1",
+        [walletStr],
+      ).then(
+        (rows) => rows[0] ?? null,
+        () => null,
+      ),
+      query(
+        "select signature, action, units_delta, lamports_delta, unit_value_lamports, slot, block_time from public.lp_actions where user_address = $1 order by block_time desc limit 50",
+        [walletStr],
+      ).catch(() => null),
     ]);
 
     const cumulativeDeposited = posRow?.cumulative_deposited ?? 0;

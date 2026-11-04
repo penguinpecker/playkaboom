@@ -1,0 +1,89 @@
+//! Instruction table + dispatch (spec `shared.md` §5.1, §9). One file per spec group.
+//!
+//! Every handler has the signature `fn(accounts: &mut [AccountView], args: &[u8]) -> ProgramResult`
+//! where `args` is the instruction data AFTER the 8-byte discriminator (spec offsets "@8" are `args[0]`).
+//! The `Program log: Instruction: <Name>` line is printed by `crate::process_instruction` before the
+//! handler runs, so handlers never log it themselves.
+
+use pinocchio::{AccountView, ProgramResult};
+
+pub mod house;
+pub mod legacy_game;
+pub mod referral;
+pub mod v2_lp;
+pub mod vault_admin;
+pub mod vrf;
+
+pub type Handler = fn(&mut [AccountView], &[u8]) -> ProgramResult;
+
+macro_rules! instructions {
+    ($(($c:ident, $d:expr, $name:literal, $h:path)),* $(,)?) => {
+        /// Instruction discriminators: `sha256("global:<snake_name>")[..8]`.
+        pub mod disc {
+            $(pub const $c: [u8; 8] = $d;)*
+        }
+        mod disc_u64 {
+            $(pub const $c: u64 = u64::from_le_bytes(super::disc::$c);)*
+        }
+        /// (PascalCase log name, discriminator) for all 44 instructions: the 42 Anchor ones, then the
+        /// F-fix additions `ExpireGame` and `ForceUndelegateVrf` (host ABI test).
+        pub const INSTRUCTIONS: &[(&str, [u8; 8])] = &[$(($name, disc::$c)),*];
+
+        /// Discriminator (LE u64 of data[..8]) -> (log line, handler).
+        #[inline(always)]
+        pub fn route(d: u64) -> Option<(&'static str, Handler)> {
+            match d {
+                $(disc_u64::$c => Some((concat!("Instruction: ", $name), $h as Handler)),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+instructions! {
+    (INITIALIZE_VAULT, [0x30, 0xbf, 0xa3, 0x2c, 0x47, 0x81, 0x3f, 0xa4], "InitializeVault", vault_admin::initialize_vault),
+    (FUND_VAULT, [0x1a, 0x21, 0xcf, 0xf2, 0x77, 0x6c, 0x86, 0x49], "FundVault", vault_admin::fund_vault),
+    (WITHDRAW_TO_TREASURY, [0xf5, 0x84, 0x95, 0x77, 0x2b, 0xff, 0xaf, 0x3f], "WithdrawToTreasury", vault_admin::withdraw_to_treasury),
+    (UNLOCK_OPERATOR_POSITION, [0x4e, 0xb3, 0xc9, 0xab, 0x29, 0x55, 0xf6, 0xa2], "UnlockOperatorPosition", vault_admin::unlock_operator_position),
+    (UPDATE_VAULT, [0x43, 0xe5, 0xb9, 0xbc, 0xe2, 0x0b, 0xd2, 0x3c], "UpdateVault", vault_admin::update_vault),
+    (ALLOWLIST_ADD, [0x2a, 0x05, 0x81, 0x9f, 0x37, 0xa5, 0x67, 0xcb], "AllowlistAdd", vault_admin::allowlist_add),
+    (ALLOWLIST_REMOVE, [0x1e, 0x14, 0x53, 0xd2, 0xbc, 0x9b, 0xd3, 0xa3], "AllowlistRemove", vault_admin::allowlist_remove),
+    (PROPOSE_OWNER, [0x5a, 0x39, 0x8d, 0x6e, 0xc4, 0xf1, 0xac, 0x27], "ProposeOwner", vault_admin::propose_owner),
+    (CANCEL_PROPOSED_OWNER, [0x4b, 0x46, 0xc5, 0x69, 0x03, 0xa4, 0xc4, 0xa6], "CancelProposedOwner", vault_admin::cancel_proposed_owner),
+    (ACCEPT_OWNERSHIP, [0xac, 0x17, 0x2b, 0x0d, 0xee, 0xd5, 0x55, 0x96], "AcceptOwnership", vault_admin::accept_ownership),
+    (SET_REFERRER, [0x73, 0xfb, 0x37, 0x00, 0xa6, 0xbd, 0x19, 0x4a], "SetReferrer", referral::set_referrer),
+    (CLAIM_REFERRAL, [0xdb, 0xf7, 0x12, 0x94, 0x3f, 0xf7, 0x70, 0xc6], "ClaimReferral", referral::claim_referral),
+    (REPAIR_REFERRAL, [0xb4, 0xc1, 0x88, 0xfc, 0xea, 0x8a, 0x80, 0xe5], "RepairReferral", referral::repair_referral),
+    (START_GAME, [0xf9, 0x2f, 0xfc, 0xac, 0xb8, 0xa2, 0xf5, 0x0e], "StartGame", legacy_game::start_game),
+    (REVEAL_TILE, [0xe1, 0x6c, 0x2a, 0xa9, 0x6f, 0xd4, 0x0c, 0x67], "RevealTile", legacy_game::reveal_tile),
+    (CASH_OUT, [0x01, 0x6e, 0x39, 0x3a, 0x9f, 0x9d, 0xf3, 0xc0], "CashOut", legacy_game::cash_out),
+    (SETTLE_GAME, [0x60, 0x36, 0x18, 0xbd, 0xef, 0xc6, 0x56, 0x1d], "SettleGame", legacy_game::settle_game),
+    (REFUND_EXPIRED, [0x76, 0x99, 0xa4, 0xf4, 0x28, 0x80, 0xf2, 0xfa], "RefundExpired", legacy_game::refund_expired),
+    (CLOSE_GAME, [0xed, 0xec, 0x9d, 0xc9, 0xfd, 0x14, 0xf8, 0x43], "CloseGame", legacy_game::close_game),
+    (CLOSE_UNSETTLED_GAME, [0xaf, 0x12, 0x2f, 0xa8, 0xbc, 0x5d, 0x10, 0x91], "CloseUnsettledGame", legacy_game::close_unsettled_game),
+    (INITIALIZE_V2, [0x43, 0x99, 0xaf, 0x27, 0xda, 0x10, 0x26, 0x20], "InitializeV2", v2_lp::initialize_v2),
+    (UPDATE_V2_CONFIG, [0x0d, 0x49, 0x4f, 0x56, 0x2f, 0x31, 0xe4, 0x28], "UpdateV2Config", v2_lp::update_v2_config),
+    (LP_DEPOSIT, [0x1b, 0x4d, 0xd2, 0x45, 0x0c, 0x2b, 0x94, 0x10], "LpDeposit", v2_lp::lp_deposit),
+    (REQUEST_WITHDRAW, [0x89, 0x5f, 0xbb, 0x60, 0xfa, 0x8a, 0x1f, 0xb6], "RequestWithdraw", v2_lp::request_withdraw),
+    (CANCEL_WITHDRAW, [0x70, 0x35, 0xe2, 0x3a, 0x9e, 0x1e, 0x25, 0xa8], "CancelWithdraw", v2_lp::cancel_withdraw),
+    (COMPLETE_WITHDRAW, [0xac, 0x81, 0x8d, 0x11, 0x5f, 0xfd, 0xfb, 0x62], "CompleteWithdraw", v2_lp::complete_withdraw),
+    (CLOSE_LP_POSITION, [0x21, 0x76, 0x39, 0xc3, 0x85, 0x7e, 0x69, 0x12], "CloseLpPosition", v2_lp::close_lp_position),
+    (HOUSE_DEPOSIT, [0x1f, 0x32, 0xa7, 0x97, 0x06, 0xdb, 0x55, 0x71], "HouseDeposit", house::house_deposit),
+    (HOUSE_REQUEST_WITHDRAW, [0xbe, 0xbd, 0x4c, 0x2e, 0xbd, 0x4c, 0x5a, 0x94], "HouseRequestWithdraw", house::house_request_withdraw),
+    (HOUSE_CANCEL_WITHDRAW, [0xa7, 0xaf, 0xe0, 0x07, 0x31, 0xcc, 0xb8, 0xa2], "HouseCancelWithdraw", house::house_cancel_withdraw),
+    (HOUSE_COMPLETE_WITHDRAW, [0xd1, 0xe7, 0x65, 0xc7, 0xcd, 0xa1, 0x69, 0x8e], "HouseCompleteWithdraw", house::house_complete_withdraw),
+    (START_GAME_VRF, [0x94, 0xd8, 0x51, 0xda, 0xf2, 0x18, 0x2e, 0xc7], "StartGameVrf", vrf::start_game_vrf),
+    (DELEGATE_VRF, [0xdd, 0x39, 0xaa, 0x29, 0x64, 0x8e, 0x1e, 0x29], "DelegateVrf", vrf::delegate_vrf),
+    (REVEAL_REQUEST_VRF, [0x50, 0x57, 0x5a, 0x08, 0x27, 0xcb, 0x1f, 0x40], "RevealRequestVrf", vrf::reveal_request_vrf),
+    (REVEAL_CALLBACK_VRF, [0x0c, 0xdf, 0xcd, 0x0f, 0x3a, 0x01, 0x7c, 0x56], "RevealCallbackVrf", vrf::reveal_callback_vrf),
+    (CASH_OUT_VRF, [0xe5, 0xb0, 0x0b, 0x5f, 0xc6, 0x25, 0x5a, 0x6e], "CashOutVrf", vrf::cash_out_vrf),
+    (SETTLE_AND_UNDELEGATE_VRF, [0xd5, 0x47, 0x1b, 0xb4, 0x58, 0x5a, 0x18, 0x9c], "SettleAndUndelegateVrf", vrf::settle_and_undelegate_vrf),
+    (SETTLE_VRF, [0x99, 0x63, 0xce, 0x54, 0x75, 0xb4, 0x45, 0x11], "SettleVrf", vrf::settle_vrf),
+    (REFUND_STALLED_VRF, [0x3c, 0xef, 0x84, 0x0b, 0x96, 0x68, 0x7b, 0x62], "RefundStalledVrf", vrf::refund_stalled_vrf),
+    (ADMIN_RELEASE_VRF_CLAIM, [0xb9, 0xc7, 0x1f, 0x67, 0x4e, 0x59, 0xc3, 0xcc], "AdminReleaseVrfClaim", vrf::admin_release_vrf_claim),
+    (ADMIN_CLOSE_ORPHANED_GAME_V2, [0x6e, 0x18, 0xce, 0x9b, 0x48, 0xd6, 0x38, 0x24], "AdminCloseOrphanedGameV2", vrf::admin_close_orphaned_game_v2),
+    (PROCESS_UNDELEGATION, [0xc4, 0x1c, 0x29, 0xce, 0x30, 0x25, 0x33, 0xa7], "ProcessUndelegation", vrf::process_undelegation),
+    // F-fix additions (not in the Anchor IDL), appended in this order.
+    (EXPIRE_GAME, [0xd0, 0x15, 0x57, 0x83, 0xf2, 0x2b, 0xfc, 0x90], "ExpireGame", legacy_game::expire_game),
+    (FORCE_UNDELEGATE_VRF, [0xda, 0x30, 0xa3, 0xda, 0x54, 0xf8, 0xe4, 0x65], "ForceUndelegateVrf", vrf::force_undelegate_vrf),
+}

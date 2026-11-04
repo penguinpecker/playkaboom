@@ -1,5 +1,7 @@
 # PlayKaboom Vault LP — design plan
 
+> Historical (pre-2026-11-04 relaunch): Turnkey and Supabase described here are retired; see [HANDOFF.md](../HANDOFF.md) for the live system.
+
 Goal: turn the existing `Vault` PDA from a single-owner house bankroll into a permissionless yield vault. Anyone can deposit SOL → receive a `units` position that earns the casino's net P&L. Withdrawals queue for **3 days**, units keep earning during cooldown, **50% of every settle's house profit** boosts unit value (rest goes to Squads treasury). Owner + treasury rotate to **2-of-2 Squads**; `house_authority` already on Turnkey.
 
 The house keeps a **minimum-share-floor** position (`min_house_share_bps`, configurable, defaults 50%) inside the same vault — invisible in user-facing UX, fully visible on-chain. The house bears the same 3-day cooldown as everyone else.

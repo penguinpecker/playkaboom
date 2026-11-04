@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jsonError } from "@/server/api-helpers";
-import { supabasePublic } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 /**
  * Global live-feed of recent settled games across every player. Powers
  * the Stake-style ticker under the grid + on the home page. Public — no
- * auth, RLS handles the read scoping.
+ * auth; only the columns below leave the server.
  *
  * Returns the most recent ~30 settled rows. Caller can paginate via
  * ?before=<slot> when we add infinite scroll later (not wired yet).
@@ -17,17 +17,20 @@ export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
     const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 30)));
-    const sb = supabasePublic();
-    const { data, error } = await sb
-      .from("games")
-      .select(
-        "signature, player, outcome, bet, payout, multiplier_bps, mine_count, settled_at, slot",
-      )
-      .order("slot", { ascending: false })
-      .limit(limit);
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    const data: Array<{
+      signature: string;
+      player: string;
+      outcome: string;
+      bet: number | null;
+      payout: number | null;
+      multiplier_bps: number | null;
+      mine_count: number | null;
+      settled_at: string | null;
+      slot: number;
+    }> = await query(
+      "select signature, player, outcome, bet, payout, multiplier_bps, mine_count, settled_at, slot from public.games order by slot desc limit $1",
+      [limit],
+    );
     return NextResponse.json({
       events: (data ?? []).map((g) => ({
         signature: g.signature,

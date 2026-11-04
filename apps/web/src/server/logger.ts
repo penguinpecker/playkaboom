@@ -4,12 +4,12 @@ import { logLevel } from "./env";
 /**
  * Centralized pino logger.
  *
- * Transport: stdout → Vercel function logs (24h retention on Hobby).
+ * Transport: stdout → Railway service logs.
  *
  * Wiring a managed log sink (Axiom / Better Stack / Logflare) is a separate
  * operational decision — pick a vendor, set env vars, add a `pino-*-send`
  * transport here. Until then this stays stdout-only; logs are visible in
- * the Vercel dashboard and via `vercel logs <deployment>`.
+ * the Railway dashboard.
  *
  * Redact list (2026-05-11): deliberately wide. Covers secrets, credentials,
  * embedded session ciphertext, and the on-chain commit preimage fields. If
@@ -39,16 +39,16 @@ const REDACT_PATHS = [
   "*.cronSecret",
   "*.HELIUS_WEBHOOK_AUTH",
   "*.heliusWebhookAuth",
-  "*.HOUSE_AUTHORITY_KEY",
-  "*.houseAuthorityKey",
+  "*.HOUSE_SECRET_KEY", // the raw house keypair
+  "*.houseSecretKey",
+  "*.secretKey",
   "*.SESSION_ENC_KEY",
   "*.sessionEncKey",
   "*.PRIVY_APP_SECRET",
   "*.privyAppSecret",
-  "*.SUPABASE_SERVICE_ROLE_KEY",
-  "*.supabaseServiceRoleKey",
-  "*.TURNKEY_API_PRIVATE_KEY",
-  "*.turnkeyApiPrivateKey",
+  "*.DATABASE_URL", // carries the Postgres password
+  "*.databaseUrl",
+  "*.connectionString",
   // Generic fall-throughs.
   "*.secret",
   "*.privateKey",

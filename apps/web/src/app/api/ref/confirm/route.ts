@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { PublicKey } from "@solana/web3.js";
 import { z } from "zod";
 import { ixDiscriminator } from "@playkaboom/sdk";
-import { ApiError, jsonError, parseBody } from "@/server/api-helpers";
+import { ApiError, clientIp, jsonError, parseBody } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
 import { getConnection } from "@/server/connection";
 import { programId } from "@/server/env";
@@ -51,8 +51,7 @@ export async function POST(req: NextRequest) {
 
     // Rate-limit per-(ip, wallet) — prevents one user with many sessions
     // from spamming confirmations.
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-    const rl = await enforceRateLimit(`ref:confirm:${ip}:${body.wallet}`);
+    const rl = await enforceRateLimit(`ref:confirm:${clientIp(req)}:${body.wallet}`);
     if (!rl.ok) {
       return NextResponse.json({ error: "Rate limited" }, { status: 429 });
     }

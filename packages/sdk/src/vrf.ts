@@ -276,13 +276,44 @@ export function buildSettleAndUndelegateVrf(args: {
   });
 }
 
+/**
+ * ER, house-only (F3): end an idle delegated game and schedule its undelegation.
+ * PLAYING with progress becomes WON at the current multiplier, PLAYING without
+ * progress becomes VOID (refundable), terminal states are unchanged; a pending
+ * reveal fails 6044. Accounts per FIXES.md 4.1: `[house WS, game W,
+ * magic_program, magic_context W, vault]` (vault read-only).
+ */
+export function buildForceUndelegateVrf(args: {
+  ctx: VrfCtx;
+  player: PublicKey; // keys the game PDA
+  house: PublicKey; // must equal vault.house_authority
+}): TransactionInstruction {
+  const [game] = deriveVrfGamePda(args.ctx.programId, args.player);
+  const [vault] = PublicKey.findProgramAddressSync([Buffer.from("kaboom_vault")], args.ctx.programId);
+  return new TransactionInstruction({
+    programId: args.ctx.programId,
+    keys: [
+      writable(args.house, true),
+      writable(game),
+      readonly(MAGIC_PROGRAM),
+      writable(MAGIC_CONTEXT),
+      readonly(vault),
+    ],
+    data: ixDiscriminator("force_undelegate_vrf"),
+  });
+}
+
 /** L1: replay-verify the recorded randomness, release reservation, pay winner. Permissionless. */
 export function buildSettleVrf(args: {
   ctx: VrfCtx;
   player: PublicKey;
   payer: PublicKey;
   treasury: PublicKey;
-  referralPda?: PublicKey; // optional remaining account when player has a referrer
+  /**
+   * The referrer's `kaboom_referral` PDA. REQUIRED when the player has a
+   * referrer (F5): the program then fails 6022 without it.
+   */
+  referralPda?: PublicKey;
 }): TransactionInstruction {
   const [vault] = PublicKey.findProgramAddressSync([Buffer.from("kaboom_vault")], args.ctx.programId);
   const [v2] = PublicKey.findProgramAddressSync([Buffer.from("kaboom_v2_state")], args.ctx.programId);
@@ -347,8 +378,15 @@ export function buildRefundStalledVrf(args: {
 const VRF_CLAIM_DISC = accountDiscriminator("VrfClaim");
 const VRF_GAME_DISC = accountDiscriminator("VrfGame");
 
-export type VrfStatus = "Playing" | "Won" | "Lost";
-const VRF_STATUS: VrfStatus[] = ["Playing", "Won", "Lost"];
+/**
+ * On-chain `VrfGame.status` byte. `Void` (3) is the F3 terminal state: a
+ * zero-progress game closed for inactivity (force_undelegate_vrf, or a
+ * self-undelegate of a PLAYING game with no reveals). It is refundable via
+ * refund_stalled_vrf and nothing else; settle_vrf rejects it (6003).
+ */
+export type VrfStatus = "Playing" | "Won" | "Lost" | "Void";
+const VRF_STATUS: VrfStatus[] = ["Playing", "Won", "Lost", "Void"];
+export const VRF_STATUS_VOID = 3;
 
 export interface VrfClaimAccount {
   player: PublicKey;
@@ -414,7 +452,11 @@ export function decodeVrfClaim(data: Buffer): VrfClaimAccount {
 export function decodeVrfGame(data: Buffer): VrfGameAccount {
   if (!data.subarray(0, 8).equals(VRF_GAME_DISC)) throw new Error("not a VrfGame account");
   const r = new Reader(data.subarray(8) as Buffer);
-  const status = VRF_STATUS[r.u8()] ?? "Playing";
+  const statusByte = r.u8();
+  // Never default an unknown byte to "Playing": the cron and the UI treat
+  // Playing as live, so a misread terminal game would never be closed out.
+  const status = VRF_STATUS[statusByte];
+  if (status === undefined) throw new Error(`unknown VrfGame status ${statusByte}`);
   const player = r.pk();
   const sessionKey = r.pk();
   const bump = r.u8();

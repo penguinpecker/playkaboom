@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createHash } from "node:crypto";
-import { verifyVrfSettle } from "@/server/verify-vrf";
+import { isTxSignature, verifyVrfSettle } from "@/server/verify-vrf";
 import { assertProgramInvoked, extractEventsFromLogs } from "@playkaboom/sdk";
 import { getConnection } from "@/server/connection";
 import { programId } from "@/server/env";
-import { supabasePublic } from "@/server/db/supabase";
+import { query } from "@/server/db/pg";
 import { jsonError } from "@/server/api-helpers";
 
 export const runtime = "nodejs";
@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
  * Accepts either a cashout sig (the player's GameWon/GameLost tx) OR a
  * settle sig (the house's settle_game tx). Either way, returns the
  * provable-fair bundle reconstructed from on-chain event data. The
- * Supabase `games` row is consulted ONLY to resolve cashout→settle
+ * indexer `games` row is consulted ONLY to resolve cashout→settle
  * pairing (via the `settle_signature` column set by the indexer) — it
  * is never trusted for the (mine_layout, mine_count, commitment, salt)
  * quartet that goes into the SHA-256 check.
@@ -24,36 +24,14 @@ export const dynamic = "force-dynamic";
  * Older callers of `?sig=...` get the same response shape; the consuming
  * page checks `verified` and the bundle fields.
  */
-/**
- * Recover the player from a house-signed settle. The house is fee payer, so
- * index 0 is NOT the player; the player is the account that RECEIVED the
- * payout plus its closed-PDA rent — always the largest positive delta.
- * Without this the verify page rendered "Player: —" on every VRF game.
- */
-function playerOf(tx: {
-  meta?: { preBalances: number[]; postBalances: number[] } | null;
-  transaction: { message: { getAccountKeys: () => { staticAccountKeys: { toBase58: () => string }[] } } };
-}): string | null {
-  const meta = tx.meta;
-  if (!meta) return null;
-  const keys = tx.transaction.message.getAccountKeys().staticAccountKeys;
-  let best: string | null = null;
-  let bestDelta = 0;
-  keys.forEach((k, i) => {
-    const d = (meta.postBalances[i] ?? 0) - (meta.preBalances[i] ?? 0);
-    if (d > bestDelta) {
-      bestDelta = d;
-      best = k.toBase58();
-    }
-  });
-  return best;
-}
-
 export async function GET(req: NextRequest) {
   try {
     const sig = req.nextUrl.searchParams.get("sig");
     if (!sig) {
       return NextResponse.json({ error: "Missing sig" }, { status: 400 });
+    }
+    if (!isTxSignature(sig)) {
+      return NextResponse.json({ error: "Invalid signature format" }, { status: 400 });
     }
 
     // Decode events directly from chain for whichever sig the caller gave.
@@ -84,38 +62,38 @@ export async function GET(req: NextRequest) {
       // verifiable VRF game hit this branch and the verify PAGE rendered a
       // bare error — on a product whose headline claim is provable fairness.
       // Reconstruct it from the transaction's lamport movements instead and
-      // return the same row shape the page already renders.
-      if ((tx.meta?.logMessages ?? []).some((l) => l.includes("Instruction: SettleVrf"))) {
-        const v = await verifyVrfSettle(tx);
-        if (v && v.verified) {
-          return NextResponse.json({
-            found: true,
-            settleSource: "input",
-            game: {
-              signature: sig,
-              player: playerOf(tx),
-              bet: String(v.betLamports),
-              payout: String(v.payoutLamports ?? "0"),
-              multiplier_bps: v.multiplierBps ?? 0,
-              mine_count: v.mineCount ?? 0,
-              outcome: (v.outcome as string) ?? (Number(v.payoutLamports ?? 0) > 0 ? "won" : "lost"),
-              safe_reveals: (v.safeReveals as number) ?? 0,
-              // VRF draws randomness per click from the oracle; there is no
-              // pre-committed layout, salt or hash. Null here is the honest
-              // answer, and `mode` tells the page to explain that rather than
-              // render an empty commit-reveal proof.
-              settled_layout: null,
-              commitment: null,
-              salt: null,
-              settled_at: new Date((tx.blockTime ?? 0) * 1000).toISOString(),
-              slot: tx.slot,
-              verified: true,
-              verifySource: "chain",
-              mode: "vrf",
-              howThisIsVerified: v.howThisIsVerified,
-            },
-          });
-        }
+      // return the same row shape the page already renders. verifyVrfSettle
+      // returns null unless the tx is a real, successful top-level settle_vrf
+      // (log text alone is spoofable); the player comes from its accounts.
+      const v = await verifyVrfSettle(tx);
+      if (v && v.verified) {
+        return NextResponse.json({
+          found: true,
+          settleSource: "input",
+          game: {
+            signature: sig,
+            player: v.player,
+            bet: String(v.betLamports),
+            payout: String(v.payoutLamports ?? "0"),
+            multiplier_bps: v.multiplierBps ?? 0,
+            mine_count: v.mineCount ?? 0,
+            outcome: (v.outcome as string) ?? (Number(v.payoutLamports ?? 0) > 0 ? "won" : "lost"),
+            safe_reveals: (v.safeReveals as number) ?? 0,
+            // VRF draws randomness per click from the oracle; there is no
+            // pre-committed layout, salt or hash. Null here is the honest
+            // answer, and `mode` tells the page to explain that rather than
+            // render an empty commit-reveal proof.
+            settled_layout: null,
+            commitment: null,
+            salt: null,
+            settled_at: new Date((tx.blockTime ?? 0) * 1000).toISOString(),
+            slot: tx.slot,
+            verified: true,
+            verifySource: "chain",
+            mode: "vrf",
+            howThisIsVerified: v.howThisIsVerified,
+          },
+        });
       }
       return NextResponse.json(
         {
@@ -180,12 +158,11 @@ export async function GET(req: NextRequest) {
       // Caller gave us a cashout sig. Look up the paired settle signature
       // from the indexer (this column is INDEXER-WRITTEN, used here only
       // as a pointer; the actual proof comes from chain).
-      const db = supabasePublic();
-      const { data } = await db
-        .from("games")
-        .select("settle_signature, player")
-        .eq("signature", sig)
-        .maybeSingle();
+      // A failed lookup reads as "no pointer", as it did with supabase-js.
+      const [data] = await query<{ settle_signature: string | null; player: string }>(
+        "select settle_signature, player from public.games where signature = $1",
+        [sig],
+      ).catch(() => []);
       if (data?.settle_signature) {
         const settleTx = await conn.getTransaction(data.settle_signature, {
           commitment: "confirmed",

@@ -1,0 +1,25 @@
+#![no_std]
+
+extern crate alloc;
+
+pub mod acl;
+pub mod consts;
+pub mod crank;
+pub mod ephemeral_accounts;
+pub mod instruction;
+pub mod intent_bundle;
+pub mod pda;
+pub mod seeds;
+pub mod spl;
+pub mod types;
+pub mod utils;
+pub mod vrf;
+
+use pinocchio::Address;
+
+pub use consts::DELEGATION_PROGRAM_ID as ID;
+
+/// Returns a reference to the delegation program ID.
+pub fn id() -> &'static Address {
+    &ID
+}
