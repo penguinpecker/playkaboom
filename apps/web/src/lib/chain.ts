@@ -19,7 +19,10 @@ export const GAME_CONFIG = {
   MINE_OPTIONS,
   MAX_BET_PERCENT: 0.02,
   MAX_PAYOUT_PERCENT: 0.5,
-  MIN_BET_SOL: 0.001,
+  // Owner decision 2026-11-05: 0.01 SOL. The program still accepts 0.001
+  // (MIN_BET_LAMPORTS), but MagicBlock keeps ~0.003 SOL per round, so the
+  // UI floor keeps that fee at ~30% of the smallest bet instead of 300%.
+  MIN_BET_SOL: 0.01,
   BPS_DENOMINATOR: 10_000,
   GAME_EXPIRY_SLOTS: 300,
 } as const;

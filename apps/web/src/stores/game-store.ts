@@ -103,7 +103,7 @@ const initial: Pick<
   | "pendingClose"
 > = {
   status: "idle",
-  bet: 0.001,
+  bet: 0.01,
   mineCount: MINE_OPTIONS[1] ?? 3,
   revealedTiles: new Set(),
   safeTiles: new Set(),

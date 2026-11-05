@@ -5,6 +5,7 @@ import { useAccount } from "@/lib/compat";
 import { useGlobalGames, type GlobalGame } from "@/hooks/use-global-games";
 import { useVaultMaxBet } from "@/hooks/useContracts";
 import { txExplorer } from "@/lib/cluster";
+import { GAME_CONFIG } from "@/lib/chain";
 import {
   loadWalletActivity,
   type WalletActivityEntry,
@@ -220,7 +221,7 @@ export default function LogsPage() {
               <span className="font-headline text-[10px] text-on-surface-variant uppercase tracking-widest">
                 Min Bet
               </span>
-              <span className="font-headline text-sm font-bold text-on-surface">0.001 SOL</span>
+              <span className="font-headline text-sm font-bold text-on-surface">{GAME_CONFIG.MIN_BET_SOL} SOL</span>
             </div>
             <div className="w-full h-1 bg-surface-container-highest rounded">
               <div className="h-full bg-primary rounded w-[10%]" />

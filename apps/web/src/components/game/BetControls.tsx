@@ -81,7 +81,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
   // Max bet per density, so a mine count the vault can't cover at ANY legal
   // bet is greyed out instead of failing on-chain after the player commits.
   const maxBetByMines = useMaxBetByMineCount(GAME_CONFIG.MINE_OPTIONS);
-  const MIN_BET_SOL = 0.001;
+  const MIN_BET_SOL = GAME_CONFIG.MIN_BET_SOL;
   const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
   const [pendingRef, setPendingRef] = useState<string | null>(null);
@@ -304,6 +304,10 @@ export function BetControls({ stuckInfo }: Props = {}) {
       );
       return;
     }
+    if (state.bet < MIN_BET_SOL) {
+      toast(`Minimum bet is ${MIN_BET_SOL} SOL.`, "error");
+      return;
+    }
     if (state.bet > maxBet) {
       toast(`Bet exceeds vault max bet (${maxBet.toFixed(4)} SOL).`, "error");
       return;
@@ -361,7 +365,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
               <input
                 type="number"
                 step="0.001"
-                min={0.001}
+                min={MIN_BET_SOL}
                 value={state.bet}
                 onChange={(e) => setBet(Number(e.target.value) || 0)}
                 disabled={isPlaying || isStarting}
@@ -369,7 +373,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
                 <button
-                  onClick={() => setBet(Math.max(0.001, state.bet / 2))}
+                  onClick={() => setBet(Math.max(MIN_BET_SOL, state.bet / 2))}
                   disabled={isPlaying || isStarting}
                   className="bg-surface-container-highest px-3 py-1 text-[10px] font-headline font-bold text-on-surface hover:bg-primary/20 transition-colors disabled:opacity-30"
                 >
@@ -380,7 +384,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
                     setBet(
                       state.bet * 2 <= maxBet
                         ? Number((state.bet * 2).toFixed(6))
-                        : Math.max(0.001, snapDownToNiceBet(maxBet)),
+                        : Math.max(MIN_BET_SOL, snapDownToNiceBet(maxBet)),
                     )
                   }
                   disabled={isPlaying || isStarting}
