@@ -6,7 +6,9 @@ import { KaboomLogo } from "@/components/ui/KaboomLogo";
 
 const PACKAGE_ID = "gg.playkaboom.twa";
 const DEEP_LINK = `solanadappstore://details?id=${PACKAGE_ID}`;
-const DAPP_STORE_HOME = "https://dapp-store.solanamobile.com/";
+// The dApp Store has no public web listing (listings open only via the deep
+// link above), so desktop links the store's official page.
+const DAPP_STORE_HOME = "https://docs.solanamobile.com/dapp-store/intro";
 
 type Platform = "android" | "ios" | "desktop" | "unknown";
 

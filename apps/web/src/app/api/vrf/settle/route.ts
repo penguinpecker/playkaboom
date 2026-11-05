@@ -40,10 +40,23 @@ export async function POST(req: NextRequest) {
 
     const [claimPda] = deriveVrfClaimPda(pid, player);
     const [gamePda] = deriveVrfGamePda(pid, player);
-    const [claimInfo, gameInfo] = await Promise.all([
-      conn.getAccountInfo(claimPda, "confirmed"),
-      conn.getAccountInfo(gamePda, "confirmed"),
-    ]);
+    // The browser calls this as soon as IT sees the committed result, usually
+    // at a fresher commitment than our `confirmed` read. Give `confirmed` a few
+    // seconds to catch up instead of bouncing the player to the 60 s cron.
+    let claimInfo = null;
+    let gameInfo = null;
+    for (let i = 0; i < 8; i++) {
+      [claimInfo, gameInfo] = await Promise.all([
+        conn.getAccountInfo(claimPda, "confirmed"),
+        conn.getAccountInfo(gamePda, "confirmed"),
+      ]);
+      const done =
+        !claimInfo ||
+        !gameInfo ||
+        (gameInfo.owner.equals(pid) && decodeVrfGame(gameInfo.data as Buffer).status !== "Playing");
+      if (done) break;
+      await new Promise((r) => setTimeout(r, 400));
+    }
     if (!claimInfo || !gameInfo) throw new ApiError(404, "No VRF game to settle");
     const claim = decodeVrfClaim(claimInfo.data as Buffer);
     if (claim.settled) throw new ApiError(409, "Game already settled");

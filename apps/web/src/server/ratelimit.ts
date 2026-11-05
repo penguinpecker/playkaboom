@@ -2,7 +2,7 @@ import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { logger } from "./logger";
 
-let cachedLimiter: Ratelimit | null = null;
+const cachedLimiters = new Map<number, Ratelimit>();
 let warned = false;
 
 /**
@@ -19,8 +19,9 @@ let warned = false;
  * broke /api/commit in prod because Upstash isn't yet provisioned there.
  * Don't re-introduce without step 1 above.
  */
-export function getLimiter(): Ratelimit | null {
-  if (cachedLimiter) return cachedLimiter;
+export function getLimiter(maxHits = MAX_HITS): Ratelimit | null {
+  const cached = cachedLimiters.get(maxHits);
+  if (cached) return cached;
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) {
@@ -33,13 +34,15 @@ export function getLimiter(): Ratelimit | null {
     }
     return null;
   }
-  cachedLimiter = new Ratelimit({
+  const limiter = new Ratelimit({
     redis: new Redis({ url, token }),
-    limiter: Ratelimit.slidingWindow(30, "10 s"),
+    limiter: Ratelimit.slidingWindow(maxHits, "10 s"),
     analytics: false,
-    prefix: "pk:rl",
+    // Separate budgets must not share counters.
+    prefix: maxHits === MAX_HITS ? "pk:rl" : `pk:rl${maxHits}`,
   });
-  return cachedLimiter;
+  cachedLimiters.set(maxHits, limiter);
+  return limiter;
 }
 
 /**
@@ -61,28 +64,33 @@ const MAX_HITS = 30;
 const MAX_KEYS = 10_000;
 const localHits = new Map<string, number[]>();
 
-function localLimit(key: string, cost: number): { ok: boolean; remaining: number } {
+function localLimit(key: string, cost: number, maxHits: number): { ok: boolean; remaining: number } {
   const now = Date.now();
   if (localHits.size > MAX_KEYS) localHits.clear();
   const hits = (localHits.get(key) ?? []).filter((t) => now - t < WINDOW_MS);
-  if (hits.length + cost > MAX_HITS) {
+  if (hits.length + cost > maxHits) {
     localHits.set(key, hits);
     return { ok: false, remaining: 0 };
   }
   for (let i = 0; i < cost; i++) hits.push(now);
   localHits.set(key, hits);
-  return { ok: true, remaining: MAX_HITS - hits.length };
+  return { ok: true, remaining: maxHits - hits.length };
 }
 
-/** `cost` = how many hits this request spends (e.g. calls in a JSON-RPC batch). */
+/**
+ * `cost` = how many hits this request spends (e.g. calls in a JSON-RPC batch).
+ * `maxHits` = the key's budget per 10 s window (default 30; the browser's RPC
+ * proxy needs more, see api/rpc/[cluster]). Keys are already route-prefixed.
+ */
 export async function enforceRateLimit(
   key: string,
   cost = 1,
+  maxHits = MAX_HITS,
 ): Promise<{ ok: boolean; remaining: number }> {
-  const limiter = getLimiter();
+  const limiter = getLimiter(maxHits);
   // Not configured: fall back to the in-process limiter rather than waving
   // every request through. Provisioning Upstash replaces this automatically.
-  if (!limiter) return localLimit(key, cost);
+  if (!limiter) return localLimit(key, cost, maxHits);
   try {
     const r = await limiter.limit(key, { rate: cost });
     return { ok: r.success, remaining: r.remaining };

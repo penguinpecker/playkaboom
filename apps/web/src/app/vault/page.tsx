@@ -6,12 +6,13 @@ import {
   useVaultMaxPayout,
   useVaultHealth,
   useRiskLevel,
-  useGameCounter,
 } from "@/hooks/useContracts";
 import { CLUSTER, CLUSTER_LABEL, accountExplorer } from "@/lib/cluster";
 import { CONTRACTS } from "@/lib/chain";
 import { VaultLpPanel } from "@/components/vault/lp-panel";
 import { useVaultState } from "@/hooks/use-vault-lp";
+import { useLeaderboardOnchain, type AllTimeRow } from "@/hooks/use-leaderboard";
+import { leaderboardTotals } from "@/lib/site-stats";
 
 const RISK_LABELS = ["Healthy", "Caution", "Emergency"];
 const RISK_COLORS = ["text-emerald", "text-amber", "text-error"];
@@ -22,7 +23,9 @@ export default function VaultPage() {
   const { data: maxPayout } = useVaultMaxPayout();
   const { data: health } = useVaultHealth();
   const { data: riskLevel } = useRiskLevel();
-  const { data: gameCount } = useGameCounter();
+  // Settled games from the indexer; vault.totalGames also counts refunded starts.
+  const { data: lbRows } = useLeaderboardOnchain("alltime");
+  const totals = lbRows ? leaderboardTotals(lbRows as AllTimeRow[]) : undefined;
   const { data: vaultState } = useVaultState();
   const anchors: Record<string, string> = vaultState?.houseAuthority
     ? { ...CONTRACTS, "House signer": vaultState.houseAuthority }
@@ -105,11 +108,11 @@ export default function VaultPage() {
             />
             <InfoRow
               label="Total Games"
-              value={gameCount ? gameCount.toString() : "—"}
+              value={totals ? totals.gamesPlayed.toString() : "—"}
               valueColor="text-secondary"
             />
-            <InfoRow label="Hash" value="SHA-256" valueColor="text-primary" />
-            <InfoRow label="Fairness" value="Commit-Reveal" valueColor="text-primary" />
+            <InfoRow label="Randomness" value="MagicBlock VRF" valueColor="text-primary" />
+            <InfoRow label="Fairness" value="Per-click VRF" valueColor="text-primary" />
             <InfoRow label="House Edge" value="2.00%" valueColor="text-primary" />
             <InfoRow
               label="Chain"

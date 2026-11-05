@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { useModal } from "@/hooks/useModal";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
+import { useGameLink } from "./status-host";
 
 const LINKS = [
   { href: "/", label: "Home", icon: "home" },
@@ -15,6 +16,7 @@ const LINKS = [
 
 export function MobileDrawer({ onClose }: { onClose: () => void }) {
   const { open } = useModal();
+  const toGame = useGameLink();
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -39,7 +41,7 @@ export function MobileDrawer({ onClose }: { onClose: () => void }) {
           {LINKS.map((l) => (
             <Link
               key={l.href}
-              href={l.href}
+              {...toGame(l.href)}
               onClick={onClose}
               className="flex items-center gap-3 px-3 py-2.5 font-headline text-xs font-bold uppercase tracking-widest text-on-surface-variant hover:text-primary hover:bg-surface-container-highest/40 transition-all"
             >
@@ -57,6 +59,16 @@ export function MobileDrawer({ onClose }: { onClose: () => void }) {
             className="flex items-center gap-3 px-3 py-1.5 font-headline text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/50 hover:text-primary w-full"
           >
             <span className="material-symbols-outlined text-sm" aria-hidden="true">verified_user</span>Provably Fair
+          </button>
+          {/* The navbar gear is lg-only; this is its only entry point below 1024px. */}
+          <button
+            onClick={() => {
+              open("settings");
+              onClose();
+            }}
+            className="flex items-center gap-3 px-3 py-1.5 font-headline text-[10px] font-bold uppercase tracking-widest text-on-surface-variant/50 hover:text-primary w-full"
+          >
+            <span className="material-symbols-outlined text-sm" aria-hidden="true">settings</span>Settings
           </button>
         </div>
       </div>

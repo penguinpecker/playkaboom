@@ -1,8 +1,18 @@
 "use client";
 import Link from "next/link";
 import { formatEther } from "@/lib/compat";
-import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
+import {
+  useVaultBalance,
+  useVaultHealth,
+  useMaxBetByMineCount,
+  useHouseEdgeBps,
+} from "@/hooks/useContracts";
+import { useVaultState } from "@/hooks/use-vault-lp";
+import { useLeaderboardOnchain, type AllTimeRow } from "@/hooks/use-leaderboard";
 import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
+import { GAME_CONFIG } from "@/lib/chain";
+import { formatCooldown, formatSolAmount } from "@/lib/format";
+import { leaderboardTotals, maxOfferedMultiplier } from "@/lib/site-stats";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
 import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 
@@ -19,6 +29,12 @@ export default function HomePage() {
   );
 }
 
+/** Settled games from the indexer; vault.totalGames also counts refunded starts. */
+function useSettledGames(): number | undefined {
+  const { data: rows } = useLeaderboardOnchain("alltime");
+  return rows ? leaderboardTotals(rows as AllTimeRow[]).gamesPlayed : undefined;
+}
+
 /**
  * Marketing feature matrix. Six cards with icons + one-liners covering the
  * differentiators: provably fair, embedded wallet, vault yield, no custody,
@@ -26,11 +42,13 @@ export default function HomePage() {
  * "How It Works" and "Reactive Modules".
  */
 function FeatureMatrix() {
+  const { data: vaultState } = useVaultState();
+  const cooldown = formatCooldown(vaultState?.withdrawCooldownDays);
   const features = [
     {
       icon: "verified",
       title: "PROVABLY FAIR",
-      body: "SHA-256 commit-reveal. Every settled game's salt + layout are public — anyone can re-hash and verify.",
+      body: "Per-click randomness from MagicBlock's VRF oracle — no pre-committed layout. Anyone can verify every settled payout.",
       color: "primary",
     },
     {
@@ -42,7 +60,7 @@ function FeatureMatrix() {
     {
       icon: "savings",
       title: "LP YIELD VAULT",
-      body: "Deposit SOL, earn the house edge. Units pegged to vault NAV. 3-day cooldown protects against JIT drain.",
+      body: `Deposit SOL, earn the house edge. Units pegged to vault NAV. ${cooldown ? `${cooldown} cooldown` : "Withdraw cooldown"} protects against JIT drain.`,
       color: "tertiary",
     },
     {
@@ -60,7 +78,7 @@ function FeatureMatrix() {
     {
       icon: "shield",
       title: "MEV-AWARE",
-      body: "Dynamic priority fees, no public mempool exposure, on-chain commitment locked at start_game.",
+      body: "Dynamic priority fees, no public mempool exposure, VRF randomness drawn per click after your bet is locked.",
       color: "tertiary",
     },
   ];
@@ -104,6 +122,9 @@ function FeatureMatrix() {
 }
 
 function HeroSection() {
+  // Best full-clear multiplier among the mine counts /play offers right now.
+  const maxBetByMines = useMaxBetByMineCount(GAME_CONFIG.MINE_OPTIONS);
+  const maxMult = maxOfferedMultiplier(maxBetByMines, GAME_CONFIG.MIN_BET_SOL, useHouseEdgeBps());
   return (
     <section className="relative min-h-[600px] sm:min-h-[720px] lg:min-h-[870px] flex items-center justify-center overflow-hidden kinetic-grid">
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] sm:w-[600px] lg:w-[800px] h-[400px] sm:h-[600px] lg:h-[800px] bg-secondary/5 blur-[80px] lg:blur-[120px] rounded-full pointer-events-none" />
@@ -141,7 +162,7 @@ function HeroSection() {
               Max
             </div>
             <div className="font-headline text-base sm:text-xl font-bold text-secondary">
-              ×24.5
+              {maxMult === null ? "—" : `×${maxMult.toFixed(1)}`}
             </div>
           </div>
           <div className="bg-surface-container-high p-2 sm:p-3 stealth-card border-l-2 border-tertiary">
@@ -221,7 +242,7 @@ function HeroSection() {
 function StatsBanner() {
   const { data: vaultBal } = useVaultBalance();
   const { data: vaultHealth } = useVaultHealth();
-  const { data: gameCount } = useGameCounter();
+  const gameCount = useSettledGames();
 
   return (
     <section className="bg-surface-container-low border-y border-outline-variant/10 py-6">
@@ -272,6 +293,7 @@ function StatsBanner() {
 }
 
 function HowItWorks() {
+  const maxStake = useVaultState().data?.effectiveMaxBetSol;
   return (
     <section className="py-16 lg:py-24 container mx-auto px-4 sm:px-6 lg:px-12">
       <h2 className="font-headline text-3xl sm:text-4xl font-black italic tracking-tight text-on-surface mb-10 lg:mb-16 border-l-4 border-primary pl-4 sm:pl-6">
@@ -283,7 +305,7 @@ function HowItWorks() {
           icon="payments"
           color="primary"
           title="SET YOUR STAKE"
-          body="Choose bet amount + mine density. Higher mines = higher multiplier. 2% house edge, provably fair via SHA-256."
+          body="Choose bet amount + mine density. Higher mines = higher multiplier. 2% house edge, provably fair via MagicBlock VRF."
         >
           <div className="p-4 bg-surface-container-lowest rounded border border-outline-variant/10">
             <div className="flex justify-between items-center mb-2">
@@ -296,7 +318,9 @@ function HowItWorks() {
               <div className="flex-grow h-1 bg-surface-container-highest overflow-hidden">
                 <div className="h-full bg-primary w-[40%]" />
               </div>
-              <span className="font-headline text-sm font-bold">0.10 SOL</span>
+              <span className="font-headline text-sm font-bold">
+                {maxStake === undefined ? "—" : formatSolAmount(maxStake, 4)} SOL
+              </span>
             </div>
           </div>
         </Step>
@@ -477,7 +501,7 @@ function ReactiveModules() {
 }
 
 function RealTimeIntel() {
-  const { data: gameCount } = useGameCounter();
+  const gameCount = useSettledGames();
   const { data: vaultBal } = useVaultBalance();
 
   return (

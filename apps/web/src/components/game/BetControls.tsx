@@ -14,6 +14,7 @@ import { usePlayerStats } from "@/hooks/use-player-stats";
 import { getPendingReferrer, useReferralAccount } from "@/hooks/use-referral";
 import { useToast } from "@/components/providers/toast";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
+import { balanceBlockReason, coverableMineCount, mineCountBlockReason } from "@/stores/game-store";
 
 // Safety ceiling on the lock — if the busy state genuinely hangs for
 // longer than this, force-release so the player can retry instead of
@@ -101,6 +102,8 @@ export function BetControls({ stuckInfo }: Props = {}) {
       }) / LAMPORTS_PER_SOL
     : 0;
   const affordableBet = Math.max(0, walletBalance - startupOverheadSol);
+  // Logged out, walletBalance is a placeholder 0: no balance checks apply.
+  const hasWallet = authenticated && !!publicKey;
   const cannotAffordStartup = walletBalance > 0 && affordableBet < MIN_BET_SOL;
   // Dynamic busy timer (replaces the fixed 5s ENGAGE_LOCKOUT countdown).
   // Captures wall-clock at the moment the busy state begins; ticks every
@@ -137,19 +140,16 @@ export function BetControls({ stuckInfo }: Props = {}) {
   // entirely while the player is in a live round (see inLiveRound above).
   const blockReason: string | null = inLiveRound
     ? null
-    : cannotAffordStartup
-      ? `A round needs ~${startupOverheadSol.toFixed(4)} SOL of refundable rent + gas on top of your bet, and it must be in the wallet up front. You have ${walletBalance.toFixed(4)} SOL — top up to about ${(startupOverheadSol + MIN_BET_SOL).toFixed(3)} SOL to play. Nearly all of it comes back when the round closes.`
-      : state.bet > affordableBet
-        ? `Bet + ~${startupOverheadSol.toFixed(4)} SOL of refundable rent exceeds your balance. Most you can bet right now is ${affordableBet.toFixed(4)} SOL.`
-    : capacity.reason === "paused"
-      ? "Vault paused. Gameplay is temporarily disabled."
-      : capacity.reason === "obligations_full"
-        ? "Vault is fully obligated to in-flight games + pending withdrawals — wait a few minutes for settlements."
-        : capacity.reason === "vault_empty"
-          ? "Vault is empty. Liquidity needs to be deposited before games can run."
-          : capacity.reason === "exceeds_cap"
-            ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${fmtCap(maxBet)} SOL.`
-            : null;
+    : (balanceBlockReason(hasWallet, state.bet, walletBalance, startupOverheadSol, MIN_BET_SOL) ??
+      (capacity.reason === "paused"
+        ? "Vault paused. Gameplay is temporarily disabled."
+        : capacity.reason === "obligations_full"
+          ? "Vault is fully obligated to in-flight games + pending withdrawals — wait a few minutes for settlements."
+          : capacity.reason === "vault_empty"
+            ? "Vault is empty. Liquidity needs to be deposited before games can run."
+            : capacity.reason === "exceeds_cap"
+              ? `Bet exceeds vault capacity for ${state.mineCount} mines. Worst-case payout would be ${capacity.worstCasePayoutSol.toFixed(3)} SOL — limit is ${fmtCap(maxBet)} SOL.`
+              : null));
   // The lock is "true" while ANY of: starting (commit→sign→confirm in
   // flight), cashing (cashOut tx in flight), or pendingClose (background
   // close-game ix from previous round still in flight). Engage stays
@@ -224,6 +224,14 @@ export function BetControls({ stuckInfo }: Props = {}) {
       window.removeEventListener("pageshow", onWake);
     };
   }, [publicKey, connection]);
+
+  // Keep an idle selection on a count the vault covers. The default (3) is
+  // often past the vault's reach at the minimum bet, which can't go lower.
+  useEffect(() => {
+    if (state.status !== "idle") return;
+    const next = coverableMineCount(state.mineCount, maxBetByMines, MIN_BET_SOL);
+    if (next !== state.mineCount) setMineCount(next);
+  }, [state.status, state.mineCount, maxBetByMines, MIN_BET_SOL, setMineCount]);
 
   // When the busy state begins, capture wall-clock and start ticking.
   // When it ends (status leaves the busy set AND pendingClose is false),
@@ -449,7 +457,7 @@ export function BetControls({ stuckInfo }: Props = {}) {
                     ≈ {formatUsd(solToUsd(state.bet, pyth))}
                   </span>
                 )}
-                Max safe bet: <span className={wouldExceedLiquidity ? "text-error" : "text-on-surface-variant"}>{fmtCap(Math.min(maxBet, affordableBet))} SOL</span>
+                Max safe bet: <span className={wouldExceedLiquidity ? "text-error" : "text-on-surface-variant"}>{fmtCap(hasWallet ? Math.min(maxBet, affordableBet) : maxBet)} SOL</span>
               </span>
             </div>
             {/* Worst-case payout preview — only when the bet is set and the
@@ -484,22 +492,18 @@ export function BetControls({ stuckInfo }: Props = {}) {
               {GAME_CONFIG.MINE_OPTIONS.map((n) => {
                 // Unplayable = the vault cannot cover the worst case even at
                 // the minimum bet. Never disable the density already in play.
-                const capForN = maxBetByMines[n] ?? 0;
-                const unplayable =
-                  !inLiveRound && capForN > 0 && capForN < MIN_BET_SOL && n !== state.mineCount;
+                // aria-disabled (not disabled) so a tap still reaches onClick
+                // and shows the reason: touch screens never show a title.
+                const reason = mineCountBlockReason(n, maxBetByMines[n] ?? 0, MIN_BET_SOL);
+                const unplayable = !inLiveRound && reason !== null;
                 return (
                   <button
                     key={n}
-                    onClick={() => setMineCount(n)}
-                    disabled={isPlaying || isStarting || unplayable}
-                    title={
-                      unplayable
-                        ? `Vault can't cover ${n} mines right now — needs ${(
-                            MIN_BET_SOL / Math.max(capForN, 1e-9)
-                          ).toFixed(0)}x more bankroll`
-                        : undefined
-                    }
-                    className={`bg-surface-container-highest py-2 font-headline font-bold text-xs transition-all disabled:opacity-30 ${
+                    onClick={() => (unplayable ? toast(reason, "amber") : setMineCount(n))}
+                    disabled={isPlaying || isStarting}
+                    aria-disabled={unplayable}
+                    title={unplayable ? reason : undefined}
+                    className={`bg-surface-container-highest py-2 font-headline font-bold text-xs transition-all disabled:opacity-30 aria-disabled:opacity-30 ${
                       n === state.mineCount
                         ? "text-on-surface border border-primary/40"
                         : unplayable

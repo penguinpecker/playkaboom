@@ -25,6 +25,13 @@ const GAME_ORIGIN = "https://playkaboom.gg";
 
 /** The only paths that may be served from the status host. */
 const STATUS_API = "/api/status";
+/**
+ * Public files the status page's shell loads. /_next/image fetches its source
+ * through this middleware, so a redirected logo comes back cross-origin and
+ * Cross-Origin-Resource-Policy: same-origin blocks it. An exact list, not an
+ * extension match: /r/x.png or /profile/x.png would otherwise render a game page here.
+ */
+const STATUS_ASSETS = new Set(["/kaboom-logo.png"]);
 
 export function middleware(req: NextRequest) {
   // Host header carries the port in local dev; compare on the hostname only.
@@ -43,6 +50,8 @@ export function middleware(req: NextRequest) {
     if (pathname === "/status") {
       return NextResponse.redirect(new URL("/", req.url), 308);
     }
+
+    if (STATUS_ASSETS.has(pathname)) return NextResponse.next();
 
     // Everything but the machine-readable feed belongs to the game.
     if (pathname !== STATUS_API) {

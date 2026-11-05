@@ -2,56 +2,30 @@
 import { useQuery } from "@tanstack/react-query";
 
 /**
- * Pyth Hermes — SOL/USD price feed.
- * https://docs.pyth.network/price-feeds/contract-addresses/solana
+ * SOL/USD from our own cached route (app/api/price/sol). Keyless Pyth Hermes
+ * now answers 401 with no CORS header, so the browser no longer calls it.
  */
-const SOL_USD_FEED = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
-const HERMES_URL = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${SOL_USD_FEED}&parsed=true`;
+const PRICE_URL = "/api/price/sol";
 
 interface PythPrice {
   /** USD value with high precision (e.g. 153.42). */
   usd: number;
-  /** Confidence interval in USD. */
+  /** Confidence interval in USD (0: the public sources don't report one). */
   confidence: number;
-  /** Pyth publish time (unix seconds). */
+  /** When the server fetched the price (unix seconds). */
   publishTime: number;
 }
 
-// Keyless Hermes now answers 401 with no CORS header, which the browser
-// reports as a failed fetch. Once refused, stop asking until reload: every
-// 15 s retry only logged another console error (shakedown M3). The USD hints
-// already hide while the price is null.
-let hermesRefused = false;
-
 export async function fetchPythSolUsd(): Promise<PythPrice | null> {
-  if (hermesRefused) return null;
-  let res: Response;
   try {
-    res = await fetch(HERMES_URL, { cache: "no-store" });
-  } catch {
-    // A CORS block throws like any network error; keep polling only when
-    // the browser reports itself offline.
-    if (typeof navigator === "undefined" || navigator.onLine !== false) hermesRefused = true;
-    return null;
-  }
-  if (res.status === 401 || res.status === 403) {
-    hermesRefused = true;
-    return null;
-  }
-  if (!res.ok) return null;
-  try {
-    const json = (await res.json()) as {
-      parsed?: Array<{
-        price?: { price: string; expo: number; conf: string; publish_time: number };
-      }>;
-    };
-    const p = json.parsed?.[0]?.price;
-    if (!p) return null;
-    const scale = Math.pow(10, p.expo); // expo is negative for USD prices
+    const res = await fetch(PRICE_URL, { cache: "no-store" });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { usd?: unknown; publishTime?: unknown };
+    if (typeof json.usd !== "number" || !(json.usd > 0)) return null;
     return {
-      usd: Number(p.price) * scale,
-      confidence: Number(p.conf) * scale,
-      publishTime: p.publish_time,
+      usd: json.usd,
+      confidence: 0,
+      publishTime: typeof json.publishTime === "number" ? json.publishTime : 0,
     };
   } catch {
     return null;
@@ -59,13 +33,13 @@ export async function fetchPythSolUsd(): Promise<PythPrice | null> {
 }
 
 /**
- * Polls Pyth Hermes every 15s for SOL/USD. Returns null until the first
- * fetch lands. Used for the "≈ $X.XX" overlay in BetControls + Vault.
+ * Polls the SOL/USD route every 30s (its cache window). Returns null until the
+ * first fetch lands. Used for the "≈ $X.XX" overlay in BetControls + Vault.
  */
 export function usePythSolUsd() {
   return useQuery({
     queryKey: ["pyth", "sol-usd"],
-    refetchInterval: () => (hermesRefused ? false : 15_000),
+    refetchInterval: 30_000,
     refetchOnWindowFocus: true,
     queryFn: fetchPythSolUsd,
   });

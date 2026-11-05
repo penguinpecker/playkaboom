@@ -9,7 +9,8 @@ import { useReferralAccount } from "@/hooks/use-referral";
 import { useGameHistory } from "@/hooks/useGameHistory";
 import { useAccount } from "@/lib/compat";
 import { accountExplorer, txExplorer } from "@/lib/cluster";
-import { shortAddr } from "@/lib/format";
+import { formatSolAmount, shortAddr } from "@/lib/format";
+import { isValidWallet } from "@/lib/site-stats";
 
 export default function ProfilePage() {
   const params = useParams<{ wallet: string }>();
@@ -17,8 +18,10 @@ export default function ProfilePage() {
   const { address } = useAccount();
   const isMe = !!address && address.toLowerCase() === wallet.toLowerCase();
 
-  const { data: stats, isLoading: statsLoading } = usePlayerStats(wallet);
-  const { data: referral } = useReferralAccount(wallet);
+  // An invalid address used to look like a wallet that never played.
+  const valid = useMemo(() => isValidWallet(wallet), [wallet]);
+  const { data: stats, isLoading: statsLoading } = usePlayerStats(valid ? wallet : null);
+  const { data: referral } = useReferralAccount(valid ? wallet : null);
   const { history } = useGameHistory();
 
   const myGames = useMemo(
@@ -71,7 +74,7 @@ export default function ProfilePage() {
               )}
             </h1>
             <a
-              href={accountExplorer(wallet)}
+              href={valid ? accountExplorer(wallet) : undefined}
               target="_blank"
               rel="noreferrer"
               className="font-mono text-[11px] text-primary/60 hover:text-primary mt-1 inline-block break-all"
@@ -91,12 +94,14 @@ export default function ProfilePage() {
             casino
           </span>
           <p className="font-headline text-sm font-bold tracking-widest uppercase text-on-surface mt-4 mb-2">
-            No on-chain stats yet
+            {valid ? "No on-chain stats yet" : "Invalid wallet address"}
           </p>
           <p className="text-xs text-on-surface-variant">
-            {isMe
-              ? "Play your first game to populate your dossier."
-              : "This operative hasn't played yet."}
+            {!valid
+              ? "This link doesn't point to a Solana wallet."
+              : isMe
+                ? "Play your first game to populate your dossier."
+                : "This operative hasn't played yet."}
           </p>
           {isMe && (
             <Link
@@ -127,13 +132,13 @@ export default function ProfilePage() {
             />
             <Card
               label="Net PnL"
-              value={`${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(3)} SOL`}
+              value={`${netPnl >= 0 ? "+" : ""}${formatSolAmount(netPnl)} SOL`}
               border={netPnl >= 0 ? "border-emerald" : "border-error"}
               valColor={netPnl >= 0 ? "text-emerald" : "text-error"}
             />
             <Card
               label="Biggest win"
-              value={`${biggestWin.toFixed(3)} SOL`}
+              value={`${formatSolAmount(biggestWin)} SOL`}
               border="border-amber"
               valColor="text-amber"
             />
@@ -159,22 +164,22 @@ export default function ProfilePage() {
                 />
                 <Row
                   label="Total wagered"
-                  value={`${totalWagered.toFixed(3)} SOL`}
+                  value={`${formatSolAmount(totalWagered)} SOL`}
                   color="text-on-surface"
                 />
                 <Row
                   label="Total won"
-                  value={`${totalPayouts.toFixed(3)} SOL`}
+                  value={`${formatSolAmount(totalPayouts)} SOL`}
                   color="text-primary"
                 />
                 <Row
                   label="Net PnL"
-                  value={`${netPnl >= 0 ? "+" : ""}${netPnl.toFixed(3)} SOL`}
+                  value={`${netPnl >= 0 ? "+" : ""}${formatSolAmount(netPnl)} SOL`}
                   color={netPnl >= 0 ? "text-emerald" : "text-error"}
                 />
                 <Row
                   label="Biggest win"
-                  value={`${biggestWin.toFixed(3)} SOL`}
+                  value={`${formatSolAmount(biggestWin)} SOL`}
                   color="text-amber"
                 />
                 <Row
@@ -212,7 +217,7 @@ export default function ProfilePage() {
                           {g.won ? "WIN" : "LOSS"}
                         </span>
                         <span className="font-headline text-xs text-on-surface">
-                          {g.bet.toFixed(3)} SOL
+                          {formatSolAmount(g.bet)} SOL
                         </span>
                         <span
                           className={`font-headline text-xs font-bold ${g.won ? "text-primary" : "text-on-surface-variant"}`}
@@ -223,7 +228,7 @@ export default function ProfilePage() {
                           className={`font-headline text-xs font-bold ${g.won ? "text-primary" : "text-error"}`}
                         >
                           {g.won ? "+" : "-"}
-                          {(g.won ? g.payout : g.bet).toFixed(3)} SOL
+                          {formatSolAmount(g.won ? g.payout : g.bet)} SOL
                         </span>
                         <span className="text-right">
                           {g.txHash ? (
@@ -294,17 +299,17 @@ export default function ProfilePage() {
                     />
                     <Row
                       label="Volume"
-                      value={`${(Number(referral.referredVolume) / LAMPORTS_PER_SOL).toFixed(2)} SOL`}
+                      value={`${formatSolAmount(Number(referral.referredVolume) / LAMPORTS_PER_SOL, 2)} SOL`}
                       color="text-on-surface"
                     />
                     <Row
                       label="Earned"
-                      value={`${(Number(referral.totalEarned) / LAMPORTS_PER_SOL).toFixed(4)} SOL`}
+                      value={`${formatSolAmount(Number(referral.totalEarned) / LAMPORTS_PER_SOL, 4)} SOL`}
                       color="text-primary"
                     />
                     <Row
                       label="Unclaimed"
-                      value={`${(Number(referral.accruedLamports) / LAMPORTS_PER_SOL).toFixed(4)} SOL`}
+                      value={`${formatSolAmount(Number(referral.accruedLamports) / LAMPORTS_PER_SOL, 4)} SOL`}
                       color="text-emerald"
                     />
                   </div>

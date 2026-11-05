@@ -9,6 +9,7 @@ import {
   useVaultState,
 } from "@/hooks/use-vault-lp";
 import { useToast } from "@/components/providers/toast";
+import { formatCooldown } from "@/lib/format";
 
 const fmtSol = (lamports: bigint | number) =>
   (Number(typeof lamports === "bigint" ? lamports : BigInt(lamports)) /
@@ -61,6 +62,9 @@ export function VaultLpPanel() {
   }, [connection]);
 
   const tvlSol = state?.vaultBalanceSol ?? 0;
+  // Same measured figure as the Cooldown stat ("1.6-day "), not a 400 ms-slot 3 days.
+  const cd = formatCooldown(state?.withdrawCooldownDays);
+  const cdPrefix = cd ? `${cd} ` : "";
   const apyLabel = state?.apy30d == null ? "—" : fmtPct(state.apy30d);
   const healthLabel = state?.healthBps != null ? `${(state.healthBps / 100).toFixed(1)}%` : "—";
   // When the on-chain per-user cap is 0 the effective-deposit value is a
@@ -222,7 +226,7 @@ export function VaultLpPanel() {
           <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
             Min {state?.minLpDepositLamports
               ? fmtSol(BigInt(state.minLpDepositLamports))
-              : "0.01"} SOL · 3-day withdraw cooldown
+              : "0.01"} SOL · {cdPrefix}withdraw cooldown
           </p>
         </div>
 
@@ -336,7 +340,7 @@ export function VaultLpPanel() {
                       className="w-full mt-3 py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-bold text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                       title={
                         valid
-                          ? `Burns ${((Number(wantUnits) / Number(positionUnits)) * 100).toFixed(1)}% of your position into a 3-day cooldown`
+                          ? `Burns ${((Number(wantUnits) / Number(positionUnits)) * 100).toFixed(1)}% of your position into a ${cdPrefix}cooldown`
                           : "Enter an amount up to your position size"
                       }
                     >
@@ -347,7 +351,7 @@ export function VaultLpPanel() {
                           : "ENTER AMOUNT"}
                     </button>
                     <p className="font-headline text-[10px] uppercase tracking-widest text-on-surface-variant/40 mt-3">
-                      3-day cooldown · pending units keep earning P&L · cancel anytime before unlock
+                      {cdPrefix}cooldown · pending units keep earning P&L · cancel anytime before unlock
                     </p>
                   </div>
                 );

@@ -18,9 +18,12 @@ interface StatusPayload {
   components: Component[];
 }
 
+// emerald/amber are single project colours in tailwind.config.ts (same hex as
+// Tailwind's -400 shades), which replace the default scales: "-400" classes
+// are never generated, so use the bare token names.
 const TONE: Record<Health, { dot: string; text: string; ring: string }> = {
-  operational: { dot: "bg-emerald-400", text: "text-emerald-400", ring: "ring-emerald-400/30" },
-  degraded: { dot: "bg-amber-400", text: "text-amber-400", ring: "ring-amber-400/30" },
+  operational: { dot: "bg-emerald", text: "text-emerald", ring: "ring-emerald/30" },
+  degraded: { dot: "bg-amber", text: "text-amber", ring: "ring-amber/30" },
   down: { dot: "bg-rose-500", text: "text-rose-500", ring: "ring-rose-500/30" },
   unknown: { dot: "bg-zinc-500", text: "text-zinc-400", ring: "ring-zinc-500/30" },
 };

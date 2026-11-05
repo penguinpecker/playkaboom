@@ -9,6 +9,7 @@ import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useModal } from "@/hooks/useModal";
 import { useVaultBalance, useVaultHealth, useRiskLevel } from "@/hooks/useContracts";
 import { MobileDrawer } from "./MobileDrawer";
+import { useGameLink } from "./status-host";
 import { KaboomLogo } from "@/components/ui/KaboomLogo";
 import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 
@@ -32,6 +33,7 @@ export function Navbar() {
 
   const { connection } = useConnection();
   const { open } = useModal();
+  const toGame = useGameLink();
   const [showMobile, setShowMobile] = useState(false);
   const [showNotif, setShowNotif] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -106,7 +108,7 @@ export function Navbar() {
               menu
             </span>
           </button>
-          <Link href="/" className="flex items-center flex-shrink-0" aria-label="Kaboom — home">
+          <Link {...toGame("/")} className="flex items-center flex-shrink-0" aria-label="Kaboom — home">
             <span className="lg:hidden"><KaboomLogo size={36} glow /></span>
             <span className="hidden lg:inline"><KaboomLogo size={48} glow /></span>
           </Link>
@@ -114,7 +116,7 @@ export function Navbar() {
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.href}
-                href={link.href}
+                {...toGame(link.href)}
                 className={`font-headline tracking-tight text-sm uppercase transition-colors ${
                   pathname === link.href
                     ? "text-primary border-b-2 border-primary pb-1"
@@ -188,7 +190,7 @@ export function Navbar() {
                     icon="enhanced_encryption"
                     color="text-secondary"
                     label="FAIRNESS"
-                    msg="SHA-256 Commit-Reveal"
+                    msg="Per-click MagicBlock VRF"
                   />
                   <NR icon="speed" color="text-tertiary" label="CHAIN" msg={CLUSTER_LABEL[CLUSTER]} />
                 </div>

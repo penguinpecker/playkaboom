@@ -49,7 +49,7 @@ const EMPTY_VAULT_DATA: VaultAccountData = {
  * Single shared poller for the on-chain vault state.
  *
  * Every hook below (useVaultBalance, useVaultHealth, useVaultCapacity,
- * useVaultMaxBet, useVaultMaxPayout, useGameCounter, useContracts) calls
+ * useVaultMaxBet, useVaultMaxPayout, useContracts) calls
  * this. Previously this was a useState+useEffect+setInterval that
  * created an INDEPENDENT poller PER CALL — 7 callers meant 7 timers,
  * each on its own 15s schedule starting from when the component mounted.
@@ -194,11 +194,6 @@ export function useVaultMaxBet() {
 
 export function useVaultMaxPayout() {
   return { data: useVaultLimits()?.maxPayoutLamports };
-}
-
-export function useGameCounter() {
-  const { vault } = useVaultAccount();
-  return { data: vault ? vault.totalGames : 0n };
 }
 
 export function useRiskLevel() {

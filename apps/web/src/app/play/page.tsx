@@ -6,7 +6,9 @@ import { GameRecoveryBanner } from "@/components/game/GameRecoveryBanner";
 import { GlobalActivityFeed } from "@/components/GlobalActivityFeed";
 import { useGame } from "@/hooks/useGame";
 import { useGameResume } from "@/hooks/use-game-resume";
-import { useVaultBalance, useVaultHealth, useGameCounter } from "@/hooks/useContracts";
+import { useVaultBalance, useVaultHealth } from "@/hooks/useContracts";
+import { useLeaderboardOnchain, type AllTimeRow } from "@/hooks/use-leaderboard";
+import { leaderboardTotals } from "@/lib/site-stats";
 import { CLUSTER, CLUSTER_LABEL } from "@/lib/cluster";
 
 export default function PlayPage() {
@@ -15,7 +17,9 @@ export default function PlayPage() {
   const { state } = useGame();
   const { data: vaultBal } = useVaultBalance();
   const { data: vaultHealth } = useVaultHealth();
-  const { data: gameCount } = useGameCounter();
+  // Settled games, as on / and /vault; vault.totalGames also counts refunded starts.
+  const { data: lbRows } = useLeaderboardOnchain("alltime");
+  const gameCount = lbRows ? leaderboardTotals(lbRows as AllTimeRow[]).gamesPlayed : undefined;
 
   // Smooth the displayed Vault Health to avoid mid-round flicker. Live
   // on-chain health bounces 99 → 50 → 75 because YOUR own bet's

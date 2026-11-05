@@ -260,7 +260,23 @@ export function useVrfGame(): VrfActions {
       await waitForCommittedResult(cfg, player);
       let settled = false;
       try {
-        const res = await apiVrfSettle({ player: player.toBase58() });
+        // The fast path: the house settles now. Retry the transient answers
+        // (result not visible to the server's RPC yet, 429, 5xx, network) a few
+        // times instead of falling back to the 60 s cron on the first miss.
+        let res: Awaited<ReturnType<typeof apiVrfSettle>> | null = null;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            res = await apiVrfSettle({ player: player.toBase58() });
+            break;
+          } catch (e) {
+            const status = e instanceof ApiClientError ? e.status : 0;
+            const transient =
+              status === 0 || status === 429 || status >= 500 ||
+              (status === 409 && /not finished/i.test((e as Error).message));
+            if (!transient || attempt >= 5) throw e;
+            await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+          }
+        }
         // TELL THE PLAYER THEY WON *FIRST*.
         //
         // This used to sit after sweepSession, so a throw while returning

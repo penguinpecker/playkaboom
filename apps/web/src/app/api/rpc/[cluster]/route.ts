@@ -3,6 +3,11 @@ import { clientIp, jsonError } from "@/server/api-helpers";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { logger } from "@/server/logger";
 
+// A live VRF round polls balances, the claim/game accounts and tx statuses
+// through this proxy; 30 per 10 s (the default) throttled real players and
+// web3.js's 429 retries made it a storm. Each call in a batch still costs one.
+const RPC_MAX_HITS = 300;
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -104,7 +109,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
         { error: "Too many requests" },
         { status: 429, headers: { "Retry-After": "10" } },
       );
-    const rl = await enforceRateLimit(rlKey);
+    const rl = await enforceRateLimit(rlKey, 1, RPC_MAX_HITS);
     if (!rl.ok) return tooMany();
 
     const raw = await req.text();
@@ -132,7 +137,7 @@ export async function POST(req: NextRequest, ctx: RouteContext) {
       );
     }
     // One hit was charged above; charge the rest of the batch too.
-    if (calls.length > 1 && !(await enforceRateLimit(rlKey, calls.length - 1)).ok) {
+    if (calls.length > 1 && !(await enforceRateLimit(rlKey, calls.length - 1, RPC_MAX_HITS)).ok) {
       return tooMany();
     }
     for (const c of calls) {

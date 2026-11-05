@@ -120,24 +120,49 @@ export async function sendHouseTx(
   tx.add(ComputeBudgetProgram.setComputeUnitLimit({ units: COMPUTE_LIMIT }));
   for (const ix of instructions) tx.add(ix);
 
-  // `processed` blockhash is canonical-enough for our use and lands on the
-  // leader's first response (~150-200ms saved vs `confirmed`).
-  const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("processed");
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
+  // `confirmed` blockhash + preflight: a `processed` blockhash can be unknown
+  // to the RPC node that runs the simulation (load-balanced RPC), which fails
+  // preflight with EMPTY logs ("Blockhash not found") — that made
+  // /api/vrf/settle 500 right after an undelegate (2026-11-05). Retry that
+  // transient case with a fresh blockhash; program errors (non-empty logs)
+  // are thrown on the first attempt.
   tx.feePayer = house.publicKey;
+  for (let attempt = 0; ; attempt++) {
+    const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.lastValidBlockHeight = lastValidBlockHeight;
+    tx.signatures = [];
+    const signed = await house.signTransaction(tx);
+    try {
+      const sig = await conn.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+        preflightCommitment: "confirmed",
+      });
+      logger.debug({ sig }, "house tx submitted via RPC");
+      return sig;
+    } catch (err) {
+      if (attempt < 2 && isTransientPreflightError(err)) {
+        logger.warn({ attempt, err: (err as Error).message?.slice(0, 160) }, "house tx preflight transient; retrying");
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+      throw classifyHouseTxError(err);
+    }
+  }
+}
 
-  const signed = await house.signTransaction(tx);
-  try {
-    const sig = await conn.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-      preflightCommitment: "processed",
-    });
-    logger.debug({ sig }, "house tx submitted via RPC");
-    void lastValidBlockHeight; // referenced for clarity; we don't poll-confirm here
-    return sig;
-  } catch (err) {
+/** Preflight failed before the program ran: no logs, or an explicit blockhash miss. */
+function isTransientPreflightError(err: unknown): boolean {
+  const e = err as { message?: string; logs?: string[] | null; transactionLogs?: string[] | null } | null;
+  const msg = e?.message ?? "";
+  if (/blockhash not found|BlockhashNotFound/i.test(msg)) return true;
+  const logs = e?.logs ?? e?.transactionLogs;
+  return /simulation failed/i.test(msg) && (!logs || logs.length === 0) && /Logs:\s*\n?\s*\[\]/.test(msg);
+}
+
+function classifyHouseTxError(err: unknown): unknown {
+  {
     // Classify Anchor framework errors so routes can return a structured
     // 409 instead of an opaque 500. The most consequential one for game
     // routes is AccountNotInitialized (3012) — fired when the GameSession
@@ -148,7 +173,7 @@ export async function sendHouseTx(
     // this branch catches the TOCTOU window between probe and send.
     if (isAccountNotInitializedError(err)) {
       const fw = extractAnchorFrameworkError(err);
-      throw new OnChainError("account_not_initialized", {
+      return new OnChainError("account_not_initialized", {
         message: `On-chain account not initialized${fw?.account ? `: ${fw.account}` : ""}`,
         code: fw?.code,
         account: fw?.account,
@@ -156,7 +181,7 @@ export async function sendHouseTx(
         cause: err,
       });
     }
-    throw err;
+    return err;
   }
 }
 

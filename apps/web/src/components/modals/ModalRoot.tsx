@@ -487,16 +487,17 @@ function FairModal() {
   return (
     <ModalShell title="Provably Fair">
       <p className="text-xs text-on-surface-variant mb-3">
-        Server-assisted commit-reveal. Mine layout is committed via SHA-256 before the game and
-        revealed on-chain at settlement so anyone can verify.
+        Each click draws randomness from MagicBlock&apos;s VRF oracle in the rollup — there is no
+        pre-committed layout. Anyone can verify a settled game&apos;s payout.
       </p>
       <div className="space-y-3">
         <div>
           <div className="font-headline text-[10px] text-on-surface-variant/40 tracking-widest uppercase mb-0.5">
-            Commitment (this game)
+            Game account (this game)
           </div>
           <div className="bg-surface-container-lowest p-2 font-mono text-[9px] text-primary break-all select-all">
-            {state.commitment || "Play a game to see commitment"}
+            {/* VRF rounds store the game PDA in `commitment` (use-vrf-game.ts). */}
+            {state.commitment || "Play a game to see its game account"}
           </div>
         </div>
         {lastTx && (
@@ -515,9 +516,9 @@ function FairModal() {
             verified_user
           </span>
           <div>
-            <div className="font-headline text-xs font-bold text-emerald">SHA-256 Commit-Reveal</div>
+            <div className="font-headline text-xs font-bold text-emerald">Per-click MagicBlock VRF</div>
             <div className="text-[10px] text-on-surface-variant">
-              Same scheme used by leading crypto casinos.
+              Each tile flip is drawn and signed on the rollup.
             </div>
           </div>
         </div>
@@ -576,7 +577,7 @@ function SettingsModal() {
         </div>
         <div className="flex justify-between">
           <span>Fairness</span>
-          <span className="text-primary">SHA-256 Commit-Reveal</span>
+          <span className="text-primary">Per-click MagicBlock VRF</span>
         </div>
         <div className="flex justify-between">
           <span>House Edge</span>

@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { txExplorer, accountExplorer } from "@/lib/cluster";
+import { readJsonOrThrow } from "@/lib/site-stats";
 
 interface GameRow {
   signature: string;
@@ -52,7 +53,9 @@ export default function VerifyPage() {
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/verify?sig=${encodeURIComponent(sig)}`)
-      .then((r) => r.json() as Promise<VerifyResponse>)
+      // A 400 (not a settle tx, malformed sig) carries {error}; show it in the
+      // error box instead of a blank page.
+      .then((r) => readJsonOrThrow<VerifyResponse>(r))
       .then((j) => {
         if (!cancelled) setData(j);
       })

@@ -3,10 +3,15 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { useAccount } from "@/lib/compat";
-import { useGameCounter } from "@/hooks/useContracts";
 import { useGameHistory } from "@/hooks/useGameHistory";
-import { useLeaderboardOnchain, type LeaderboardView } from "@/hooks/use-leaderboard";
-import { shortAddr } from "@/lib/format";
+import { useGlobalGames } from "@/hooks/use-global-games";
+import {
+  useLeaderboardOnchain,
+  type AllTimeRow,
+  type LeaderboardView,
+} from "@/hooks/use-leaderboard";
+import { formatAgo, formatSolAmount, shortAddr } from "@/lib/format";
+import { leaderboardTotals } from "@/lib/site-stats";
 
 const TABS: { label: string; view: LeaderboardView }[] = [
   { label: "Top Wins", view: "alltime" },
@@ -16,11 +21,15 @@ const TABS: { label: string; view: LeaderboardView }[] = [
 
 export default function LeaderboardPage() {
   const { address } = useAccount();
-  const { data: gameCount } = useGameCounter();
   const { history } = useGameHistory();
   const [tab, setTab] = useState<LeaderboardView>("alltime");
   const { data: chainRows = [] } = useLeaderboardOnchain(tab);
   const hasChain = chainRows.length > 0;
+  // Header figures are global (every indexed player), whatever tab is open.
+  const { data: allRows } = useLeaderboardOnchain("alltime");
+  const totals = allRows ? leaderboardTotals(allRows as AllTimeRow[]) : undefined;
+  const { data: feed = [] } = useGlobalGames(50);
+  const recentWins = useMemo(() => feed.filter((g) => g.outcome === "won").slice(0, 4), [feed]);
 
   const localStats = useMemo(() => {
     if (!history.length) return null;
@@ -69,12 +78,6 @@ export default function LeaderboardPage() {
       .slice(0, 10);
   }, [history]);
 
-  const recentWins = useMemo(() => history.filter((g) => g.won).slice(0, 4), [history]);
-  const activePlayers = useMemo(
-    () => new Set(history.map((g) => g.player.toLowerCase())).size,
-    [history],
-  );
-
   return (
     <div className="px-3 sm:px-6 lg:px-8 pb-16 min-h-screen">
       <div className="flex justify-between items-end mb-6 sm:mb-8 pt-2 sm:pt-0">
@@ -93,11 +96,11 @@ export default function LeaderboardPage() {
               Total PnL
             </div>
             <div
-              className={`font-headline text-2xl font-bold ${localStats && localStats.totalPnl >= 0 ? "text-primary" : "text-error"}`}
+              className={`font-headline text-2xl font-bold ${!totals || totals.pnlSol >= 0 ? "text-primary" : "text-error"}`}
             >
-              {localStats
-                ? (localStats.totalPnl >= 0 ? "+" : "") + localStats.totalPnl.toFixed(3)
-                : "+0.000"}{" "}
+              {totals
+                ? (totals.pnlSol >= 0 ? "+" : "") + formatSolAmount(totals.pnlSol)
+                : "—"}{" "}
               SOL
             </div>
           </div>
@@ -106,7 +109,7 @@ export default function LeaderboardPage() {
               Active Operators
             </div>
             <div className="font-headline text-2xl font-bold text-tertiary">
-              {activePlayers || gameCount?.toString() || "0"}
+              {totals ? totals.players : "—"}
             </div>
           </div>
         </div>
@@ -159,13 +162,13 @@ export default function LeaderboardPage() {
               const isMe = address && row.player.toLowerCase() === address.toLowerCase();
               const cellA =
                 tab === "alltime"
-                  ? `${(("biggest_win" in row ? row.biggest_win : 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL`
+                  ? `${formatSolAmount(("biggest_win" in row ? row.biggest_win : 0) / LAMPORTS_PER_SOL)} SOL`
                   : tab === "volume"
-                    ? `${(("total_wagered" in row ? row.total_wagered : 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL`
+                    ? `${formatSolAmount(("total_wagered" in row ? row.total_wagered : 0) / LAMPORTS_PER_SOL)} SOL`
                     : `${"best_streak" in row ? row.best_streak : 0}`;
               const cellB =
                 tab === "alltime"
-                  ? `${(("biggest_loss" in row ? Number(row.biggest_loss) : 0) / LAMPORTS_PER_SOL).toFixed(3)} SOL`
+                  ? `${formatSolAmount(("biggest_loss" in row ? Number(row.biggest_loss) : 0) / LAMPORTS_PER_SOL)} SOL`
                   : tab === "volume"
                     ? `${"games_played" in row ? row.games_played : 0}`
                     : `${"games_won" in row ? row.games_won : 0}`;
@@ -220,7 +223,7 @@ export default function LeaderboardPage() {
                     </div>
                   </div>
                   <span className="font-headline text-xs sm:text-sm font-bold text-primary whitespace-nowrap">
-                    {stats.biggestWin.toFixed(3)} SOL
+                    {formatSolAmount(stats.biggestWin)} SOL
                   </span>
                   <span className="hidden sm:inline font-headline text-sm font-bold text-secondary">
                     {stats.biggestMult.toFixed(1)}×
@@ -261,21 +264,21 @@ export default function LeaderboardPage() {
             <div className="divide-y divide-outline-variant/5">
               {recentWins.length > 0 ? (
                 recentWins.map((g) => (
-                  <div key={`${g.gameId}-${g.timestamp}`} className="px-5 py-3">
+                  <div key={g.signature} className="px-5 py-3">
                     <div className="flex justify-between items-start">
                       <div className="font-headline text-xs font-bold text-on-surface uppercase">
                         {g.player.slice(0, 8)}…
                       </div>
                       <span className="font-headline text-[10px] text-on-surface-variant/40">
-                        {Math.max(1, Math.floor((Date.now() - g.timestamp) / 1000))}s ago
+                        {formatAgo(g.time)}
                       </span>
                     </div>
                     <div className="flex justify-between items-center mt-1">
                       <span className="font-headline text-sm font-bold text-primary">
-                        +{g.payout.toFixed(3)} SOL
+                        +{formatSolAmount(Number(g.payout) / LAMPORTS_PER_SOL)} SOL
                       </span>
                       <span className="px-2 py-0.5 bg-emerald/10 text-emerald font-headline text-[10px] font-bold">
-                        {g.multiplier.toFixed(1)}×
+                        {(g.multiplierBps / 10_000).toFixed(1)}×
                       </span>
                     </div>
                   </div>
@@ -311,7 +314,7 @@ export default function LeaderboardPage() {
                 />
                 <StatRow
                   label="Biggest Win"
-                  value={localStats.biggestWin.toFixed(3) + " SOL"}
+                  value={formatSolAmount(localStats.biggestWin) + " SOL"}
                   color="text-tertiary"
                 />
                 <StatRow
@@ -323,7 +326,7 @@ export default function LeaderboardPage() {
                   label="Total PnL"
                   value={
                     (localStats.totalPnl >= 0 ? "+" : "") +
-                    localStats.totalPnl.toFixed(3) +
+                    formatSolAmount(localStats.totalPnl) +
                     " SOL"
                   }
                   color={localStats.totalPnl >= 0 ? "text-primary" : "text-error"}

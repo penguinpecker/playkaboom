@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --conditions=react-server --import tsx --test src/server/house-signer.test.ts src/server/cron/vrf-passes.test.ts src/server/verify-vrf.test.ts src/server/rpc-proxy.test.ts src/server/proxy-ip.test.ts src/server/public-api-input.test.ts src/server/vrf-settle.test.ts src/server/vault-history.test.ts && node --import tsx --test src/hooks/use-pyth.test.ts src/lib/vault-capacity.test.ts src/lib/vrf/start-cost.test.ts",
+    "test": "node --conditions=react-server --import tsx --test src/server/house-signer.test.ts src/server/cron/vrf-passes.test.ts src/server/verify-vrf.test.ts src/server/rpc-proxy.test.ts src/server/proxy-ip.test.ts src/server/public-api-input.test.ts src/server/vrf-settle.test.ts src/server/vault-history.test.ts src/app/api/price/sol/route.test.ts && node --import tsx --test src/hooks/use-pyth.test.ts src/lib/vault-capacity.test.ts src/lib/vrf/start-cost.test.ts src/stores/game-store.test.ts src/lib/site-stats.test.ts src/components/layout/status-host.test.ts",
     "test:db": "node --conditions=react-server --import tsx --test src/server/db/data-layer.test.ts src/server/cron/tick.test.ts",
     "clean": "rimraf .next .turbo node_modules/.cache"
   },

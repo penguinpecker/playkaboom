@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useModal } from "@/hooks/useModal";
 import { PROGRAM_ID } from "@/lib/cluster";
+import { useGameLink } from "./status-host";
 
 // Footer links are chips, not bare text. They started at 7px and 20% opacity —
 // in the DOM but unreadable — so terms, privacy and the socials effectively did
@@ -18,6 +19,7 @@ const chipCls =
 
 export function Footer() {
   const { open } = useModal();
+  const toGame = useGameLink();
   return (
     <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4 border-t border-outline-variant/20 bg-surface-container-low px-5 py-6 md:px-8 md:py-7">
       <div className="font-headline text-[13px] font-bold tracking-[.12em] uppercase whitespace-nowrap text-white">
@@ -54,10 +56,10 @@ export function Footer() {
         >
           Solscan
         </a>
-        <Link href="/terms" className={chipCls}>
+        <Link {...toGame("/terms")} className={chipCls}>
           Terms
         </Link>
-        <Link href="/privacy" className={chipCls}>
+        <Link {...toGame("/privacy")} className={chipCls}>
           Privacy
         </Link>
       </nav>

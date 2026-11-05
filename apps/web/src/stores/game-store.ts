@@ -83,6 +83,46 @@ interface GameState {
 
 const TOKEN_KEY = "playkaboom.gameToken.v1";
 
+/** Why the vault can't cover `n` mines at the minimum bet right now, or null
+ *  when it can. A cap of 0 means the vault hasn't loaded yet, not a refusal. */
+export function mineCountBlockReason(n: number, cap: number, minBet: number): string | null {
+  if (!(cap > 0) || cap >= minBet) return null;
+  // One decimal under 10x: a 1.1x shortfall must not read "1x".
+  const x = minBet / cap;
+  return `Vault can't cover ${n} mines right now — needs ${x.toFixed(x < 10 ? 1 : 0)}x more bankroll`;
+}
+
+/** The mine count to hold while idle: `current` while the vault covers it (or
+ *  is still loading), else the first option it does cover. */
+export function coverableMineCount(
+  current: number,
+  caps: Record<number, number>,
+  minBet: number,
+): number {
+  if (!mineCountBlockReason(current, caps[current] ?? 0, minBet)) return current;
+  return MINE_OPTIONS.find((n) => (caps[n] ?? 0) >= minBet) ?? current;
+}
+
+/** The wallet-balance reason a bet can't go through, or null. With no wallet
+ *  connected there is no balance to fall short of: Engage asks to connect. */
+export function balanceBlockReason(
+  hasWallet: boolean,
+  bet: number,
+  balance: number,
+  overheadSol: number,
+  minBet: number,
+): string | null {
+  if (!hasWallet) return null;
+  const affordable = Math.max(0, balance - overheadSol);
+  if (balance > 0 && affordable < minBet) {
+    return `A round needs ~${overheadSol.toFixed(4)} SOL of refundable rent + gas on top of your bet, and it must be in the wallet up front. You have ${balance.toFixed(4)} SOL — top up to about ${(overheadSol + minBet).toFixed(3)} SOL to play. Nearly all of it comes back when the round closes.`;
+  }
+  if (bet > affordable) {
+    return `Bet + ~${overheadSol.toFixed(4)} SOL of refundable rent exceeds your balance. Most you can bet right now is ${affordable.toFixed(4)} SOL.`;
+  }
+  return null;
+}
+
 const initial: Pick<
   GameState,
   | "status"
