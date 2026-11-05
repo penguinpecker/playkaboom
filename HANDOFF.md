@@ -1,6 +1,6 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot to pick up where the last session left off. Top section refreshed **2026-11-05** (relaunch); the rest was refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
+A self-contained snapshot to pick up where the last session left off. Top section refreshed **2026-11-05** (relaunch, K Points); the rest was refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
 
 ## STATUS — 2026-11-05: RELAUNCHED (Pinocchio, VRF-only, Railway API + Vercel frontend)
 
@@ -19,7 +19,9 @@ A self-contained snapshot to pick up where the last session left off. Top sectio
 | `vault.treasury` | `qouUoXTxNrFYw9DA7yCAnPXfAi9ypNWq2HPf5UMF9WG` | the deployer, temporarily |
 | Vault V2 State | `Gtkn8TeTHgMF6bhEYmXy3cDcmmQyjbbY3WHXtY3td8Ue` | |
 | VRF validator | `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57` | `as.magicblock.app` |
-| `vrf_max_payout_bps` | 1000 (10%) | |
+| `vrf_max_payout_bps` | 5000 (50%) | an AGGREGATE cap over every open VRF game, not per game; set by the owner 2026-11-05 |
+| Min bet (UI) | 0.01 SOL | `GAME_CONFIG.MIN_BET_SOL`; MagicBlock keeps ~0.003 SOL per delegated round on top |
+| Vault | ~1.075 SOL on 2026-11-05 | owner rule: keep the vault at about 1 SOL; live values at `/api/vault/state` |
 
 **House key.** A raw keypair, held only as the sealed Railway variable `HOUSE_SECRET_KEY` on the kaboom-web service (`apps/web/src/server/house-signer.ts`). It can only do bounded cleanup and settlement: VRF settle, force-undelegate and refund, legacy wind-down, and LP auto-complete. Because the program is VRF-only, it cannot start a commit-reveal game. It is never on Vercel and never in the repo.
 
@@ -32,6 +34,18 @@ A self-contained snapshot to pick up where the last session left off. Top sectio
 | Retired | Supabase, Turnkey, the API on Vercel |
 
 Runbook: `pinocchio/MIGRATION/DEPLOY.md` (DNS stays on Vercel; there is no DNS move). Secrets inventory: `docs/security/secrets.md`.
+
+**Shipped 2026-11-05** (all live on Vercel + Railway and pushed):
+- **K Points.** Every settled round earns `bet × edge ÷ 0.00002 SOL` (1 per 0.001 SOL at 2%), win or lose, from the existing `points_ledger` engine (`apps/web/src/server/points.ts`). `/api/leaderboard` returns `kPoints` (the `points_balance` total) on every row of every view, and the leaderboard shows a K POINTS column. Never expose `points_ledger` rows directly.
+- **LP K Points.** Cron pass `lp-points` (`apps/web/src/server/cron/lp-points-pass.ts`) credits each user LP position `K_POINTS_LP_PER_SOL_HOUR` (default 10) per SOL of live position value once per UTC hour, with exact carry in `lp_points_accrual` (migration `20261105000002_lp_points.sql`). A pending withdrawal earns 0 for that hour and resumes the hour after a cancel; house and seed units never earn; missed hours are not back-filled.
+- **Payout speed.** House txs use a confirmed blockhash and retry the empty-logs preflight case; `/api/vrf/settle` polls its own read before answering; the client retries settle on 409/429/5xx; the RPC proxy has its own 300/10 s budget per client (client IP forwarded by the Vercel middleware with a shared secret).
+- **Session keys** are kept until their gas sweep is confirmed; the LP deposit cap applies the house-share floor; `/api/verify` reports refunds; maintenance banner removed; link-preview image `og.png` is opaque on the brand background (`?v=2`).
+- **Real-money check:** 30 rounds (1 mine, 0.01 SOL): every payout, VRF replay, treasury cut and referral accrual matched the chain exactly; the referrer's claim paid in full.
+
+Open owner decisions:
+- `min_house_share_bps` is 50% with tiny house units, so the LP max deposit is 0 (LP deposits revert). Lower it or keep LP closed.
+- Whether to show MagicBlock's ~0.003 SOL per-round fee in the game UI.
+- Frontend shakedown (test browser + one Privy email login) still to run; MAX button and mine-count selection by vault capacity still pending.
 
 Owner to-dos:
 - The old Turnkey house wallet `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` is retired but still holds ~0.97 SOL. Sweep it from the Turnkey dashboard.

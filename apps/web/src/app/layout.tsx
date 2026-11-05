@@ -36,13 +36,13 @@ export const metadata: Metadata = {
     // Fresh URL (was /kaboom-logo.png) — busts Telegram/X/Discord OG caches
     // that pinned the older brand mark. The file is identical, just at a
     // dedicated OG path.
-    images: [{ url: "/og.png", width: 400, height: 400, alt: "PlayKaboom" }],
+    images: [{ url: "/og.png?v=2", width: 400, height: 400, alt: "PlayKaboom" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "PlayKaboom",
     description: "A Fully Onchain Minesweeper Style Game with Community owned Defi Vault!",
-    images: ["/og.png"],
+    images: ["/og.png?v=2"],
   },
   robots: { index: true, follow: true },
 };

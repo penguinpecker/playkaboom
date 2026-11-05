@@ -2,7 +2,7 @@
 
 > A fully on-chain Minesweeper-style game with a community-owned DeFi vault, built on Solana.
 
-[![Live](https://img.shields.io/badge/live-playkaboom.gg-a4c9ff?style=flat-square)](https://www.playkaboom.gg)
+[![Live](https://img.shields.io/badge/live-playkaboom.gg-a4c9ff?style=flat-square)](https://playkaboom.gg)
 [![Status](https://img.shields.io/badge/status-status.playkaboom.gg-22c55e?style=flat-square)](https://status.playkaboom.gg)
 [![Solana](https://img.shields.io/badge/solana-mainnet--beta-9945FF?style=flat-square&logo=solana&logoColor=white)](#architecture)
 [![MagicBlock](https://img.shields.io/badge/rollup-MagicBlock%20ER%20%2B%20VRF-ff6b35?style=flat-square)](https://magicblock.gg/)
@@ -28,7 +28,8 @@ keeps only the instructions that wind down old ones.
 > `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` (a Pinocchio port, VRF-only). The old program
 > `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05. Turnkey and Supabase
 > are retired: the API, its database and the relay run on Railway, and the frontend runs on
-> Vercel. The live addresses and setup are in [HANDOFF.md](HANDOFF.md).
+> Vercel. Minimum bet 0.01 SOL. **K Points** (loyalty points for play and vault deposits) are
+> live on the leaderboard. The live addresses and setup are in [HANDOFF.md](HANDOFF.md).
 
 ---
 
@@ -36,11 +37,17 @@ keeps only the instructions that wind down old ones.
 
 | | |
 |---|---|
-| Web app | <https://www.playkaboom.gg> |
-| Public status | <https://status.playkaboom.gg> |
+| Web app | <https://playkaboom.gg> |
+| Play | <https://playkaboom.gg/play> |
+| LP vault | <https://playkaboom.gg/vault> |
+| Leaderboard (K Points) | <https://playkaboom.gg/leaderboard> |
+| Referrals | <https://playkaboom.gg/referrals> |
+| Game log | <https://playkaboom.gg/logs> |
+| Public status | <https://status.playkaboom.gg> (JSON: <https://status.playkaboom.gg/api/status>) |
+| Vault state (JSON) | <https://playkaboom.gg/api/vault/state> |
 | Cluster | `mainnet-beta` |
 | Rollup | MagicBlock ephemeral rollup, pinned validator + pinned VRF oracle queue |
-| Program | `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` (Pinocchio, VRF-only) |
+| Program | [`Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju`](https://solscan.io/account/Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju) (Pinocchio, VRF-only) |
 
 The only key the server holds is the house key: a raw keypair kept only as a sealed variable
 on the Railway API service (never on Vercel, never in the repo). It is confined to bounded
@@ -224,6 +231,22 @@ stay live during the cooldown, still earning or losing.
 
 ---
 
+## K Points
+
+K Points are PlayKaboom's loyalty points. They are kept in the API's database, not on chain,
+and each player's lifetime total is the **K POINTS** column on the
+[leaderboard](https://playkaboom.gg/leaderboard).
+
+| Earned by | Rate |
+|---|---|
+| Playing | 1 K Point per 0.001 SOL bet on every settled round, win or lose (at the 2% house edge; scales with the edge the round was played at). Refunded rounds earn 0. |
+| LP vault | 10 K Points per SOL of LP value per hour, credited hourly (UTC) with fractions carried over. A position with a pending withdrawal earns nothing until the request is cancelled. House and seed capital never earn. |
+
+Each round and each LP hour is credited once (idempotent on the transaction or hour). An hour
+in which the server did not run is not credited later.
+
+---
+
 ## Status & transparency
 
 `status.playkaboom.gg` is a public, unauthenticated health page on its own subdomain,
@@ -367,6 +390,6 @@ Report vulnerabilities via [SECURITY.md](SECURITY.md) or [@playkaboomgg](https:/
 ## Repository
 
 - Source: [github.com/penguinpecker/playkaboom](https://github.com/penguinpecker/playkaboom)
-- Live: [playkaboom.gg](https://www.playkaboom.gg) · Status: [status.playkaboom.gg](https://status.playkaboom.gg)
+- Live: [playkaboom.gg](https://playkaboom.gg) · Status: [status.playkaboom.gg](https://status.playkaboom.gg) · Leaderboard: [playkaboom.gg/leaderboard](https://playkaboom.gg/leaderboard)
 - X: [@playkaboomgg](https://x.com/playkaboomgg)
 - License: MIT
