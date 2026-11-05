@@ -47,3 +47,13 @@ test("paused or missing vault quotes no limit", () => {
   const paused = { ...vault, paused: true } as VaultAccount;
   assert.deepEqual(vaultLimits(LAMPORTS, paused, v2(), RENT, true), { maxBetLamports: 0n, maxPayoutLamports: 0n });
 });
+
+// The vault panel toasts this decoder's text, never the raw simulation log
+// (2026-11-05: an LP deposit showed "custom program error: 0x1791" verbatim).
+test("decodeProgramError: LP deposit 6033 (0x1791) decodes to the house-share message", async () => {
+  const { decodeProgramError } = await import("./program-errors");
+  const raw = 'Simulation failed. Logs: [ "Program log: Instruction: LpDeposit", "Program Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju failed: custom program error: 0x1791" ]';
+  const msg = decodeProgramError(raw);
+  assert.match(msg, /house share/i);
+  assert.doesNotMatch(msg, /0x1791|Simulation failed/);
+});

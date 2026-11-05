@@ -10,6 +10,7 @@ import {
 } from "@/hooks/use-vault-lp";
 import { useToast } from "@/components/providers/toast";
 import { formatCooldown } from "@/lib/format";
+import { decodeProgramError } from "@/lib/program-errors";
 
 const fmtSol = (lamports: bigint | number) =>
   (Number(typeof lamports === "bigint" ? lamports : BigInt(lamports)) /
@@ -73,6 +74,11 @@ export function VaultLpPanel() {
   // house-share floor can still refuse every deposit.
   const maxDepositSol = state?.effectiveMaxUserDepositSol ?? 0;
   const depositCapDisabled = maxDepositSol >= 2 ** 60 / LAMPORTS_PER_SOL;
+  // Mirrors the program's cap (house-share floor, per-user cap): an amount
+  // above it can only revert, so the button refuses it up front.
+  const depositSol = Number(amount);
+  const depositAllowed =
+    Number.isFinite(depositSol) && depositSol > 0 && (depositCapDisabled || depositSol <= maxDepositSol + 1e-9);
   const maxDepositLabel = depositCapDisabled
     ? "No limit"
     : `${maxDepositSol.toFixed(3)} SOL`;
@@ -124,8 +130,7 @@ export function VaultLpPanel() {
         toast(`${label} confirmed`, "success");
       })
       .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : "failed";
-        toast(`${label} failed: ${msg}`, "error");
+        toast(`${label} failed: ${decodeProgramError(err instanceof Error ? err.message : null)}`, "error");
       })
       .finally(() => {
         busyRef.current = false;
@@ -217,7 +222,7 @@ export function VaultLpPanel() {
             className="w-full bg-surface-container-low border-none font-headline font-bold text-lg text-primary px-3 py-2 mb-3 outline-none"
           />
           <button
-            disabled={busy}
+            disabled={busy || (authenticated && !depositAllowed)}
             onClick={run("Deposit", () => deposit(amount))}
             className="w-full py-3 bg-gradient-to-r from-primary to-primary-container text-on-primary font-headline font-bold text-xs tracking-widest disabled:opacity-50 hover:brightness-110 active:scale-95 transition-all"
           >
