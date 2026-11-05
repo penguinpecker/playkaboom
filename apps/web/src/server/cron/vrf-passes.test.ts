@@ -11,6 +11,7 @@ import { Keypair, type Connection } from "@solana/web3.js";
 import type { VrfClaimAccount, VrfGameAccount } from "@playkaboom/sdk";
 import { settleDue, shouldForce } from "./vrf-passes";
 import { FALLBACK_MS_PER_SLOT, msPerSlot } from "../connection";
+import { logger } from "../logger";
 
 type Sig = { err: unknown; blockTime: number | null };
 const now = () => Math.floor(Date.now() / 1000);
@@ -38,7 +39,7 @@ const delegated = (age: number) => ({
 const g = (status: VrfGameAccount["status"], pending = false) => ({ status, pending }) as VrfGameAccount;
 const force = (sigs: Sig[] | "rpc-error", status: VrfGameAccount["status"], age: number, pending = false, ms = MS) =>
   shouldForce(conn(sigs), delegated(age), g(status, pending), SLOT, ms);
-const due = (sigs: Sig[] | "rpc-error", age: number, ms = MS) => settleDue(conn(sigs), game, age, ms);
+const due = (sigs: Sig[] | "rpc-error", age: number, ms = MS) => settleDue(conn(sigs), game, age, ms, "Won");
 
 test("pass a: WON/LOST settles once the claim hits the cap, even while the game looks busy", async () => {
   assert.equal(await due([FRESH], CAP), true);
@@ -99,4 +100,34 @@ test("msPerSlot measures from performance samples, caches, and falls back low", 
   const up = { getRecentPerformanceSamples: async () => samples };
   assert.equal(await msPerSlot(up), 120_000 / 561); // ~213.9 ms
   assert.equal(await msPerSlot(down), 120_000 / 561); // RPC failure keeps the measurement
+});
+
+test("a skip other than 'not idle yet' is warned with game, status, age and reason, once a minute", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const warn = t.mock.method(logger, "warn", () => {});
+  const l1 = Keypair.generate().publicKey;
+  const args = (i: number) => warn.mock.calls[i]!.arguments[0];
+
+  // Not idle yet is the normal wait: silent.
+  assert.equal(await settleDue(conn([FRESH]), l1, 150, MS, "Won"), false);
+  assert.equal(warn.mock.callCount(), 0);
+
+  // L1 idle-check RPC failure: reported (150 slots x 400 ms = 60 s).
+  assert.equal(await settleDue(conn("rpc-error"), l1, 150, MS, "Lost"), false);
+  assert.equal(warn.mock.callCount(), 1);
+  assert.deepEqual(args(0), { game: l1.toBase58(), status: "Lost", ageS: 60, reason: "L1 idle check RPC failed: rpc down" });
+
+  // The same stuck game inside the minute: not again. After a minute: again.
+  await settleDue(conn("rpc-error"), l1, 150, MS, "Lost");
+  assert.equal(warn.mock.callCount(), 1);
+  t.mock.timers.tick(60_000);
+  await settleDue(conn("rpc-error"), l1, 300, MS, "Lost");
+  assert.equal(warn.mock.callCount(), 2);
+
+  // ER idle-check RPC failure on a terminal delegated game: reported, still not forced.
+  const er = Keypair.generate().publicKey;
+  const d = { player: er, game: er, claim: { startSlot: BigInt(SLOT - 250) } as VrfClaimAccount };
+  assert.equal(await shouldForce(conn("rpc-error"), d, g("Won"), SLOT, MS), false);
+  assert.equal(warn.mock.callCount(), 3);
+  assert.deepEqual(args(2), { game: er.toBase58(), status: "Won", ageS: 100, reason: "ER idle check RPC failed: rpc down" });
 });

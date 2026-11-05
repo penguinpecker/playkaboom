@@ -10,7 +10,7 @@ import { trailingApy } from "@/server/vault-history";
 import { jsonError } from "@/server/api-helpers";
 import { vaultLimits } from "@/lib/vault-capacity";
 import {
-  effectiveMaxUserPositionLamports,
+  maxDepositLamports,
   healthBps,
   lamportsToSol,
   unitValueE18,
@@ -86,14 +86,15 @@ export async function GET() {
       // Health-factor and effective caps so the frontend can disable buttons.
       healthBps: health,
       minHealthBps: v2.minHealthBps,
-      // 0 ⇒ per-user deposit cap disabled on-chain; the effective-cap value
-      // above is then a "no limit" sentinel, not a real ceiling.
+      // 0 ⇒ per-user deposit cap disabled on-chain.
       maxUserPositionBps: v2.maxUserPositionBps,
       // Largest bet any mine count accepts (1 mine), and the VRF payout cap.
       effectiveMaxBetSol: lamportsToSol(limits.maxBetLamports),
       effectiveMaxPayoutSol: lamportsToSol(limits.maxPayoutLamports),
+      // Per-user cap AND the house-share floor (6033); 0 when no deposit can
+      // pass, the "no limit" sentinel only when neither applies.
       effectiveMaxUserDepositSol: lamportsToSol(
-        effectiveMaxUserPositionLamports(v2, vaultAssets, health),
+        maxDepositLamports(v2, vaultAssets, health),
       ),
       withdrawCooldownSlots: v2.withdrawCooldownSlots.toString(),
       // Measured slot time, not a nominal 400 ms (mainnet runs ~214 ms).

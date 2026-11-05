@@ -27,9 +27,14 @@ import {
   settleAndUndelegateVrf,
   settleAndUndelegateVrfAsPlayer,
   sweepSession,
+  addPendingSweep,
+  parkReplacedSession,
+  pendingSweepKey,
+  sweepPendingSessions,
   waitForCommittedResult,
   waitForUndelegation,
   pollVrfGame,
+  type KeyStore,
   type SignTx,
   type VrfEngineConfig,
 } from "@/lib/vrf/client";
@@ -110,6 +115,14 @@ async function claimOpen(connection: Connection, player: PublicKey): Promise<boo
   }
 }
 
+function keyStore(): KeyStore | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function useVrfGame(): VrfActions {
   const { authenticated, getAccessToken } = usePrivy();
   const { wallets } = useWallets();
@@ -148,13 +161,15 @@ export function useVrfGame(): VrfActions {
       sessionRef.current = kp;
       if (!sessionStorageKey || typeof window === "undefined") return;
       try {
-        if (kp) window.localStorage.setItem(sessionStorageKey, JSON.stringify(Array.from(kp.secretKey)));
-        else window.localStorage.removeItem(sessionStorageKey);
+        if (kp) {
+          parkReplacedSession(window.localStorage, sessionStorageKey, pendingSweepKey(wallet!.address), kp);
+          window.localStorage.setItem(sessionStorageKey, JSON.stringify(Array.from(kp.secretKey)));
+        } else window.localStorage.removeItem(sessionStorageKey);
       } catch {
         /* storage unavailable — in-memory still works for this tab */
       }
     },
-    [sessionStorageKey],
+    [sessionStorageKey, wallet],
   );
 
   const loadSession = useCallback((): Keypair | null => {
@@ -213,6 +228,37 @@ export function useVrfGame(): VrfActions {
     if (!erConn) return null;
     return { l1: connection, er: erConn, programId: PROGRAM_ID, oracleQueue: VRF_QUEUE };
   }, [connection, erConn]);
+
+  /** Sweep finished rounds' keys still holding gas (+ `extra`). Never throws. */
+  const sweepLeftovers = useCallback(
+    (extra: Keypair[] = []) => {
+      if (!cfg || !wallet) return Promise.resolve();
+      const player = new PublicKey(wallet.address);
+      return sweepPendingSessions(keyStore(), pendingSweepKey(wallet.address), (kp) => sweepSession(cfg, kp, player), extra);
+    },
+    [cfg, wallet],
+  );
+
+  /**
+   * A round is over: put its session key on the sweep list, THEN drop it from
+   * the live slot, then return its gas in the background.
+   *
+   * The key used to be forgotten right after a sweep that swallowed its own
+   * failure, which threw away the gas for good (g18, 2026-11-05). Now it is
+   * forgotten only once its sweep confirms the key empty; a failed sweep stays
+   * on the list and is retried on the next mount and before the next round.
+   * Its own slot, so the next round's key can never overwrite it.
+   */
+  const retireSession = useCallback(
+    (kp: Keypair | null) => {
+      if (kp && wallet) addPendingSweep(keyStore(), pendingSweepKey(wallet.address), kp);
+      const live = loadSession();
+      // Clear the live slot only if it still holds THIS key, never a newer round's.
+      if (!kp || !live || live.publicKey.equals(kp.publicKey)) rememberSession(null);
+      if (kp) void sweepLeftovers([kp]);
+    },
+    [wallet, loadSession, rememberSession, sweepLeftovers],
+  );
 
   const signPlayer: SignTx = useCallback(
     async (tx: Transaction) => {
@@ -300,13 +346,9 @@ export function useVrfGame(): VrfActions {
         // failure here doesn't lose funds. Surface but don't revert state.
         toast("Payout finalizing shortly…", "amber");
       }
-      // Cleanup runs regardless, and its failure is never the player's problem.
-      try {
-        await sweepSession(cfg, session, player);
-      } catch (e) {
-        console.warn("[vrf] session gas sweep failed (dust left behind):", e);
-      }
-      rememberSession(null);
+      // Cleanup runs regardless, and its failure is never the player's problem:
+      // the gas sweep runs in the background and a failed one keeps the key.
+      retireSession(session);
       return settled;
       } finally {
         // Always clear, even on a thrown settle — otherwise the genuine
@@ -314,7 +356,7 @@ export function useVrfGame(): VrfActions {
         store.setPendingClose(false);
       }
     },
-    [cfg, store, toast, rememberSession],
+    [cfg, store, toast, retireSession],
   );
 
   const startGame = useCallback(async () => {
@@ -328,7 +370,7 @@ export function useVrfGame(): VrfActions {
       // account already in use" (custom error 0x0), which surfaces as a raw
       // simulation dump the player cannot act on. Say what is actually wrong.
       const [existingClaim] = deriveVrfClaimPda(PROGRAM_ID, player);
-      const prior = await connection.getAccountInfo(existingClaim, "confirmed").catch(() => null);
+      const prior = await connection.getAccountInfo(existingClaim, "confirmed").catch(() => undefined);
       if (prior) {
         let unsettled = false;
         try {
@@ -344,6 +386,13 @@ export function useVrfGame(): VrfActions {
           return;
         }
       }
+      // No open round (read OK, not an RPC error): a key still in the live slot
+      // is a FINISHED round's, and this round's key is about to overwrite it.
+      // Retire it first. Either way earlier failed sweeps get another go. Not
+      // awaited — a sweep never holds up the start.
+      const stale = prior !== undefined ? loadSession() : null;
+      if (stale) retireSession(stale);
+      else void sweepLeftovers();
       store.setStatus("starting");
       // Referral link: bundle set_referrer into the player's first start (one
       // signature, atomic). Skipped on any error; /referrals keeps the manual
@@ -425,7 +474,7 @@ export function useVrfGame(): VrfActions {
     } finally {
       inflightRef.current = false;
     }
-  }, [cfg, wallet, authenticated, store, signPlayer, connection, rememberSession, getAccessToken]);
+  }, [cfg, wallet, authenticated, store, signPlayer, connection, rememberSession, getAccessToken, loadSession, retireSession, sweepLeftovers]);
 
   const revealTile = useCallback(
     async (idx: number) => {
@@ -541,9 +590,9 @@ export function useVrfGame(): VrfActions {
   }, [cfg, wallet, store, settleFlow, loadSession, toast, connection]);
 
   const resetGame = useCallback(() => {
-    rememberSession(null);
+    retireSession(loadSession());
     store.reset();
-  }, [store, rememberSession]);
+  }, [store, retireSession, loadSession]);
 
   /**
    * Recover a game this browser walked away from.
@@ -566,14 +615,7 @@ export function useVrfGame(): VrfActions {
     // has no claim left; both L1 routes would 404. It is resolved: sweep the
     // key and report success so the board resets.
     if (!(await claimOpen(connection, playerKey))) {
-      if (cfg && stored) {
-        try {
-          await sweepSession(cfg, stored, playerKey);
-        } catch (e) {
-          console.warn("[vrf] session dust sweep failed:", e);
-        }
-      }
-      rememberSession(null);
+      retireSession(stored);
       return true;
     }
     // A STORED KEY IS NOT NECESSARILY THIS GAME'S KEY. localStorage survives
@@ -714,15 +756,7 @@ export function useVrfGame(): VrfActions {
       // game. When recovery runs on an already-undelegated round `session` is
       // null but a funded key may still sit in storage — clearing it without
       // sweeping permanently abandoned ~0.002 SOL of the player's own money.
-      const toSweep = session ?? stored;
-      if (cfg && toSweep) {
-        try {
-          await sweepSession(cfg, toSweep, playerKey);
-        } catch (e) {
-          console.warn("[vrf] session dust sweep failed:", e);
-        }
-      }
-      rememberSession(null);
+      retireSession(session ?? stored);
     };
     // STATUS decides, not ownership. A game carrying a terminal result must be
     // SETTLED — that is how the player gets paid — and only a game that is
@@ -750,7 +784,7 @@ export function useVrfGame(): VrfActions {
     } catch {
       return false;
     }
-  }, [wallet, cfg, connection, loadSession, rememberSession, signPlayerEr, store]);
+  }, [wallet, cfg, connection, loadSession, retireSession, signPlayerEr, store]);
   cleanupRef.current = cleanupStuck;
 
   // Run recovery once per wallet on mount: a leftover claim means a previous
@@ -764,18 +798,28 @@ export function useVrfGame(): VrfActions {
     if (!cfg || !wallet || !authenticated) return;
     if (recoveredRef.current === wallet.address) return;
     recoveredRef.current = wallet.address;
+    // Retry gas sweeps that failed on an earlier visit. Background, never blocks.
+    void sweepLeftovers();
     if (store.status !== "idle") return;
     let cancelled = false;
     void (async () => {
       const playerKey = new PublicKey(wallet.address);
       const [claimPda] = deriveVrfClaimPda(PROGRAM_ID, playerKey);
-      const info = await connection.getAccountInfo(claimPda, "confirmed").catch(() => null);
-      if (!info || cancelled) return;
-      let claim: ReturnType<typeof decodeVrfClaim>;
+      // Read BEFORE the claim, so a round started meanwhile (new key) is never retired below.
+      const liveKey = loadSession();
+      const info = await connection.getAccountInfo(claimPda, "confirmed").catch(() => undefined);
+      if (info === undefined || cancelled) return; // RPC error: decide nothing
+      let claim: ReturnType<typeof decodeVrfClaim> | null;
       try {
-        claim = decodeVrfClaim(info.data as Buffer);
-        if (claim.settled) return;
+        claim = info ? decodeVrfClaim(info.data as Buffer) : null;
       } catch {
+        return;
+      }
+      if (!claim || claim.settled) {
+        // No open round, so a key left in the live slot is a finished round's
+        // (e.g. the tab closed before its sweep): retire it before the next
+        // round's key overwrites it.
+        if (liveKey) retireSession(liveKey);
         return;
       }
 
@@ -844,7 +888,7 @@ export function useVrfGame(): VrfActions {
     return () => {
       cancelled = true;
     };
-  }, [cfg, wallet, authenticated, connection, store.status, cleanupStuck, loadSession, store]);
+  }, [cfg, wallet, authenticated, connection, store.status, cleanupStuck, loadSession, store, retireSession, sweepLeftovers]);
 
   return { startGame, revealTile, cashOut, resetGame, cleanupStuck };
 }

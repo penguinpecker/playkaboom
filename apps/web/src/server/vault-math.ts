@@ -70,6 +70,52 @@ export function effectiveMaxUserPositionLamports(
   );
 }
 
+/**
+ * "Max single deposit": the per-user cap above, further limited by the
+ * house-share floor lp_deposit enforces (6033, pinocchio/kaboom-p ix/v2_lp.rs):
+ *   units  = floor(amount × total_units / vault_assets)        (deposit_to_units)
+ *   user   = total − seed − house − house_pending + units      (user_units_total)
+ *   passes iff house × 10_000 ≥ min_house_share_bps × (house + user)
+ * The floor is the same for every depositor. 0 when not even min_lp_deposit can
+ * pass; the sentinel only when neither limit applies.
+ */
+export function maxDepositLamports(
+  v2: VaultV2StateAccount,
+  vaultAssets: bigint,
+  health: number,
+): bigint {
+  let max = effectiveMaxUserPositionLamports(v2, vaultAssets, health);
+  const bps = BigInt(v2.minHouseShareBps);
+  if (bps > 0n) {
+    const user = v2.totalUnits - v2.seedUnits - v2.houseUnits - v2.housePendingUnits;
+    const room = (v2.houseUnits * (BPS - bps)) / bps - user; // most units one deposit may mint
+    const byFloor =
+      room <= 0n ? 0n
+      : v2.totalUnits === 0n ? room
+      : vaultAssets <= 0n ? 0n
+      // floor(a × T / A) ≤ room  ⇔  a ≤ ((room + 1) × A − 1) / T
+      : ((room + 1n) * vaultAssets - 1n) / v2.totalUnits;
+    if (byFloor < max) max = byFloor;
+  }
+  return max < v2.minLpDeposit ? 0n : max;
+}
+
+/**
+ * The unit_value (×1e18) an lp_deposit was priced at, i.e. just BEFORE it, from
+ * its LpDeposited event (which carries the after-state): assets_after =
+ * assets_pre + amount, total_units_after = total_pre + units_minted. The first
+ * deposit into an empty vault mints one unit per lamport.
+ */
+export function depositUnitValueE18(ev: {
+  amountLamports: bigint;
+  unitsMinted: bigint;
+  totalUnitsAfter: bigint;
+  vaultAssetsAfter: bigint;
+}): bigint {
+  const totalPre = ev.totalUnitsAfter - ev.unitsMinted;
+  return totalPre === 0n ? SCALE : unitValueE18(ev.vaultAssetsAfter - ev.amountLamports, totalPre);
+}
+
 export function lamportsToSol(lamports: bigint): number {
   return Number(lamports) / LAMPORTS_PER_SOL;
 }

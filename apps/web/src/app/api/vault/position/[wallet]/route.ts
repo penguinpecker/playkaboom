@@ -86,7 +86,8 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
         () => null,
       ),
       query(
-        "select signature, action, units_delta, lamports_delta, unit_value_lamports, slot, block_time from public.lp_actions where user_address = $1 order by block_time desc limit 50",
+        // ::text — an e18 unit value is ~1e18, past 2^53: as a number its low digits round.
+        "select signature, action, units_delta, lamports_delta, unit_value_lamports::text as unit_value_lamports, slot, block_time from public.lp_actions where user_address = $1 order by block_time desc limit 50",
         [walletStr],
       ).catch(() => null),
     ]);

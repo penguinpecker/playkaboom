@@ -66,9 +66,9 @@ export async function GET(req: NextRequest) {
       // returns null unless the tx is a real, successful top-level settle_vrf or refund_stalled_vrf
       // (log text alone is spoofable); the player comes from its accounts.
       const v = await verifyVrfSettle(tx);
-      // Refunds ("expired") keep the old 400 here until the owner approves how
-      // the page shows them; /api/verify/[signature] already returns them.
-      if (v && v.verified && v.outcome !== "expired") {
+      // Refunds come back as outcome "expired" (payout = the bet, 1.00×), the
+      // same verdict /api/verify/[signature] returns, in the row the page renders.
+      if (v && v.verified) {
         return NextResponse.json({
           found: true,
           settleSource: "input",
@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
             // From the round's start tx and MagicBlock's commit. Unknown is null
             // ("—" on the page), never a made-up 0.
             mine_count: v.mineCount ?? null,
-            // won / lost (refunds are held back above).
+            // won / lost / expired (refund).
             outcome: v.outcome,
             safe_reveals: v.safeReveals ?? null,
             // VRF draws randomness per click from the oracle; there is no

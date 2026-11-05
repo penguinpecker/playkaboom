@@ -419,31 +419,146 @@ export async function cashOutVrfAsPlayer(
  *
  * Without this the funding is a pure loss every round — at the minimum bet the
  * abandoned dust would exceed the bet itself, and it never reaches the vault or
- * treasury either, so it is worse than a fee for everyone. Best-effort: a
- * failure here costs only dust, so callers should not treat it as fatal.
+ * treasury either, so it is worse than a fee for everyone.
+ *
+ * Returns true once the key holds nothing a sweep could move (swept now, or
+ * already empty) — ONLY then may the caller forget the key. false means the
+ * lamports are still there: keep the key and retry later. Forgetting a key
+ * whose sweep failed lost 0.002 SOL (20% of a minimum bet) on 2026-11-05 (g18).
+ *
+ * g18 failed preflight with "Transaction simulation failed" and EMPTY logs: the
+ * transaction never reached the program, i.e. the load-balanced RPC node that
+ * simulated it was behind the one that served the blockhash/balance (same
+ * transient as server/solana.ts isTransientPreflightError). So each attempt
+ * re-reads the balance and sendIx signs against a fresh blockhash.
+ *
+ * Fee: asked of the cluster for this exact message, not assumed. The session
+ * pays its own fee and must end at exactly 0 lamports — a guess that is low
+ * fails the transfer, one that is high leaves a sub-rent remainder, which
+ * fails too (InsufficientFundsForRent).
  */
 export async function sweepSession(
   cfg: VrfEngineConfig,
   session: Keypair,
   player: PublicKey,
-): Promise<string | null> {
-  const balance = await cfg.l1.getBalance(session.publicKey, "confirmed");
-  const FEE = 5000;
-  if (balance <= FEE) return null;
-  try {
-    return await sendIx(
-      cfg.l1,
-      SystemProgram.transfer({
-        fromPubkey: session.publicKey,
-        toPubkey: player,
-        lamports: balance - FEE,
-      }),
-      session.publicKey,
-      keypairSigner(session),
-    );
-  } catch {
-    return null;
+  attempts = 3,
+): Promise<boolean> {
+  const from = session.publicKey;
+  const transfer = (lamports: number) => SystemProgram.transfer({ fromPubkey: from, toPubkey: player, lamports });
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await sleep(1_000 * i);
+    try {
+      const balance = await cfg.l1.getBalance(from, "confirmed");
+      if (balance === 0) return true;
+      const probe = new Transaction().add(transfer(balance));
+      probe.feePayer = from;
+      probe.recentBlockhash = (await cfg.l1.getLatestBlockhash("confirmed")).blockhash;
+      const fee =
+        (await cfg.l1.getFeeForMessage(probe.compileMessage(), "confirmed").then((r) => r.value, () => null)) ??
+        5_000; // 1 signature, no priority fee
+      if (balance <= fee) return true; // can't even pay its own fee: nothing recoverable
+      await sendIx(cfg.l1, transfer(balance - fee), from, keypairSigner(session), async () =>
+        (await cfg.l1.getBalance(from, "confirmed")) === 0,
+      );
+      return true;
+    } catch (e) {
+      console.warn(`[vrf] session sweep attempt ${i + 1}/${attempts} failed:`, e);
+    }
   }
+  return false;
+}
+
+/** Storage surface for keys awaiting a sweep (window.localStorage in the app). */
+export type KeyStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+/** localStorage slot holding session keys of FINISHED rounds that still need a sweep. */
+export const pendingSweepKey = (wallet: string) => `kaboom:vrf-sweep:${wallet}`;
+
+export function readPendingSweeps(store: KeyStore | null, key: string): Keypair[] {
+  let raw: string | null = null;
+  try {
+    raw = store?.getItem(key) ?? null;
+  } catch {
+    return [];
+  }
+  if (!raw) return [];
+  try {
+    return (JSON.parse(raw) as number[][]).flatMap((s) => {
+      try {
+        return [Keypair.fromSecretKey(Uint8Array.from(s))];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writePendingSweeps(store: KeyStore | null, key: string, kps: Keypair[]): void {
+  try {
+    if (kps.length) store?.setItem(key, JSON.stringify(kps.map((k) => Array.from(k.secretKey))));
+    else store?.removeItem(key);
+  } catch {
+    /* storage unavailable — the in-tab sweep still runs */
+  }
+}
+
+/** Record a finished round's session key so it survives until its sweep lands. */
+export function addPendingSweep(store: KeyStore | null, key: string, kp: Keypair): void {
+  const list = readPendingSweeps(store, key);
+  if (!list.some((k) => k.publicKey.equals(kp.publicKey))) writePendingSweeps(store, key, [...list, kp]);
+}
+
+/**
+ * The live slot is about to hold `next`. A DIFFERENT key still in it (a start
+ * whose open-round read failed could not retire it) goes on the sweep list
+ * first, so overwriting the slot never forgets a funded key. Parked only at the
+ * moment it is overwritten, so a key the live slot still points at is never swept.
+ */
+export function parkReplacedSession(store: KeyStore | null, liveSlot: string, sweepSlot: string, next: Keypair): void {
+  let prev: Keypair;
+  try {
+    const raw = store?.getItem(liveSlot);
+    if (!raw) return;
+    prev = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw) as number[]));
+  } catch {
+    return;
+  }
+  if (!prev.publicKey.equals(next.publicKey)) addPendingSweep(store, sweepSlot, prev);
+}
+
+// Per-key single flight: the VRF hook is mounted in ~6 components at once.
+const sweepsInFlight = new Set<string>();
+
+/**
+ * Sweep every pending key (plus `extra`) and forget ONLY the ones `sweep`
+ * reports empty. A failed sweep stays on the list for the next mount or the
+ * next round. Never throws.
+ */
+export async function sweepPendingSessions(
+  store: KeyStore | null,
+  key: string,
+  sweep: (kp: Keypair) => Promise<boolean>,
+  extra: Keypair[] = [],
+): Promise<void> {
+  await Promise.all(
+    [...readPendingSweeps(store, key), ...extra].map(async (kp) => {
+      const id = kp.publicKey.toBase58();
+      if (sweepsInFlight.has(id)) return;
+      sweepsInFlight.add(id);
+      try {
+        if (await sweep(kp)) {
+          // Re-read: a key added while this sweep ran must not be dropped.
+          writePendingSweeps(store, key, readPendingSweeps(store, key).filter((k) => !k.publicKey.equals(kp.publicKey)));
+        }
+      } catch {
+        /* keep it for the next attempt */
+      } finally {
+        sweepsInFlight.delete(id);
+      }
+    }),
+  );
 }
 
 /**

@@ -3,6 +3,7 @@ import { extractEventsFromLogs, type KaboomEvent, type PlayerStatsAccount } from
 import { pgCode, query, rpc, upsert } from "./db/pg";
 import { programId } from "./env";
 import { logger } from "./logger";
+import { depositUnitValueE18 } from "./vault-math";
 import { awardPoints } from "./points";
 
 // House edge that was live when this rev of the indexer shipped. Captured
@@ -542,8 +543,8 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
     // ─── Phase 2: LP vault events ─────────────────────────────────────────
     case "LpDeposited": {
       const userKey = ev.user.toBase58();
-      const unitValue =
-        ev.totalUnitsAfter > 0n ? (ev.vaultAssetsAfter * 10n ** 18n) / ev.totalUnitsAfter : 0n;
+      // The price the units were minted at (before the deposit), not after.
+      const unitValue = depositUnitValueE18(ev);
       await unchecked("lp_actions.upsert", upsert(
         "lp_actions",
         {

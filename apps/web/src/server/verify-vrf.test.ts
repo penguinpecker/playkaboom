@@ -27,6 +27,7 @@ import {
   ixDiscriminator,
 } from "@playkaboom/sdk";
 import { GET as verifyQuery } from "@/app/api/verify/route";
+import { GET as verifyBySig } from "@/app/api/verify/[signature]/route";
 import { getConnection } from "./connection";
 import { programId } from "./env";
 import { settleVrfAccounts, verifyVrfSettle } from "./verify-vrf";
@@ -153,7 +154,7 @@ test("a capped treasury cut does not move the bet (it is read, never back-solved
   assert.equal(v?.betLamports, "1000000");
 });
 
-test("/api/verify answers a lost round with its real counts; the page copy and refund 400 are unchanged", async () => {
+test("/api/verify answers a lost round with its real counts and a refund like /api/verify/<sig>; the page copy is unchanged", async () => {
   process.env.SOLANA_RPC ??= "http://fixtures.invalid";
   replay(getConnection());
   const get = async (sig: string) => {
@@ -167,9 +168,21 @@ test("/api/verify answers a lost round with its real counts; the page copy and r
   assert.equal(lost.body.game.safe_reveals, 5);
   // Owner rule (11-05): no copy changes, so the printed first line is the published one.
   assert.match(lost.body.game.howThisIsVerified[0], /^bet = treasury_cut x 1e8 \/ \(house_edge_bps \d+ x treasury_split_bps \d+\)$/);
-  // A refund still renders as before (400) until the owner approves its page.
+  // A refund (VOID) gets the row the page renders, with /api/verify/<sig>'s verdict.
   const refund = await get(ROUNDS[5]!.sig);
-  assert.equal(refund.status, 400);
+  assert.equal(refund.status, 200);
+  const bySig = await (
+    await verifyBySig(new NextRequest(`http://localhost/api/verify/${ROUNDS[5]!.sig}`), {
+      params: Promise.resolve({ signature: ROUNDS[5]!.sig }),
+    })
+  ).json();
+  assert.equal(bySig.outcome, "expired");
+  const g = refund.body.game;
+  assert.deepEqual(
+    [g.outcome, g.verified, g.bet, g.payout, g.multiplier_bps, g.mine_count, g.safe_reveals, g.player, g.mode, g.howThisIsVerified],
+    [bySig.outcome, bySig.verified, bySig.betLamports, bySig.payoutLamports, bySig.multiplierBps, bySig.mineCount, bySig.safeReveals, bySig.player, "vrf", bySig.howThisIsVerified],
+  );
+  assert.equal(g.payout, g.bet); // a refund pays back exactly the bet
 });
 
 test("an unreadable commit tx leaves reveals unknown, never a wrong replay or a thrown verify", async () => {

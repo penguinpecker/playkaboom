@@ -56,6 +56,28 @@ const SIG_WINDOW = 20; // newest txs scanned for the last successful one
 const MAX_TX_PER_KIND = 15;
 
 type Delegated = { player: PublicKey; game: PublicKey; claim: VrfClaimAccount };
+type At = { game: PublicKey; status: string; ageMs: number };
+
+const WARN_EVERY_MS = 60_000;
+// ponytail: per-process map, cleared wholesale past 10k games; enough for one replica.
+const lastWarn = new Map<string, number>();
+
+/**
+ * Warn that the cron left a game alone this tick for a reason other than "not
+ * idle yet" (RPC failure, per-tick cap, failed send, ER has no game). A stuck
+ * game warns at most once a minute.
+ */
+function warnSkip(at: At, reason: string) {
+  const game = at.game.toBase58();
+  const now = Date.now();
+  const last = lastWarn.get(game);
+  if (last !== undefined && now - last < WARN_EVERY_MS) return;
+  if (lastWarn.size > 10_000) lastWarn.clear();
+  lastWarn.set(game, now);
+  logger.warn({ game, status: at.status, ageS: Math.round(at.ageMs / 1000), reason }, "cron: vrf game skipped");
+}
+
+const errMsg = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 200);
 
 function decodeOr<T>(f: (b: Buffer) => T, data: Buffer): T | null {
   try {
@@ -93,18 +115,19 @@ export async function runVrfPasses() {
   }
 
   const res = { claims: claims.size, settled: 0, refunded: 0, forced: 0, errors: [] as string[], needsReview: [] as string[] };
-  const fail = (what: string, player: PublicKey, e: unknown) => {
+  const fail = (what: string, player: PublicKey, e: unknown, at: At) => {
     res.errors.push(`${what} ${player.toBase58().slice(0, 8)}: ${(e as Error)?.message ?? e}`);
+    warnSkip(at, `${what} failed: ${errMsg(e)}`);
   };
-  const refund = async (player: PublicKey) => {
-    if (res.refunded >= MAX_TX_PER_KIND) return;
+  const refund = async (player: PublicKey, at: At) => {
+    if (res.refunded >= MAX_TX_PER_KIND) return warnSkip(at, `refund cap (${MAX_TX_PER_KIND}/tick) reached`);
     try {
       const sig = await sendHouseTx([buildRefundStalledVrf({ ctx: { programId: pid }, player, caller: house })]);
       void indexFreshSignature(sig);
       res.refunded++;
       logger.info({ player: player.toBase58(), sig }, "cron: vrf refund");
     } catch (e) {
-      fail("refund", player, e);
+      fail("refund", player, e, at);
     }
   };
 
@@ -117,21 +140,26 @@ export async function runVrfPasses() {
     onL1.add(key);
     const claim = claims.get(key);
     if (!claim) continue; // F6 orphan or already closed
+    const at: At = { game: a.pubkey, status: g.status, ageMs: (slot - Number(claim.startSlot)) * slotMs };
     if (g.status === "Won" || g.status === "Lost") {
-      if (res.settled >= MAX_TX_PER_KIND) continue;
-      if (!(await settleDue(conn, a.pubkey, slot - Number(claim.startSlot), slotMs))) continue;
+      if (res.settled >= MAX_TX_PER_KIND) {
+        warnSkip(at, `settle cap (${MAX_TX_PER_KIND}/tick) reached`);
+        continue;
+      }
+      if (!(await settleDue(conn, a.pubkey, slot - Number(claim.startSlot), slotMs, g.status))) continue;
       try {
         const sig = await sendSettleVrf(g.player);
         void indexFreshSignature(sig);
         void mirrorVrfSettle(sig, g.player, claim, g);
         res.settled++;
+        logger.info({ player: key, sig, status: g.status, ageS: Math.round(at.ageMs / 1000) }, "cron: vrf settle");
       } catch (e) {
-        fail("settle", g.player, e);
+        fail("settle", g.player, e, at);
       }
     } else if (g.status === "Void") {
-      await refund(g.player);
+      await refund(g.player, at);
     } else if (g.safeReveals === 0 && !g.pending) {
-      if ((slot - Number(claim.startSlot)) * slotMs >= SETTLED_IDLE_MS) await refund(g.player);
+      if ((slot - Number(claim.startSlot)) * slotMs >= SETTLED_IDLE_MS) await refund(g.player, at);
     } else {
       // PLAYING with progress on L1 cannot happen after the round-2 F3 fix
       // (an undelegate ends the game first). Never refund it: that would
@@ -152,20 +180,33 @@ export async function runVrfPasses() {
     if (delegated.length > 0) {
       const er = getErConnection();
       const erGames = await getMany(er, delegated.map((d) => d.game));
-      for (let i = 0; i < delegated.length && res.forced < MAX_TX_PER_KIND; i++) {
+      for (let i = 0; i < delegated.length; i++) {
         const d = delegated[i]!;
         const info = erGames[i];
         const g: VrfGameAccount | null = info ? decodeOr(decodeVrfGame, info.data) : null;
-        if (!g) continue;
+        const ageMs = (slot - Number(d.claim.startSlot)) * slotMs;
+        if (!g) {
+          warnSkip({ game: d.game, status: "unknown", ageMs }, "delegated on L1 but the ER returned no decodable game");
+          continue;
+        }
+        const at: At = { game: d.game, status: g.status, ageMs };
+        if (res.forced >= MAX_TX_PER_KIND) {
+          // Same stop as before (no RPC, no send); terminal games left over are reported.
+          if (g.status !== "Playing") warnSkip(at, `force cap (${MAX_TX_PER_KIND}/tick) reached`);
+          continue;
+        }
         if (!(await shouldForce(er, d, g, slot, slotMs))) continue;
         try {
           const sig = await sendHouseErTx([
             buildForceUndelegateVrf({ ctx: { programId: pid }, player: d.player, house }),
           ]);
           res.forced++;
-          logger.info({ player: d.player.toBase58(), sig, status: g.status }, "cron: vrf force undelegate");
+          logger.info(
+            { player: d.player.toBase58(), sig, status: g.status, ageS: Math.round(ageMs / 1000) },
+            "cron: vrf force undelegate",
+          );
         } catch (e) {
-          fail("force", d.player, e);
+          fail("force", d.player, e, at);
         }
       }
     }
@@ -181,8 +222,17 @@ export async function settleDue(
   game: PublicKey,
   age: number,
   slotMs: number,
+  status: string,
 ): Promise<boolean> {
-  return age * slotMs >= FORCE_AGE_MS || idleFor(conn, game, SETTLED_IDLE_MS);
+  const ageMs = age * slotMs;
+  if (ageMs >= FORCE_AGE_MS) return true;
+  try {
+    const t = await lastOkTxTime(conn, game, "confirmed");
+    return t == null || Date.now() - t * 1000 >= SETTLED_IDLE_MS;
+  } catch (e) {
+    warnSkip({ game, status, ageMs }, `L1 idle check RPC failed: ${errMsg(e)}`);
+    return false; // retry next tick
+  }
 }
 
 export async function shouldForce(
@@ -204,18 +254,9 @@ export async function shouldForce(
     // No ER tx (delegated, never revealed) or no time: idle since the start.
     if (t == null) return ageMs >= idleMs;
     return Date.now() - t * 1000 >= idleMs;
-  } catch {
+  } catch (e) {
     // No idle signal: the age cap above forces it later.
-    return false;
-  }
-}
-
-/** True when the newest successful L1 tx on `account` is at least `ms` old (or has no time). RPC error: false, retry next tick. */
-async function idleFor(conn: ReturnType<typeof getConnection>, account: PublicKey, ms: number): Promise<boolean> {
-  try {
-    const t = await lastOkTxTime(conn, account, "confirmed");
-    return t == null || Date.now() - t * 1000 >= ms;
-  } catch {
+    warnSkip({ game: d.game, status: g.status, ageMs }, `ER idle check RPC failed: ${errMsg(e)}`);
     return false;
   }
 }
