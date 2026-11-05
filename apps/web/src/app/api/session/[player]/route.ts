@@ -14,7 +14,7 @@ import {
 } from "@playkaboom/shared";
 import { jsonError } from "@/server/api-helpers";
 import { verifyPlayerAuth } from "@/server/auth";
-import { getConnection } from "@/server/connection";
+import { getConnection, msPerSlot } from "@/server/connection";
 import { loadSession } from "@/server/session-store";
 import { encryptSession } from "@/server/session";
 import { programId, vrfModeEnabled } from "@/server/env";
@@ -36,7 +36,7 @@ interface RouteContext {
  *
  * Authed: only the wallet's owner can resume.
  */
-/** ~10s at 400ms/slot — mirrors STALL_SLOTS in programs/kaboom/src/vrf_mode.rs. */
+/** Mirrors STALL_SLOTS in pinocchio/kaboom-p/src/consts.rs (~5 s at the measured ~214 ms/slot). */
 const VRF_STALL_SLOTS = 25;
 
 /**
@@ -122,7 +122,7 @@ async function vrfSessionState(conn: Connection, pk: PublicKey) {
     refund: {
       refundable,
       slotsUntilRefund: Math.max(0, slotsUntilRefund),
-      secondsUntilRefund: refundable ? 0 : Math.max(0, Math.ceil(slotsUntilRefund * 0.4)),
+      secondsUntilRefund: refundable ? 0 : Math.max(0, Math.ceil((slotsUntilRefund * (await msPerSlot(conn))) / 1000)),
     },
   };
 }
@@ -170,7 +170,9 @@ export async function GET(req: NextRequest, ctx: RouteContext) {
     const expirySlot = startSlot + expirySlots;
     const slotsUntilRefund = expirySlot - currentSlot;
     const refundable = slotsUntilRefund <= 0;
-    const secondsUntilRefund = refundable ? 0 : Math.max(0, Math.ceil(slotsUntilRefund * 0.4));
+    const secondsUntilRefund = refundable
+      ? 0
+      : Math.max(0, Math.ceil((slotsUntilRefund * (await msPerSlot(conn))) / 1000));
 
     return NextResponse.json({
       active: true,

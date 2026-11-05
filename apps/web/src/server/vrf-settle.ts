@@ -1,10 +1,14 @@
 import "server-only";
-import type { PublicKey } from "@solana/web3.js";
+import type { PublicKey, VersionedTransactionResponse } from "@solana/web3.js";
 import {
   buildSettleVrf,
+  decodePlayerStats,
+  decodeReferralAccount,
+  derivePlayerStatsPda,
   deriveReferralPda,
   deriveVrfGamePda,
   extractKaboomError,
+  type PlayerStatsAccount,
   type VrfClaimAccount,
   type VrfGameAccount,
 } from "@playkaboom/sdk";
@@ -61,10 +65,43 @@ export async function mirrorVrfSettle(
       logger.warn({ sig }, "vrf settle not confirmed — not mirroring");
       return;
     }
+    const conn = getConnection();
+    const pid = programId();
+    // The tx itself carries its slot, block time and the referral cut it moved.
+    let tx: VersionedTransactionResponse | null = null;
+    for (let i = 0; i < 5 && !tx; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1_000)); // RPC can lag the confirmation
+      tx = await conn
+        .getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
+        .catch(() => null);
+    }
+    if (!tx) logger.warn({ sig }, "vrf settle tx not readable: mirroring with write-time slot, no referral row");
+
+    // Same referrer the settle was built with (F5: its PDA is in the tx when set).
+    let stats: PlayerStatsAccount | null = null;
+    let referral: { referrer: string; amount: bigint; tier: number } | null = null;
+    try {
+      const referrer = await fetchPlayerReferrer(player);
+      const referralPda = referrer ? deriveReferralPda(pid, referrer)[0] : null;
+      const [statsPda] = derivePlayerStatsPda(pid, player);
+      const [statsInfo, referralInfo] = await conn.getMultipleAccountsInfo(
+        referralPda ? [statsPda, referralPda] : [statsPda],
+        "confirmed",
+      );
+      if (statsInfo) stats = decodePlayerStats(statsInfo.data as Buffer);
+      const cut = tx && referralPda ? lamportDelta(tx, referralPda) : null;
+      // Tier after the settle, as the legacy ReferralAccrued event reported it.
+      if (referrer && cut !== null && referralInfo) {
+        referral = { referrer: referrer.toBase58(), amount: cut, tier: decodeReferralAccount(referralInfo.data as Buffer).tier };
+      }
+    } catch (e) {
+      logger.error({ err: e, sig }, "vrf mirror account reads failed: no stats or referral row");
+    }
+
     const won = game.status === "Won";
     await recordVrfGame({
       signature: sig,
-      gamePda: deriveVrfGamePda(programId(), player)[0].toBase58(),
+      gamePda: deriveVrfGamePda(pid, player)[0].toBase58(),
       player: player.toBase58(),
       betLamports: claim.bet,
       payoutLamports: won ? (claim.bet * BigInt(game.multiplierBps)) / 10_000n : 0n,
@@ -72,10 +109,25 @@ export async function mirrorVrfSettle(
       safeReveals: game.safeReveals,
       mineCount: claim.mineCount,
       won,
-      slot: await getConnection().getSlot("confirmed").catch(() => 0),
-      blockTime: new Date().toISOString(),
+      slot: tx?.slot ?? (await conn.getSlot("confirmed").catch(() => 0)),
+      blockTime: new Date((tx?.blockTime ?? Date.now() / 1000) * 1000).toISOString(),
+      stats,
+      referral,
     });
   } catch (e) {
     logger.error({ err: e, sig }, "vrf mirror write failed");
   }
+}
+
+/** Lamports `account` gained in `tx` (null: not one of its accounts). */
+export function lamportDelta(tx: VersionedTransactionResponse, account: PublicKey): bigint | null {
+  const keys = [
+    ...tx.transaction.message.staticAccountKeys,
+    ...(tx.meta?.loadedAddresses?.writable ?? []),
+    ...(tx.meta?.loadedAddresses?.readonly ?? []),
+  ];
+  const i = keys.findIndex((k) => k.equals(account));
+  const pre = tx.meta?.preBalances[i];
+  const post = tx.meta?.postBalances[i];
+  return i < 0 || pre === undefined || post === undefined ? null : BigInt(post) - BigInt(pre);
 }

@@ -9,6 +9,9 @@ import { useVaultCapacity, useMaxBetByMineCount } from "@/hooks/useContracts";
 import { usePythSolUsd, formatUsd, solToUsd } from "@/hooks/use-pyth";
 import { GAME_CONFIG } from "@/lib/chain";
 import { VRF_MODE_ENABLED } from "@/lib/cluster";
+import { vrfStartOverheadLamports } from "@/lib/vrf/start-cost";
+import { usePlayerStats } from "@/hooks/use-player-stats";
+import { getPendingReferrer, useReferralAccount } from "@/hooks/use-referral";
 import { useToast } from "@/components/providers/toast";
 import type { StuckGameInfo } from "@/hooks/use-game-resume";
 
@@ -27,34 +30,6 @@ interface Props {
    *  recovery actions (resume / refund / force-close). */
   stuckInfo?: StuckGameInfo;
 }
-
-/**
- * Lamports a VRF round needs UP FRONT, on top of the bet.
- *
- * Starting a game is ONE atomic transaction, so all of this must be affordable
- * at the same instant:
- *
- *   VrfClaim rent         1,371,120
- *   VrfGame rent          5,213,040
- *   session key funding   2,000,000   (swept back at settle)
- *   delegation accounts   3,206,600   (~2,901,600 returned on undelegate)
- *   tx fee                    5,000
- *   ─────────────────────────────────
- *                        11,795,760   = 0.011796 SOL
- *
- * MEASURED, NOT ESTIMATED. An earlier version of this constant used 1,642,560
- * for the delegation cost because that was the number in the failure message —
- * but that is only the LAST transfer that ran out of money, not the total. The
- * delegation program had already spent 1,559,040 creating its buffer and
- * record accounts before that transfer. Taking the figure from the symptom
- * under-counted the requirement by 1.56M lamports and the gate let through a
- * bet that could not possibly land. The value below is derived from real
- * DelegateVrf balance deltas (-3,206,600 on every observed round).
- *
- * Nearly all of it returns when the round closes; the wallet just has to hold
- * it at the moment of the bet.
- */
-const VRF_STARTUP_OVERHEAD_SOL = 11_795_760 / 1_000_000_000;
 
 const fmtSeconds = (s: number) => {
   if (s <= 0) return "now";
@@ -109,8 +84,22 @@ export function BetControls({ stuckInfo }: Props = {}) {
   const MIN_BET_SOL = 0.001;
   const { data: pyth } = usePythSolUsd();
   const [walletBalance, setWalletBalance] = useState(0);
+  const [pendingRef, setPendingRef] = useState<string | null>(null);
+  // What THIS player's start will create (lib/vrf/start-cost.ts): their stats
+  // account on a first game, and the referrer's account when use-vrf-game
+  // bundles set_referrer (a pending referral link and no referrer yet).
+  // Unknown (loading / RPC error) counts as "will create": errs high.
+  const walletAddress = wallets[0]?.address ?? null;
+  const { data: playerStats } = usePlayerStats(walletAddress);
+  const setsReferrer = !!pendingRef && pendingRef !== walletAddress && !playerStats?.referrer;
+  const { data: referralAccount } = useReferralAccount(setsReferrer ? pendingRef : null);
   // Only VRF carries the rollup overhead; commit-reveal funds far less up front.
-  const startupOverheadSol = VRF_MODE_ENABLED ? VRF_STARTUP_OVERHEAD_SOL : 0;
+  const startupOverheadSol = VRF_MODE_ENABLED
+    ? vrfStartOverheadLamports({
+        statsExists: !!playerStats,
+        createsReferralAccount: setsReferrer && !referralAccount,
+      }) / LAMPORTS_PER_SOL
+    : 0;
   const affordableBet = Math.max(0, walletBalance - startupOverheadSol);
   const cannotAffordStartup = walletBalance > 0 && affordableBet < MIN_BET_SOL;
   // Dynamic busy timer (replaces the fixed 5s ENGAGE_LOCKOUT countdown).
@@ -208,7 +197,10 @@ export function BetControls({ stuckInfo }: Props = {}) {
       try {
         const { PublicKey: PK } = await import("@solana/web3.js");
         const b = await connection.getBalance(new PK(publicKey.toBase58()));
-        if (!cancelled) setWalletBalance(b / LAMPORTS_PER_SOL);
+        if (!cancelled) {
+          setWalletBalance(b / LAMPORTS_PER_SOL);
+          setPendingRef(getPendingReferrer());
+        }
       } catch {
         /* noop */
       }

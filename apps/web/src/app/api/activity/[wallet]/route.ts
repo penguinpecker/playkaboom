@@ -95,8 +95,9 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
     for (const r of refAccrued.data ?? []) {
       // Only include the "paid by me" record if it's NOT already in ref_received
       // (would be the same row when player == referrer, which can't happen due
-      // to SelfReferral on chain — so dedupe is just defensive).
-      if (!events.some((e) => e.signature === r.signature)) {
+      // to SelfReferral on chain — so dedupe is just defensive). Only against
+      // ref_received: a VRF game row shares its settle signature with this row.
+      if (!events.some((e) => e.kind === "ref_received" && e.signature === r.signature)) {
         events.push({
           kind: "ref_paid",
           signature: r.signature,

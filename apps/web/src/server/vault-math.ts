@@ -70,26 +70,6 @@ export function effectiveMaxUserPositionLamports(
   );
 }
 
-export function effectiveMaxBetLamports(
-  vaultAssets: bigint,
-  baseMaxBetBps: number,
-  health: number,
-): bigint {
-  return (
-    (((vaultAssets * BigInt(baseMaxBetBps)) / BPS) * BigInt(health)) / BPS
-  );
-}
-
-export function effectiveMaxPayoutLamports(
-  vaultAssets: bigint,
-  baseMaxPayoutBps: number,
-  health: number,
-): bigint {
-  return (
-    (((vaultAssets * BigInt(baseMaxPayoutBps)) / BPS) * BigInt(health)) / BPS
-  );
-}
-
 export function lamportsToSol(lamports: bigint): number {
   return Number(lamports) / LAMPORTS_PER_SOL;
 }

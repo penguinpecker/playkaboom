@@ -9,7 +9,7 @@ import {
   deriveVaultPda,
   deriveV2StatePda,
 } from "@playkaboom/sdk";
-import { getConnection } from "@/server/connection";
+import { getConnection, msPerSlot } from "@/server/connection";
 import { query } from "@/server/db/pg";
 import { programId, vrfModeEnabled } from "@/server/env";
 
@@ -152,6 +152,7 @@ async function checkSolana(): Promise<Component[]> {
       filters: [{ memcmp: { offset: 0, bytes: bs58.encode(disc) } }],
     });
     const now = await conn.getSlot("confirmed");
+    const slotMs = await msPerSlot(conn);
     let stuckLamports = 0;
     let oldestSlots = 0;
     let count = 0;
@@ -160,9 +161,9 @@ async function checkSolana(): Promise<Component[]> {
         const g = decodeGameSession(account.data as Buffer);
         if (g.settled) continue;
         const age = now - Number(g.startSlot);
-        // GAME_EXPIRY_SLOTS is 300 (~2 min). Anything an hour past that is
+        // GAME_EXPIRY_SLOTS is 300 (~1 min). Anything an hour past that is
         // not a live round, it is capital nobody is coming back for.
-        if (age < 9_000) continue;
+        if (age * slotMs < 3_600_000) continue;
         count += 1;
         stuckLamports += Number(g.maxPayout);
         oldestSlots = Math.max(oldestSlots, age);
@@ -170,7 +171,7 @@ async function checkSolana(): Promise<Component[]> {
         /* not a GameSession */
       }
     }
-    return { count, stuckLamports, oldestSlots };
+    return { count, stuckLamports, oldestSlots, slotMs };
   });
 
   const st = stuckProbe.value;
@@ -183,7 +184,7 @@ async function checkSolana(): Promise<Component[]> {
       ? "unreadable"
       : st.count === 0
         ? "no abandoned games holding bankroll"
-        : `${st.count} abandoned game${st.count > 1 ? "s" : ""} reserving ${(st.stuckLamports / 1e9).toFixed(4)} SOL · oldest ${((st.oldestSlots * 0.4) / 86_400).toFixed(1)} days`,
+        : `${st.count} abandoned game${st.count > 1 ? "s" : ""} reserving ${(st.stuckLamports / 1e9).toFixed(4)} SOL · oldest ${((st.oldestSlots * st.slotMs) / 86_400_000).toFixed(1)} days`,
     meta: st && st.count > 0 ? { reservedSol: Number((st.stuckLamports / 1e9).toFixed(4)), games: st.count } : undefined,
   };
 
@@ -298,7 +299,7 @@ async function checkDatabase(): Promise<Component[]> {
   const indexedSlot = probe.value?.indexedSlot ?? null;
   const newestSlot = probe.value?.chainSlot ?? null;
   const behind = indexedSlot !== null && newestSlot !== null ? Math.max(0, newestSlot - indexedSlot) : null;
-  const behindMin = behind !== null ? (behind * 0.4) / 60 : null;
+  const behindMin = behind !== null ? (behind * (await msPerSlot(conn))) / 60_000 : null;
   const indexer: Component = {
     id: "indexer",
     label: "Indexer",

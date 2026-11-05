@@ -9,14 +9,20 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { Keypair, PublicKey } from "@solana/web3.js";
-import { eventDiscriminator } from "@playkaboom/sdk";
+import { Connection, Keypair, PublicKey, type VersionedTransactionResponse } from "@solana/web3.js";
+import {
+  accountDiscriminator,
+  deriveReferralPda,
+  eventDiscriminator,
+  type VrfClaimAccount,
+  type VrfGameAccount,
+} from "@playkaboom/sdk";
 import pg from "pg";
 
 const PROGRAM = "Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju";
 process.env.PROGRAM_ID = PROGRAM;
 process.env.SESSION_ENC_KEY = randomBytes(32).toString("hex");
-process.env.SOLANA_RPC = "http://127.0.0.1:9"; // recordVrfGame's stats read fails fast (non-fatal)
+process.env.SOLANA_RPC = "http://127.0.0.1:9"; // nothing listens: chain reads are mocked per test
 process.env.LOG_LEVEL ??= "silent";
 
 // Imported after the env above is set (the logger reads LOG_LEVEL at import).
@@ -27,6 +33,8 @@ let m: {
   codes: typeof import("../referral-codes");
   tracking: typeof import("../referral-tracking");
   sessions: typeof import("../session-store");
+  vrf: typeof import("../vrf-settle");
+  history: typeof import("../vault-history");
 };
 const query: typeof import("./pg").query = (sql, params) => m.pg.query(sql, params);
 
@@ -79,6 +87,8 @@ before(async () => {
     codes: await import("../referral-codes"),
     tracking: await import("../referral-tracking"),
     sessions: await import("../session-store"),
+    vrf: await import("../vrf-settle"),
+    history: await import("../vault-history"),
   };
   const [{ n } = { n: 0 }] = await query<{ n: number }>("select count(*) as n from public.games");
   if (n > 0) throw new Error("public.games has rows: refusing to run on a non-empty database");
@@ -264,4 +274,142 @@ test("session store: save, load from DB, delete", async () => {
   assert.deepEqual(row, { created_slot: 11, bet_lamports: 5 });
   await m.sessions.deleteSession(player);
   assert.equal(await m.sessions.loadSession(player), null);
+});
+
+// ── VRF settle mirror (QA 11-04: settle_vrf emits no events) ────────────────
+
+const BT = Date.parse("2026-11-04T23:07:38Z") / 1000;
+function statsData(player: PublicKey, referrer: PublicKey, biggestMultiplierBps: bigint) {
+  const b = Buffer.alloc(8 + 32 + 2 + 6 * 8 + 4 + 4 + 8 + 1 + 32);
+  accountDiscriminator("PlayerStats").copy(b, 0);
+  player.toBuffer().copy(b, 8);
+  let o = 42;
+  // games, won, wagered, payouts, biggest win, biggest multiplier
+  for (const v of [4n, 2n, 4_000_000n, 2_239_800n, 119_900n, biggestMultiplierBps]) {
+    b.writeBigUInt64LE(v, o);
+    o += 8;
+  }
+  b.writeUInt32LE(1, o); // current streak
+  b.writeUInt32LE(1, o + 4); // best streak
+  b.writeBigInt64LE(BigInt(BT), o + 8);
+  b.writeUInt8(1, o + 16); // referrer: Some
+  referrer.toBuffer().copy(b, o + 17);
+  return b;
+}
+function referralData(referrer: PublicKey, tier: number) {
+  const b = Buffer.alloc(8 + 32 + 3 + 8 + 8 + 4 + 8);
+  accountDiscriminator("ReferralAccount").copy(b, 0);
+  referrer.toBuffer().copy(b, 8);
+  b.writeUInt8(tier, 42);
+  return b;
+}
+
+test("mirrorVrfSettle: tx's own slot + time, referral row from the tx, stats with biggest multiplier", async (t) => {
+  const player = pk();
+  const referrer = pk();
+  const [referralPda] = deriveReferralPda(new PublicKey(PROGRAM), referrer);
+  const settleSig = sig();
+  // QA referred-005 (4aeFpHk…): won 1,119,900 at 11199 bps, 5,000 to the referrer, tx slot 465480384.
+  const tx = {
+    slot: 465_480_384,
+    blockTime: BT,
+    transaction: { message: { staticAccountKeys: [pk(), player, referralPda] } },
+    meta: {
+      err: null,
+      preBalances: [9_000_000, 0, 1_173_480],
+      postBalances: [8_995_000, 1_119_900, 1_178_480],
+      loadedAddresses: { writable: [], readonly: [] },
+    },
+  } as unknown as VersionedTransactionResponse;
+  const stats = { data: statsData(player, referrer, 11_199n) };
+  t.mock.method(Connection.prototype, "getSignatureStatuses", async () => ({
+    context: { slot: 465_480_390 },
+    value: [{ slot: 465_480_384, confirmations: 1, err: null, confirmationStatus: "confirmed" }],
+  }));
+  t.mock.method(Connection.prototype, "getTransaction", async () => tx);
+  t.mock.method(Connection.prototype, "getAccountInfo", async () => stats); // fetchPlayerReferrer
+  t.mock.method(Connection.prototype, "getMultipleAccountsInfo", async () => [stats, { data: referralData(referrer, 0) }]);
+  t.mock.method(Connection.prototype, "getSlot", async () => 465_480_386); // write-time slot: must not be used
+
+  await m.vrf.mirrorVrfSettle(
+    settleSig,
+    player,
+    { bet: 1_000_000n, mineCount: 1 } as VrfClaimAccount,
+    { status: "Won", multiplierBps: 11_199n, safeReveals: 2 } as VrfGameAccount,
+  );
+
+  const [g] = await query("select slot, settled_at, payout, multiplier_bps from public.games where signature = $1", [settleSig]);
+  assert.deepEqual(g, { slot: 465_480_384, settled_at: "2026-11-04T23:07:38+00:00", payout: 1_119_900, multiplier_bps: 11_199 });
+  const ref = await query(
+    "select referrer, player, amount, tier, slot, occurred_at from public.referral_events where signature = $1",
+    [settleSig],
+  );
+  assert.deepEqual(ref, [
+    { referrer: referrer.toBase58(), player: player.toBase58(), amount: 5_000, tier: 0, slot: 465_480_384, occurred_at: "2026-11-04T23:07:38+00:00" },
+  ]);
+  const [agg] = await query("select accrued_lamports, total_earned, referred_volume from public.referrals where referrer = $1", [referrer.toBase58()]);
+  assert.deepEqual(agg, { accrued_lamports: 5_000, total_earned: 5_000, referred_volume: 1_000_000 });
+  const [ps] = await query("select games_played, biggest_multiplier_bps from public.player_stats where player = $1", [player.toBase58()]);
+  assert.deepEqual(ps, { games_played: 4, biggest_multiplier_bps: 11_199 });
+
+  // /api/activity shows it on both sides (the game row shares the settle signature).
+  const { GET } = await import("../../app/api/activity/[wallet]/route");
+  const kinds = async (w: PublicKey) =>
+    ((await (await GET({} as never, { params: Promise.resolve({ wallet: w.toBase58() }) })).json()) as { events: { kind: string }[] }).events.map((e) => e.kind);
+  assert.deepEqual(await kinds(player), ["game", "ref_paid"]);
+  assert.deepEqual(await kinds(referrer), ["ref_received"]);
+
+  // Legacy StatsUpdated path (no multiplier field) keeps the stored value.
+  await m.pg.rpc("idx_apply_stats", {
+    p_player: player.toBase58(), p_games_played: 5, p_games_won: 2, p_total_wagered: 5_000_000, p_total_payouts: 2_239_800,
+    p_biggest_win: 119_900, p_current_streak: 0, p_best_streak: 1, p_last_played: new Date().toISOString(), p_event_slot: 465_490_000,
+  });
+  const [ps2] = await query("select games_played, biggest_multiplier_bps from public.player_stats where player = $1", [player.toBase58()]);
+  assert.deepEqual(ps2, { games_played: 5, biggest_multiplier_bps: 11_199 });
+});
+
+test("indexer: ReferralClaimed is indexed per signature (referral_claims)", async () => {
+  const referrer = pk();
+  const s = sig();
+  const r = await m.indexer.ingestTransactions([
+    {
+      signature: s,
+      slot: 465_481_000,
+      blockTime: BT + 60,
+      logMessages: logs("ReferralClaimed", Buffer.concat([referrer.toBuffer(), u64(20_000n), u64(465_481_000n)])),
+    },
+  ]);
+  assert.deepEqual([r.processed, r.errors], [1, 0], JSON.stringify(r.errorDetails));
+  const rows = await query("select referrer, amount, slot, claimed_at from public.referral_claims where signature = $1", [s]);
+  assert.deepEqual(rows, [{ referrer: referrer.toBase58(), amount: 20_000, slot: 465_481_000, claimed_at: "2026-11-04T23:08:38+00:00" }]);
+});
+
+test("vault unit-value snapshot is program-scoped; APY uses the reading's real age", async () => {
+  const E18 = 10n ** 18n;
+  // V2State: total_outstanding (u64) at 9, total_units (u128) at 17, total_pending (u128) at 89.
+  const v2 = Buffer.alloc(8 + 200);
+  accountDiscriminator("VaultV2State").copy(v2, 0);
+  v2.writeBigUInt64LE(1_000_000_000n, 17);
+  const conn = {
+    getMultipleAccountsInfoAndContext: async () => ({
+      context: { slot: 900_000_001 },
+      value: [{ lamports: 1_002_824_480, data: Buffer.alloc(100) }, { lamports: 0, data: v2 }],
+    }),
+    getMinimumBalanceForRentExemption: async () => 2_824_480,
+  } as unknown as Connection;
+  assert.deepEqual(await m.history.snapshotVaultUnitValue(conn), { slot: 900_000_001, unitValueE18: E18.toString() });
+  const [row] = await query("select program, vault_assets, health_bps from public.vault_unit_value_history where slot = 900_000_001");
+  assert.deepEqual(row, { program: PROGRAM, vault_assets: 1_000_000_000, health_bps: 10_000 });
+
+  // Back-date it 40 days; a newer reading from another program must be ignored.
+  await query("update public.vault_unit_value_history set block_time = now() - interval '40 days' where slot = 900_000_001");
+  await query(
+    "insert into public.vault_unit_value_history (slot, program, vault_assets, total_units, unit_value_e18, health_bps, block_time) values (900_000_002, 'other', 1, 1, $1, 10000, now() - interval '31 days')",
+    [(E18 / 2n).toString()],
+  );
+  const apy = await m.history.trailingApy((E18 * 101n) / 100n);
+  assert.ok(apy !== null && Math.abs(apy - (1.01 ** (365 / 40) - 1)) < 1e-6, String(apy));
+  // Nothing 30+ days old for this program: no number, rather than a wrong one.
+  await query("delete from public.vault_unit_value_history where slot = 900_000_001");
+  assert.equal(await m.history.trailingApy(E18), null);
 });

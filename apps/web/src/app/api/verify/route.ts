@@ -63,10 +63,12 @@ export async function GET(req: NextRequest) {
       // bare error — on a product whose headline claim is provable fairness.
       // Reconstruct it from the transaction's lamport movements instead and
       // return the same row shape the page already renders. verifyVrfSettle
-      // returns null unless the tx is a real, successful top-level settle_vrf
+      // returns null unless the tx is a real, successful top-level settle_vrf or refund_stalled_vrf
       // (log text alone is spoofable); the player comes from its accounts.
       const v = await verifyVrfSettle(tx);
-      if (v && v.verified) {
+      // Refunds ("expired") keep the old 400 here until the owner approves how
+      // the page shows them; /api/verify/[signature] already returns them.
+      if (v && v.verified && v.outcome !== "expired") {
         return NextResponse.json({
           found: true,
           settleSource: "input",
@@ -76,9 +78,12 @@ export async function GET(req: NextRequest) {
             bet: String(v.betLamports),
             payout: String(v.payoutLamports ?? "0"),
             multiplier_bps: v.multiplierBps ?? 0,
-            mine_count: v.mineCount ?? 0,
-            outcome: (v.outcome as string) ?? (Number(v.payoutLamports ?? 0) > 0 ? "won" : "lost"),
-            safe_reveals: (v.safeReveals as number) ?? 0,
+            // From the round's start tx and MagicBlock's commit. Unknown is null
+            // ("—" on the page), never a made-up 0.
+            mine_count: v.mineCount ?? null,
+            // won / lost (refunds are held back above).
+            outcome: v.outcome,
+            safe_reveals: v.safeReveals ?? null,
             // VRF draws randomness per click from the oracle; there is no
             // pre-committed layout, salt or hash. Null here is the honest
             // answer, and `mode` tells the page to explain that rather than

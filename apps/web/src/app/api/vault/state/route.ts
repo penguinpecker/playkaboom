@@ -5,12 +5,11 @@ import {
   deriveVaultPda,
 } from "@playkaboom/sdk";
 import { programId } from "@/server/env";
-import { getConnection } from "@/server/connection";
-import { query } from "@/server/db/pg";
+import { getConnection, msPerSlot } from "@/server/connection";
+import { trailingApy } from "@/server/vault-history";
 import { jsonError } from "@/server/api-helpers";
+import { vaultLimits } from "@/lib/vault-capacity";
 import {
-  effectiveMaxBetLamports,
-  effectiveMaxPayoutLamports,
   effectiveMaxUserPositionLamports,
   healthBps,
   lamportsToSol,
@@ -62,26 +61,14 @@ export async function GET() {
     const v2 = decodeVaultV2State(v2Info.data);
     const health = healthBps(v2, vaultAssets);
     const uvE18 = unitValueE18(vaultAssets, v2.totalUnits);
+    // The program is VRF-only (legacy start_game returns 6057), so the VRF
+    // payout cap and the per-mine worst case are the real limits.
+    const limits = vaultLimits(lamports, vault, v2, rent, true);
+    const slotMs = await msPerSlot(conn);
 
-    // APY: lookup unit_value at now − 30 days, annualise.
+    // APY: this program's newest unit_value reading >= 30 days old, annualised by its real age.
     const now = new Date();
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 3600 * 1000);
-    const history = await query<{ unit_value_e18: number; block_time: string }>(
-      "select unit_value_e18, block_time from public.vault_unit_value_history where block_time <= $1 order by block_time desc limit 1",
-      [thirtyDaysAgo.toISOString()],
-    ).catch(() => null);
-
-    let apy30d: number | null = null;
-    if (history && history.length > 0 && uvE18 > 0n && history[0]) {
-      const past = BigInt(history[0].unit_value_e18 as unknown as string);
-      if (past > 0n) {
-        // ratio = uvE18 / past; annualise: ratio^(365/30) - 1
-        const ratio = Number(uvE18) / Number(past);
-        if (Number.isFinite(ratio) && ratio > 0) {
-          apy30d = Math.pow(ratio, 365 / 30) - 1;
-        }
-      }
-    }
+    const apy30d = await trailingApy(uvE18, now);
 
     return NextResponse.json({
       v2Initialized: true,
@@ -102,17 +89,16 @@ export async function GET() {
       // 0 ⇒ per-user deposit cap disabled on-chain; the effective-cap value
       // above is then a "no limit" sentinel, not a real ceiling.
       maxUserPositionBps: v2.maxUserPositionBps,
-      effectiveMaxBetSol: lamportsToSol(
-        effectiveMaxBetLamports(vaultAssets, vault.maxBetBps, health),
-      ),
-      effectiveMaxPayoutSol: lamportsToSol(
-        effectiveMaxPayoutLamports(vaultAssets, vault.maxPayoutBps, health),
-      ),
+      // Largest bet any mine count accepts (1 mine), and the VRF payout cap.
+      effectiveMaxBetSol: lamportsToSol(limits.maxBetLamports),
+      effectiveMaxPayoutSol: lamportsToSol(limits.maxPayoutLamports),
       effectiveMaxUserDepositSol: lamportsToSol(
         effectiveMaxUserPositionLamports(v2, vaultAssets, health),
       ),
       withdrawCooldownSlots: v2.withdrawCooldownSlots.toString(),
-      withdrawCooldownDays: Number(v2.withdrawCooldownSlots) * 0.4 / 86_400,
+      // Measured slot time, not a nominal 400 ms (mainnet runs ~214 ms).
+      withdrawCooldownDays: (Number(v2.withdrawCooldownSlots) * slotMs) / 86_400_000,
+      msPerSlot: slotMs,
       minLpDepositLamports: v2.minLpDeposit.toString(),
       apy30d,
       timestamp: now.toISOString(),

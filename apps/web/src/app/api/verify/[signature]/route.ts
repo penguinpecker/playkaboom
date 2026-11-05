@@ -64,7 +64,7 @@ export async function GET(_req: NextRequest, ctx: RouteContext) {
       // they had in fact just supplied. They are still fully verifiable, just
       // by different evidence: the transaction's own lamport movements.
       // verifyVrfSettle returns null unless the tx is a real, successful
-      // top-level settle_vrf (log text alone is spoofable).
+      // top-level settle_vrf or refund_stalled_vrf (log text alone is spoofable).
       const vrf = await verifyVrfSettle(tx);
       if (vrf) return NextResponse.json(vrf);
       return NextResponse.json(

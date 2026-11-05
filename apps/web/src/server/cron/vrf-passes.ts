@@ -12,7 +12,7 @@ import {
   type VrfClaimAccount,
   type VrfGameAccount,
 } from "@playkaboom/sdk";
-import { getConnection, getErConnection } from "../connection";
+import { getConnection, getErConnection, msPerSlot } from "../connection";
 import { housePubkey, programId, vrfModeEnabled } from "../env";
 import { sendHouseErTx, sendHouseTx } from "../solana";
 import { indexFreshSignature } from "../inline-ingest";
@@ -24,32 +24,34 @@ import { logger } from "../logger";
  *
  * L1 (program-owned VrfGame, i.e. undelegated):
  *   a.  WON / LOST, last successful L1 tx on the game >= 60 s old (the player's
- *       client settles first) or claim >= 4,500 slots old
+ *       client settles first) or claim >= 30 min old
  *                             -> settle_vrf (referral PDA mandatory, F5)
  *   c.  VOID                  -> refund_stalled_vrf, house-signed, at once
- *   c'. PLAYING, safe 0, not pending, claim >= 150 slots old
+ *   c'. PLAYING, safe 0, not pending, claim >= 60 s old
  *                             -> refund_stalled_vrf (a start that was never delegated)
  * ER (claim whose game is DLP-owned on L1, i.e. still delegated):
  *   b.  WON / LOST / VOID and idle >= 60 s on the ER, or PLAYING, not pending and
- *       idle >= 300 s on the ER; any of these once the claim is >= 4,500 slots
- *       old. "Idle" is time since the game's last successful ER tx; a game the
- *       ER never touched is idle since its start (claim age, 400 ms/slot).
+ *       idle >= 300 s on the ER; any of these once the claim is >= 30 min old.
+ *       "Idle" is time since the game's last successful ER tx; a game the ER
+ *       never touched is idle since its start (claim age).
  *                             -> force_undelegate_vrf (house-signed ER tx). The
  *       game comes back WON or VOID and a later tick's a / c closes it.
  *
  * A VrfGame with no claim is an F6 orphan (admin release): nothing to do here,
  * the player's next start reuses it.
+ *
+ * Claim age is slots × the MEASURED slot time (msPerSlot). These windows are
+ * wall-clock intents; a nominal 400 ms/slot ran every one of them at about
+ * half its length on mainnet's ~214 ms slots.
  */
-const SETTLED_GRACE_SLOTS = 150; // ~60 s: let the player's own client finish first
-const SETTLED_IDLE_MS = 60_000; // same grace, measured from the last tx on the game
+const SETTLED_IDLE_MS = 60_000; // let the player's own client finish first (claim age, or since the last tx on the game)
 // Absolute cap for EVERY status (audit A1). The idle signal is "newest tx that
 // lists the game", and anyone can send one, so idle alone could hold a finished
 // game (and its reserve) forever. ~30 min is where a PLAYING game is already
 // taken from the player, so no honest game is still the player's to finish
 // past it; settle_vrf pays the recorded player whoever sends it.
-const FORCE_AGE_SLOTS = 4_500; // ~30 min
+const FORCE_AGE_MS = 30 * 60_000;
 const FORCE_IDLE_MS = 300_000; // 5 min with no ER tx on the game
-const MS_PER_SLOT = 400;
 const SIG_WINDOW = 20; // newest txs scanned for the last successful one
 const MAX_TX_PER_KIND = 15;
 
@@ -77,10 +79,11 @@ export async function runVrfPasses() {
   const pid = programId();
   const house = housePubkey();
   const disc = (name: string) => [{ memcmp: { offset: 0, bytes: bs58.encode(accountDiscriminator(name)) } }];
-  const [claimAccs, gameAccs, slot] = await Promise.all([
+  const [claimAccs, gameAccs, slot, slotMs] = await Promise.all([
     conn.getProgramAccounts(pid, { commitment: "confirmed", filters: disc("VrfClaim") }),
     conn.getProgramAccounts(pid, { commitment: "confirmed", filters: disc("VrfGame") }),
     conn.getSlot("confirmed"),
+    msPerSlot(conn),
   ]);
 
   const claims = new Map<string, VrfClaimAccount>();
@@ -116,7 +119,7 @@ export async function runVrfPasses() {
     if (!claim) continue; // F6 orphan or already closed
     if (g.status === "Won" || g.status === "Lost") {
       if (res.settled >= MAX_TX_PER_KIND) continue;
-      if (!(await settleDue(conn, a.pubkey, slot - Number(claim.startSlot)))) continue;
+      if (!(await settleDue(conn, a.pubkey, slot - Number(claim.startSlot), slotMs))) continue;
       try {
         const sig = await sendSettleVrf(g.player);
         void indexFreshSignature(sig);
@@ -128,7 +131,7 @@ export async function runVrfPasses() {
     } else if (g.status === "Void") {
       await refund(g.player);
     } else if (g.safeReveals === 0 && !g.pending) {
-      if (slot - Number(claim.startSlot) >= SETTLED_GRACE_SLOTS) await refund(g.player);
+      if ((slot - Number(claim.startSlot)) * slotMs >= SETTLED_IDLE_MS) await refund(g.player);
     } else {
       // PLAYING with progress on L1 cannot happen after the round-2 F3 fix
       // (an undelegate ends the game first). Never refund it: that would
@@ -154,7 +157,7 @@ export async function runVrfPasses() {
         const info = erGames[i];
         const g: VrfGameAccount | null = info ? decodeOr(decodeVrfGame, info.data) : null;
         if (!g) continue;
-        if (!(await shouldForce(er, d, g, slot))) continue;
+        if (!(await shouldForce(er, d, g, slot, slotMs))) continue;
         try {
           const sig = await sendHouseErTx([
             buildForceUndelegateVrf({ ctx: { programId: pid }, player: d.player, house }),
@@ -172,9 +175,14 @@ export async function runVrfPasses() {
   return res;
 }
 
-/** Pass a gate for a WON / LOST game on L1: the player's grace is over, or the claim hit the age cap. */
-export async function settleDue(conn: ReturnType<typeof getConnection>, game: PublicKey, age: number): Promise<boolean> {
-  return age >= FORCE_AGE_SLOTS || idleFor(conn, game, SETTLED_IDLE_MS);
+/** Pass a gate for a WON / LOST game on L1: the player's grace is over, or the claim hit the age cap. `age` is in slots. */
+export async function settleDue(
+  conn: ReturnType<typeof getConnection>,
+  game: PublicKey,
+  age: number,
+  slotMs: number,
+): Promise<boolean> {
+  return age * slotMs >= FORCE_AGE_MS || idleFor(conn, game, SETTLED_IDLE_MS);
 }
 
 export async function shouldForce(
@@ -182,18 +190,19 @@ export async function shouldForce(
   d: Delegated,
   g: VrfGameAccount,
   slot: number,
+  slotMs: number,
 ): Promise<boolean> {
-  const age = slot - Number(d.claim.startSlot);
+  const ageMs = (slot - Number(d.claim.startSlot)) * slotMs;
   const playing = g.status === "Playing";
   if (playing && g.pending) return false; // the oracle answers first; force would fail 6044
-  if (age >= FORCE_AGE_SLOTS) return true;
+  if (ageMs >= FORCE_AGE_MS) return true;
   // Terminal games: the grace runs from the last ER tx (the cash-out / loss),
   // not from the start, so the player's own undelegate lands first.
   const idleMs = playing ? FORCE_IDLE_MS : SETTLED_IDLE_MS;
   try {
     const t = await lastOkTxTime(er, d.game);
     // No ER tx (delegated, never revealed) or no time: idle since the start.
-    if (t == null) return age * MS_PER_SLOT >= idleMs;
+    if (t == null) return ageMs >= idleMs;
     return Date.now() - t * 1000 >= idleMs;
   } catch {
     // No idle signal: the age cap above forces it later.

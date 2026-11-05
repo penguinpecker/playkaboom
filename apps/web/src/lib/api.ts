@@ -156,6 +156,8 @@ export interface VaultStateResponse {
   maxUserPositionBps?: number;
   withdrawCooldownSlots?: string;
   withdrawCooldownDays?: number;
+  /** Measured mainnet slot time (ms), for turning slot counts into ETAs. */
+  msPerSlot?: number;
   minLpDepositLamports?: string;
   apy30d?: number | null;
   timestamp: string;

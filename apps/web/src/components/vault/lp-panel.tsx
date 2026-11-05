@@ -97,7 +97,8 @@ export function VaultLpPanel() {
     if (pendingUnits === 0n) return null;
     if (withdrawExpired) return "Expired — restart";
     if (slotsLeft === 0) return "Ready — completes automatically";
-    const seconds = slotsLeft * 0.4;
+    // Measured slot time from /api/vault/state (mainnet ~214 ms, not 400).
+    const seconds = (slotsLeft * (state?.msPerSlot ?? 400)) / 1000;
     if (seconds < 60) return `${seconds.toFixed(0)}s`;
     if (seconds < 3600) return `${(seconds / 60).toFixed(0)}m`;
     if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;

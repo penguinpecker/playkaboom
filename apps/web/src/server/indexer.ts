@@ -1,11 +1,6 @@
-import { PublicKey } from "@solana/web3.js";
 import "server-only";
-import { extractEventsFromLogs, type KaboomEvent,
-  derivePlayerStatsPda,
-  decodePlayerStats
-} from "@playkaboom/sdk";
+import { extractEventsFromLogs, type KaboomEvent, type PlayerStatsAccount } from "@playkaboom/sdk";
 import { pgCode, query, rpc, upsert } from "./db/pg";
-import { getConnection } from "./connection";
 import { programId } from "./env";
 import { logger } from "./logger";
 import { awardPoints } from "./points";
@@ -131,8 +126,13 @@ export async function recordVrfGame(args: {
   safeReveals: number;
   mineCount: number;
   won: boolean;
+  /** The settle tx's own slot and block time. */
   slot: number;
   blockTime: string;
+  /** On-chain PlayerStats read after the settle confirmed (null: read failed). */
+  stats?: PlayerStatsAccount | null;
+  /** The referral cut this settle moved (null: unreferred, or tx not readable). */
+  referral?: { referrer: string; amount: bigint; tier: number } | null;
 }): Promise<void> {
   await check("games", "recordVrfGame.upsert", upsert(
     "games",
@@ -166,15 +166,13 @@ export async function recordVrfGame(args: {
   // from chain, and a VRF-only player was absent entirely.
   //
   // settle_vrf DOES maintain the on-chain PlayerStats account (vrf_mode.rs:593),
-  // so the cumulative truth exists; it just was never read. Pull that snapshot
-  // and push it through the same slot-guarded RPC the event path uses, so a
-  // late write can never revert newer counters. Non-fatal: a stats mirror
-  // failure must not fail a settle that already moved money.
-  try {
-    const [statsPda] = derivePlayerStatsPda(programId(), new PublicKey(args.player));
-    const info = await getConnection().getAccountInfo(statsPda, "confirmed");
-    if (info) {
-      const st = decodePlayerStats(info.data as Buffer);
+  // so the cumulative truth exists (the caller reads it). Push that snapshot
+  // through the same slot-guarded RPC the event path uses, so a late write can
+  // never revert newer counters. Non-fatal: a stats mirror failure must not
+  // fail a settle that already moved money.
+  const st = args.stats;
+  if (st) {
+    try {
       await check("player_stats", "recordVrfGame.stats", rpc("idx_apply_stats", {
         p_player: args.player,
         p_games_played: st.gamesPlayed.toString(),
@@ -186,10 +184,30 @@ export async function recordVrfGame(args: {
         p_best_streak: st.bestStreak,
         p_last_played: args.blockTime,
         p_event_slot: args.slot,
+        p_biggest_multiplier_bps: st.biggestMultiplierBps.toString(),
       }));
+    } catch (e) {
+      logger.error({ err: e, player: args.player }, "vrf player_stats mirror failed");
     }
-  } catch (e) {
-    logger.error({ err: e, player: args.player }, "vrf player_stats mirror failed");
+  }
+
+  // settle_vrf pays the referral cut but emits no ReferralAccrued, so write
+  // what that event wrote (referral_events row + rollup). Same signature as
+  // the games row: the cut moved in the settle tx itself. Non-fatal, as above.
+  if (args.referral) {
+    try {
+      await applyReferralAccrued({
+        signature: args.signature,
+        referrer: args.referral.referrer,
+        player: args.player,
+        amount: args.referral.amount,
+        tier: args.referral.tier,
+        slot: args.slot,
+        blockTime: args.blockTime,
+      });
+    } catch (e) {
+      logger.error({ err: e, player: args.player }, "vrf referral mirror failed");
+    }
   }
 
   await awardPoints({
@@ -284,6 +302,40 @@ export async function ingestTransactions(txs: IndexableTx[]): Promise<IndexResul
     }
   }
   return { processed, skipped, errors, errorDetails };
+}
+
+/** One referral credit: the ReferralAccrued event (legacy settle) or a mirrored settle_vrf. */
+async function applyReferralAccrued(r: {
+  signature: string;
+  referrer: string;
+  player: string;
+  amount: bigint;
+  tier: number;
+  slot: number;
+  blockTime: string;
+}): Promise<void> {
+  // Event log table — keyed on signature PK, safe to upsert.
+  await unchecked("referral_events.upsert", upsert(
+    "referral_events",
+    {
+      signature: r.signature,
+      referrer: r.referrer,
+      player: r.player,
+      amount: r.amount.toString(),
+      tier: r.tier,
+      occurred_at: r.blockTime,
+      slot: r.slot,
+    },
+    ["signature"],
+  ));
+  // Recomputes the rollup from referral_events (idempotent). referred_volume
+  // comes from the tier bps (50/60/70).
+  await check("referrals", "ReferralAccrued.rpc", rpc("idx_apply_referral_accrued", {
+    p_referrer: r.referrer,
+    p_amount: r.amount.toString(),
+    p_tier: r.tier,
+    p_event_slot: r.slot,
+  }));
 }
 
 async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
@@ -446,29 +498,15 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "ReferralAccrued": {
-      // Event log table — keyed on signature PK, safe to upsert.
-      await unchecked("referral_events.upsert", upsert(
-        "referral_events",
-        {
-          signature: tx.signature,
-          referrer: ev.referrer.toBase58(),
-          player: ev.player.toBase58(),
-          amount: ev.amount.toString(),
-          tier: ev.tier,
-          occurred_at: blockTime,
-          slot,
-        },
-        ["signature"],
-      ));
-      // Atomic SQL increment via RPC — no read-modify-write race. The function
-      // computes referred_volume from the tier bps (50/60/70), replacing the
-      // old hard-coded × 200 (only correct for tier 0).
-      await check("referrals", "ReferralAccrued.rpc", rpc("idx_apply_referral_accrued", {
-        p_referrer: ev.referrer.toBase58(),
-        p_amount: ev.amount.toString(),
-        p_tier: ev.tier,
-        p_event_slot: slot,
-      }));
+      await applyReferralAccrued({
+        signature: tx.signature,
+        referrer: ev.referrer.toBase58(),
+        player: ev.player.toBase58(),
+        amount: ev.amount,
+        tier: ev.tier,
+        slot,
+        blockTime,
+      });
       break;
     }
     case "ReferralTierChanged": {
@@ -481,6 +519,18 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
       break;
     }
     case "ReferralClaimed": {
+      // Per-claim log, keyed on signature PK like referral_events.
+      await unchecked("referral_claims.upsert", upsert(
+        "referral_claims",
+        {
+          signature: tx.signature,
+          referrer: ev.referrer.toBase58(),
+          amount: ev.amount.toString(),
+          slot,
+          claimed_at: blockTime,
+        },
+        ["signature"],
+      ));
       // Atomic decrement, clamped at 0 inside the RPC.
       await check("referrals", "ReferralClaimed.rpc", rpc("idx_apply_referral_claimed", {
         p_referrer: ev.referrer.toBase58(),
@@ -604,6 +654,7 @@ async function applyEvent(ev: KaboomEvent, tx: IndexableTx): Promise<void> {
         "vault_unit_value_history",
         {
           slot,
+          program: programId().toBase58(),
           // vault_assets at SOL-scale TVL exceeds 2^53 lamports (9007 SOL).
           // Always carry as a decimal string into the bigint column.
           vault_assets: ev.vaultAssets.toString(),

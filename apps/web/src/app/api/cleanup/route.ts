@@ -15,7 +15,7 @@ import { verifyPlayerAuth } from "@/server/auth";
 import { saltBuffer } from "@/server/game";
 import { loadSession, deleteSession } from "@/server/session-store";
 import { sendHouseTx } from "@/server/solana";
-import { getConnection } from "@/server/connection";
+import { getConnection, msPerSlot } from "@/server/connection";
 import { housePubkey, programId, treasuryPubkey } from "@/server/env";
 import { enforceRateLimit } from "@/server/ratelimit";
 import { fetchPlayerReferrer } from "@/server/player";
@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
     if (game.status === "Won" || game.status === "Lost") {
       const readyAt = startSlot + CLOSE_UNSETTLED_SLOTS;
       const slotsUntilReady = Math.max(0, readyAt - currentSlot);
-      const secondsUntilReady = Math.ceil(slotsUntilReady * 0.4);
+      const secondsUntilReady = Math.ceil((slotsUntilReady * (await msPerSlot(conn))) / 1000);
       if (slotsUntilReady === 0) {
         return NextResponse.json({
           active: true,
@@ -150,7 +150,7 @@ export async function POST(req: NextRequest) {
     // status === "Playing"
     const readyAt = startSlot + REFUND_EXPIRED_SLOTS;
     const slotsUntilReady = Math.max(0, readyAt - currentSlot);
-    const secondsUntilReady = Math.ceil(slotsUntilReady * 0.4);
+    const secondsUntilReady = Math.ceil((slotsUntilReady * (await msPerSlot(conn))) / 1000);
     if (slotsUntilReady === 0) {
       return NextResponse.json({
         active: true,

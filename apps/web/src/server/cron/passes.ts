@@ -6,6 +6,7 @@ import { runLegacyPasses } from "./legacy-passes";
 import { runLpAutoComplete } from "./lp-pass";
 import { runVaultHealth } from "./vault-health-pass";
 import { runInvariants } from "./invariants-pass";
+import { snapshotVaultUnitValue } from "../vault-history";
 
 const MIN = 60_000;
 
@@ -20,5 +21,6 @@ export const PASSES: CronPass[] = [
   { name: "legacy", everyMs: 5 * MIN, run: runLegacyPasses }, // 9.3 d, e
   { name: "lp-complete", everyMs: 0, run: runLpAutoComplete }, // 9.3 f
   { name: "vault-health", everyMs: 15 * MIN, run: runVaultHealth },
+  { name: "vault-snapshot", everyMs: 15 * MIN, run: () => snapshotVaultUnitValue() }, // LP return history
   { name: "invariants", everyMs: 24 * 60 * MIN, run: runInvariants },
 ];
