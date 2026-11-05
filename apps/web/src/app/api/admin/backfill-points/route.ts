@@ -1,33 +1,35 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jsonError } from "@/server/api-helpers";
 import { query } from "@/server/db/pg";
-import { awardPoints } from "@/server/points";
+import { awardPoints, computePoints } from "@/server/points";
 import { logger } from "@/server/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * One-shot retroactive XP backfill. Reads every settled `games` row and
- * upserts a corresponding `points_ledger` row via `awardPoints`. The
- * (source_key, source) unique constraint makes this safe to call repeatedly
- * — already-credited games are silently skipped.
+ * K Points backfill for the CURRENT program. Awards points (via `awardPoints`,
+ * the same formula as the live paths) for every settled `games` row — won or
+ * lost, legacy or VRF — at or after the program's deploy slot that has NO
+ * `points_ledger` row yet. Safe to call repeatedly: a re-run only sees rows
+ * still missing, and the (source_key, source) unique index turns a race with
+ * a live award into a no-op. Expired (legacy) rows earn nothing.
  *
- * Auth: `Authorization: Bearer ${CRON_SECRET}` (same pattern as the other
- * cron routes). Method: GET. Pass `?dry=1` to see counts without
- * inserting. Pass `?limit=N` to bound the run for a smoke test.
+ * Auth: `Authorization: Bearer ${ADMIN_BACKFILL_SECRET}` (CRON_SECRET still
+ * accepted). Method: GET. `?dry=1` counts without inserting; `?limit=N`
+ * bounds the run for a smoke test.
  *
- *   curl -H "Authorization: Bearer $CRON_SECRET" \
- *        https://playkaboom.gg/api/admin/backfill-points?dry=1
+ *   curl -H "Authorization: Bearer $ADMIN_BACKFILL_SECRET" \
+ *        "https://playkaboom.gg/api/admin/backfill-points?dry=1"
  *
- *   curl -H "Authorization: Bearer $CRON_SECRET" \
- *        https://playkaboom.gg/api/admin/backfill-points
- *
- * Multipliers stay at 1.0× — historical games don't get LP/streak
- * boosts retroactively. The on-chain edge is captured per row from
- * `POINTS_EDGE_BPS` (currently 200 = 2%).
+ * Multipliers stay at 1.0×. `games` does not store the edge, so rows get
+ * `POINTS_EDGE_BPS` (the current program's vault edge, 200 = 2%).
  */
 const POINTS_EDGE_BPS = 200;
+/** Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju was deployed at this slot
+ *  (2026-11-04); the previous program closed a month earlier, so every games
+ *  row at or above it belongs to the current program. */
+const CURRENT_PROGRAM_DEPLOY_SLOT = 465_253_927;
 const PAGE = 500;
 
 export async function GET(req: NextRequest) {
@@ -50,62 +52,54 @@ export async function GET(req: NextRequest) {
     const limitParam = url.searchParams.get("limit");
     const hardLimit = limitParam ? Math.max(1, Number(limitParam)) : Infinity;
 
-    let offset = 0;
-    let totalRows = 0;
+    let cursor = "";
+    let missing = 0;
     let inserted = 0;
-    let skipped = 0;
-    let expiredSkipped = 0;
+    let notInserted = 0;
     let totalPoints = 0n;
     const perPlayer = new Map<string, bigint>();
 
-    for (;;) {
-      if (totalRows >= hardLimit) break;
-      const rows = await query(
-        "select signature, player, bet, outcome, settled_at from public.games order by settled_at asc offset $1 limit $2",
-        [offset, PAGE],
+    while (missing < hardLimit) {
+      // Keyset on the PK (stable while rows are written); the anti-join uses
+      // the ledger's (source_key, source) unique index.
+      const rows = await query<{ signature: string; player: string; bet: number; outcome: "won" | "lost" }>(
+        `select g.signature, g.player, g.bet, g.outcome
+           from public.games g
+          where g.outcome in ('won', 'lost')
+            and g.slot >= $1
+            and g.signature > $2
+            and not exists (
+              select 1 from public.points_ledger pl
+               where pl.source_key = g.signature
+                 and pl.source = case g.outcome when 'won' then 'game_won' else 'game_lost' end)
+          order by g.signature
+          limit $3`,
+        [CURRENT_PROGRAM_DEPLOY_SLOT, cursor, PAGE],
       );
-      if (rows.length === 0) break;
-
-      for (const r of rows as Array<{
-        signature: string;
-        player: string;
-        bet: number;
-        outcome: "won" | "lost" | "expired";
-        settled_at: string;
-      }>) {
-        if (totalRows >= hardLimit) break;
-        totalRows++;
-        if (r.outcome === "expired") {
-          expiredSkipped++;
-          continue;
-        }
-        const source = r.outcome === "won" ? "game_won" : "game_lost";
+      for (const r of rows) {
+        if (missing >= hardLimit) break;
+        missing++;
+        cursor = r.signature;
+        const betLamports = BigInt(r.bet);
+        let pts: bigint;
         if (dry) {
-          // Recompute points client-side (without the upsert) just to
-          // surface the numbers in the response.
-          const bet = BigInt(r.bet);
-          const base = (bet * BigInt(POINTS_EDGE_BPS)) / 200_000_000n;
-          totalPoints += base;
-          perPlayer.set(r.player, (perPlayer.get(r.player) ?? 0n) + base);
-          continue;
+          pts = computePoints({ betLamports, edgeBps: POINTS_EDGE_BPS }).totalPoints;
+        } else {
+          const result = await awardPoints({
+            player: r.player,
+            sourceKey: r.signature,
+            source: r.outcome === "won" ? "game_won" : "game_lost",
+            betLamports,
+            edgeBps: POINTS_EDGE_BPS,
+            notes: "retroactive backfill",
+          });
+          if (result.inserted) inserted++;
+          else notInserted++; // raced a live award, or the insert failed (logged)
+          pts = result.totalPoints;
         }
-        const result = await awardPoints({
-          player: r.player,
-          sourceKey: r.signature,
-          source,
-          betLamports: BigInt(r.bet),
-          edgeBps: POINTS_EDGE_BPS,
-          notes: "retroactive backfill",
-        });
-        if (result.inserted) inserted++;
-        else skipped++;
-        totalPoints += result.totalPoints;
-        perPlayer.set(
-          r.player,
-          (perPlayer.get(r.player) ?? 0n) + result.totalPoints,
-        );
+        totalPoints += pts;
+        perPlayer.set(r.player, (perPlayer.get(r.player) ?? 0n) + pts);
       }
-      offset += PAGE;
       if (rows.length < PAGE) break;
     }
 
@@ -115,19 +109,14 @@ export async function GET(req: NextRequest) {
       .map(([player, pts]) => ({ player, points: pts.toString() }));
 
     logger.info(
-      { totalRows, inserted, skipped, expiredSkipped, dry, totalPoints: totalPoints.toString() },
+      { missing, inserted, notInserted, dry, totalPoints: totalPoints.toString() },
       "points backfill complete",
     );
     return NextResponse.json({
       ok: true,
       dry,
-      counts: {
-        rowsScanned: totalRows,
-        eligible: totalRows - expiredSkipped,
-        expiredSkipped,
-        inserted,
-        skippedAlreadyCredited: skipped,
-      },
+      fromSlot: CURRENT_PROGRAM_DEPLOY_SLOT,
+      counts: { missing, inserted, notInserted },
       totals: {
         totalPoints: totalPoints.toString(),
         distinctPlayers: perPlayer.size,

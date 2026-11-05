@@ -20,6 +20,11 @@ export function formatSolAmount(sol: number, fractionDigits = 3): string {
   return sol.toFixed(decimals).replace(/\.?0+$/, "");
 }
 
+/** K Points for display: whole points with thousands separators ("12,345"); missing reads "0". */
+export function formatKPoints(points: number | undefined): string {
+  return Math.trunc(points || 0).toLocaleString("en-US");
+}
+
 /** "1.6-day" from /api/vault/state withdrawCooldownDays; null until it loads. */
 export function formatCooldown(days: number | undefined): string | null {
   return days ? `${days.toFixed(1)}-day` : null;

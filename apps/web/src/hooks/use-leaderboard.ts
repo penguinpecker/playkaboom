@@ -18,6 +18,8 @@ export interface AllTimeRow {
   best_streak: number;
   current_streak: number;
   last_played: string | null;
+  /** K Points earned on settled rounds (points_balance.total_points). */
+  kPoints: number;
 }
 
 export interface VolumeRow {
@@ -26,6 +28,8 @@ export interface VolumeRow {
   total_payouts: number;
   games_played: number;
   last_played: string | null;
+  /** K Points earned on settled rounds (points_balance.total_points). */
+  kPoints: number;
 }
 
 export interface StreakRow {
@@ -35,6 +39,8 @@ export interface StreakRow {
   games_played: number;
   games_won: number;
   last_played: string | null;
+  /** K Points earned on settled rounds (points_balance.total_points). */
+  kPoints: number;
 }
 
 export type LeaderboardRow = AllTimeRow | VolumeRow | StreakRow;

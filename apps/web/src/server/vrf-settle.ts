@@ -109,6 +109,7 @@ export async function mirrorVrfSettle(
       safeReveals: game.safeReveals,
       mineCount: claim.mineCount,
       won,
+      edgeBps: claim.houseEdgeBps,
       slot: tx?.slot ?? (await conn.getSlot("confirmed").catch(() => 0)),
       blockTime: new Date((tx?.blockTime ?? Date.now() / 1000) * 1000).toISOString(),
       stats,

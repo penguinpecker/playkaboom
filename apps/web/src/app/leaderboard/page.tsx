@@ -10,7 +10,7 @@ import {
   type AllTimeRow,
   type LeaderboardView,
 } from "@/hooks/use-leaderboard";
-import { formatAgo, formatSolAmount, shortAddr } from "@/lib/format";
+import { formatAgo, formatKPoints, formatSolAmount, shortAddr } from "@/lib/format";
 import { leaderboardTotals } from "@/lib/site-stats";
 
 const TABS: { label: string; view: LeaderboardView }[] = [
@@ -141,16 +141,16 @@ export default function LeaderboardPage() {
             </div>
           </div>
           {/* Desktop column headers — hidden on mobile (rows are self-labeled). */}
-          <div className="hidden sm:grid grid-cols-5 px-6 py-3 border-b border-outline-variant/10">
+          <div className="hidden sm:grid grid-cols-6 px-6 py-3 border-b border-outline-variant/10">
             {(tab === "alltime"
-              ? ["Rank", "Operator", "Biggest Win", "Biggest Loss", "Status"]
+              ? ["Rank", "Operator", "Biggest Win", "Biggest Loss", "K Points", "Status"]
               : tab === "volume"
-                ? ["Rank", "Operator", "Total Wagered", "Games", "Status"]
-                : ["Rank", "Operator", "Best Streak", "Games Won", "Status"]
+                ? ["Rank", "Operator", "Total Wagered", "Games", "K Points", "Status"]
+                : ["Rank", "Operator", "Best Streak", "Games Won", "K Points", "Status"]
             ).map((h, i) => (
               <span
                 key={h}
-                className={`font-headline text-[10px] tracking-widest text-on-surface-variant/40 uppercase ${i === 4 ? "text-right" : ""}`}
+                className={`font-headline text-[10px] tracking-widest text-on-surface-variant/40 uppercase ${i === 5 ? "text-right" : ""}`}
               >
                 {h}
               </span>
@@ -176,7 +176,7 @@ export default function LeaderboardPage() {
                 <Link
                   key={`${row.player}-${i}`}
                   href={`/profile/${row.player}`}
-                  className={`flex sm:grid sm:grid-cols-5 px-4 sm:px-6 py-3 sm:py-4 items-center gap-3 border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
+                  className={`flex sm:grid sm:grid-cols-6 px-4 sm:px-6 py-3 sm:py-4 items-center gap-3 border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
                 >
                   <div className="flex-shrink-0">
                     <RankBadge rank={i + 1} />
@@ -195,6 +195,10 @@ export default function LeaderboardPage() {
                   >
                     {cellB}
                   </span>
+                  <span className="font-headline text-xs sm:text-sm font-bold text-tertiary whitespace-nowrap">
+                    {formatKPoints(row.kPoints)}
+                    <span className="sm:hidden"> KP</span>
+                  </span>
                   <span
                     className={`hidden sm:inline-block font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}
                   >
@@ -209,7 +213,7 @@ export default function LeaderboardPage() {
               return (
                 <div
                   key={i}
-                  className={`flex sm:grid sm:grid-cols-5 px-4 sm:px-6 py-3 sm:py-4 items-center gap-3 border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
+                  className={`flex sm:grid sm:grid-cols-6 px-4 sm:px-6 py-3 sm:py-4 items-center gap-3 border-b border-outline-variant/[0.04] ${isMe ? "bg-primary/5" : "hover:bg-surface-container-highest transition-colors"}`}
                 >
                   <div className="flex-shrink-0">
                     <RankBadge rank={i + 1} />
@@ -227,6 +231,9 @@ export default function LeaderboardPage() {
                   </span>
                   <span className="hidden sm:inline font-headline text-sm font-bold text-secondary">
                     {stats.biggestMult.toFixed(1)}×
+                  </span>
+                  <span className="font-headline text-xs sm:text-sm font-bold text-tertiary whitespace-nowrap">
+                    —
                   </span>
                   <span
                     className={`hidden sm:inline-block font-headline text-[10px] px-2 py-0.5 ${i === 0 ? "bg-tertiary/10 text-tertiary" : "bg-primary/10 text-primary"} tracking-widest w-fit ml-auto`}

@@ -127,6 +127,9 @@ export async function recordVrfGame(args: {
   safeReveals: number;
   mineCount: number;
   won: boolean;
+  /** House edge the round was priced at (VrfClaim.house_edge_bps, snapshotted
+   *  from the vault at start; settle_vrf replays with it). Feeds K Points. */
+  edgeBps: number;
   /** The settle tx's own slot and block time. */
   slot: number;
   blockTime: string;
@@ -216,7 +219,7 @@ export async function recordVrfGame(args: {
     sourceKey: args.signature,
     source: args.won ? "game_won" : "game_lost",
     betLamports: args.betLamports,
-    edgeBps: POINTS_EDGE_BPS,
+    edgeBps: args.edgeBps,
   });
 }
 

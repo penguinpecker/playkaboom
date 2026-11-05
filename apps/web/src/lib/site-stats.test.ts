@@ -7,7 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { formatAgo, formatCooldown, formatSolAmount } from "./format";
+import { formatAgo, formatCooldown, formatKPoints, formatSolAmount } from "./format";
 import {
   isValidWallet,
   leaderboardTotals,
@@ -71,4 +71,12 @@ test("F9: a 400 from /api/verify surfaces the API's reason", async () => {
   await assert.rejects(readJsonOrThrow(bad), /No GameWon, GameLost, or GameSettled event/);
   await assert.rejects(readJsonOrThrow(new Response("<html>", { status: 502 })), /HTTP 502/);
   assert.deepEqual(await readJsonOrThrow(new Response('{"found":false}')), { found: false });
+});
+
+test("K Points column: integer with thousands separators, missing reads 0", () => {
+  assert.equal(formatKPoints(10), "10"); // one 0.01 SOL round at 2% edge
+  assert.equal(formatKPoints(1_234_567), "1,234,567");
+  assert.equal(formatKPoints(999.9), "999");
+  assert.equal(formatKPoints(undefined), "0"); // API not yet returning kPoints
+  assert.equal(formatKPoints(NaN), "0");
 });

@@ -183,17 +183,18 @@ test("indexer: transient error releases the claim so a later tick retries", asyn
   );
 });
 
-test("recordVrfGame upserts by signature (second write wins, no duplicate)", async () => {
+test("recordVrfGame upserts by signature (second write wins, no duplicate); K Points awarded once at the claim's edge", async () => {
   const base = {
     signature: sig(),
     gamePda: pk().toBase58(),
     player: pk().toBase58(),
-    betLamports: 10n,
+    betLamports: 10_000_000n, // 0.01 SOL
     payoutLamports: 20n,
     multiplierBps: 20_000,
     safeReveals: 2,
     mineCount: 3,
     won: true,
+    edgeBps: 100, // not the legacy 200 constant: 0.01 SOL @ 1% = 5 (at 2% it would be 10)
     slot: 7,
     blockTime: new Date().toISOString(),
   };
@@ -204,6 +205,11 @@ test("recordVrfGame upserts by signature (second write wins, no duplicate)", asy
     [base.signature],
   );
   assert.deepEqual(rows, [{ payout: 25, multiplier_bps: 20_000, mine_count: 3 }]);
+  const pts = await query(
+    "select source, total_points, edge_bps, bet_lamports from public.points_ledger where source_key = $1",
+    [base.signature],
+  );
+  assert.deepEqual(pts, [{ source: "game_won", total_points: 5, edge_bps: 100, bet_lamports: 10_000_000 }]);
 });
 
 test("awardPoints is idempotent on (source_key, source)", async () => {
@@ -334,7 +340,7 @@ test("mirrorVrfSettle: tx's own slot + time, referral row from the tx, stats wit
   await m.vrf.mirrorVrfSettle(
     settleSig,
     player,
-    { bet: 1_000_000n, mineCount: 1 } as VrfClaimAccount,
+    { bet: 1_000_000n, mineCount: 1, houseEdgeBps: 200 } as VrfClaimAccount,
     { status: "Won", multiplierBps: 11_199n, safeReveals: 2 } as VrfGameAccount,
   );
 
@@ -351,6 +357,11 @@ test("mirrorVrfSettle: tx's own slot + time, referral row from the tx, stats wit
   assert.deepEqual(agg, { accrued_lamports: 5_000, total_earned: 5_000, referred_volume: 1_000_000 });
   const [ps] = await query("select games_played, biggest_multiplier_bps from public.player_stats where player = $1", [player.toBase58()]);
   assert.deepEqual(ps, { games_played: 4, biggest_multiplier_bps: 11_199 });
+  // K Points for the settle: 0.001 SOL @ the claim's 200 bps = 1, keyed on the settle signature.
+  assert.deepEqual(
+    await query("select player, source, total_points from public.points_ledger where source_key = $1", [settleSig]),
+    [{ player: player.toBase58(), source: "game_won", total_points: 1 }],
+  );
 
   // /api/activity shows it on both sides (the game row shares the settle signature).
   const { GET } = await import("../../app/api/activity/[wallet]/route");
@@ -382,6 +393,70 @@ test("indexer: ReferralClaimed is indexed per signature (referral_claims)", asyn
   assert.deepEqual([r.processed, r.errors], [1, 0], JSON.stringify(r.errorDetails));
   const rows = await query("select referrer, amount, slot, claimed_at from public.referral_claims where signature = $1", [s]);
   assert.deepEqual(rows, [{ referrer: referrer.toBase58(), amount: 20_000, slot: 465_481_000, claimed_at: "2026-11-04T23:08:38+00:00" }]);
+});
+
+test("leaderboard: every row in every view carries kPoints (0 when none); fields and order unchanged", async () => {
+  const { NextRequest } = await import("next/server");
+  const { GET } = await import("../../app/api/leaderboard/route");
+  const earner = pk().toBase58();
+  const none = pk().toBase58();
+  for (const [p, wagered] of [[earner, 9e15], [none, 8e15]] as const) {
+    await m.pg.rpc("idx_apply_stats", {
+      p_player: p, p_games_played: 3, p_games_won: 1, p_total_wagered: wagered, p_total_payouts: 0,
+      p_biggest_win: wagered, p_current_streak: 1, p_best_streak: 99, p_last_played: new Date().toISOString(), p_event_slot: 1,
+    });
+  }
+  for (const [source, bet] of [["game_won", 10_000_000n], ["game_lost", 5_000_000n]] as const) {
+    await m.points.awardPoints({ player: earner, sourceKey: sig(), source, betLamports: bet, edgeBps: 200 });
+  }
+  const views = { alltime: "leaderboard_alltime", volume: "leaderboard_volume", streak: "leaderboard_streaks" };
+  for (const [view, table] of Object.entries(views)) {
+    const res = await GET(new NextRequest(`http://test/api/leaderboard?view=${view}`));
+    const { rows } = (await res.json()) as { rows: Array<Record<string, unknown> & { player: string; kPoints: number }> };
+    const raw = JSON.parse(JSON.stringify(await query(`select * from public.${table} limit 50`)));
+    assert.deepEqual(rows.map(({ kPoints: _k, ...r }) => r), raw, view);
+    assert.ok(rows.every((r) => typeof r.kPoints === "number"), view);
+    assert.equal(rows.find((r) => r.player === earner)?.kPoints, 15, view); // 10 + 5
+    assert.equal(rows.find((r) => r.player === none)?.kPoints, 0, view);
+  }
+});
+
+test("admin backfill-points: current program only, missing rows only, idempotent", async () => {
+  const { GET } = await import("../../app/api/admin/backfill-points/route");
+  process.env.ADMIN_BACKFILL_SECRET = "test-backfill-secret";
+  const call = async (qs = "", token = "test-backfill-secret") =>
+    GET(new Request(`http://test/api/admin/backfill-points${qs}`, { headers: { authorization: `Bearer ${token}` } }) as never);
+  const game = (signature: string, outcome: string, bet: number, slot: number) =>
+    query(
+      "insert into public.games (signature, game, player, bet, mine_count, outcome, commitment, slot) values ($1, $2, $3, $4, 3, $5, $6, $7)",
+      [signature, pk().toBase58(), player, bet, outcome, "0".repeat(64), slot],
+    );
+  const player = pk().toBase58();
+  const [won, lost, credited, old, expired] = [sig(), sig(), sig(), sig(), sig()];
+  await game(won, "won", 10_000_000, 465_500_000);
+  await game(lost, "lost", 5_000_000, 465_500_001);
+  await game(credited, "won", 10_000_000, 465_500_002);
+  await game(old, "won", 10_000_000, 400_000_000); // previous program
+  await game(expired, "expired", 10_000_000, 465_500_003);
+  await m.points.awardPoints({ player, sourceKey: credited, source: "game_won", betLamports: 10_000_000n, edgeBps: 200 });
+  const ledger = (s: string) => query("select source, total_points from public.points_ledger where source_key = $1", [s]);
+
+  assert.equal((await call("", "wrong")).status, 401);
+
+  const dry = await (await call("?dry=1")).json();
+  assert.deepEqual([dry.counts, dry.totals.totalPoints], [{ missing: 2, inserted: 0, notInserted: 0 }, "15"]);
+  assert.deepEqual(await ledger(won), []);
+
+  const run = await (await call()).json();
+  assert.deepEqual(run.counts, { missing: 2, inserted: 2, notInserted: 0 });
+  assert.deepEqual(await ledger(won), [{ source: "game_won", total_points: 10 }]);
+  assert.deepEqual(await ledger(lost), [{ source: "game_lost", total_points: 5 }]);
+  assert.deepEqual(await ledger(credited), [{ source: "game_won", total_points: 10 }]);
+  assert.deepEqual(await ledger(old), []);
+  assert.deepEqual(await ledger(expired), []);
+
+  const again = await (await call()).json();
+  assert.deepEqual(again.counts, { missing: 0, inserted: 0, notInserted: 0 });
 });
 
 test("vault unit-value snapshot is program-scoped; APY uses the reading's real age", async () => {

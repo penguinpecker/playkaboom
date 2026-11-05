@@ -1,5 +1,5 @@
 import "server-only";
-import { upsert } from "./db/pg";
+import { query, upsert } from "./db/pg";
 import { logger } from "./logger";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -17,10 +17,9 @@ import { logger } from "./logger";
 // inputs (bet_lamports, edge_bps, every multiplier) so the row remains
 // auditable even after the formula evolves.
 //
-// IMPORTANT: this module is purely server-side. There is intentionally no
-// `getPointsForPlayer` export yet — the user has asked us to accumulate
-// silently and not expose a frontend surface. When that changes, add a
-// thin reader here that queries the `points_balance` view.
+// Shown publicly as "K Points" (2026-11-05, owner): total_points summed per
+// player (`points_balance.points`), read by `kPointsFor` for the leaderboard
+// only. Earned on every settled round, win or loss; refunds earn nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Divisor that yields 1000 base points for 1 SOL wagered at 2% edge.
@@ -148,4 +147,15 @@ export async function awardPoints(args: AwardPointsInput): Promise<AwardResult> 
     totalPoints,
     inserted: Array.isArray(data) && data.length > 0,
   };
+}
+
+/** K Points per player (lifetime `points_balance.points`); players with no
+ *  ledger rows are absent from the map (show 0). */
+export async function kPointsFor(players: string[]): Promise<Map<string, number>> {
+  if (players.length === 0) return new Map();
+  const rows = await query<{ player: string; points: number }>(
+    "select player, points from public.points_balance where player = any($1)",
+    [players],
+  );
+  return new Map(rows.map((r) => [r.player, r.points]));
 }
