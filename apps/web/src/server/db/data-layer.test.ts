@@ -35,6 +35,7 @@ let m: {
   sessions: typeof import("../session-store");
   vrf: typeof import("../vrf-settle");
   history: typeof import("../vault-history");
+  lpPoints: typeof import("../cron/lp-points-pass");
 };
 const query: typeof import("./pg").query = (sql, params) => m.pg.query(sql, params);
 
@@ -89,6 +90,7 @@ before(async () => {
     sessions: await import("../session-store"),
     vrf: await import("../vrf-settle"),
     history: await import("../vault-history"),
+    lpPoints: await import("../cron/lp-points-pass"),
   };
   const [{ n } = { n: 0 }] = await query<{ n: number }>("select count(*) as n from public.games");
   if (n > 0) throw new Error("public.games has rows: refusing to run on a non-empty database");
@@ -418,6 +420,82 @@ test("leaderboard: every row in every view carries kPoints (0 when none); fields
     assert.ok(rows.every((r) => typeof r.kPoints === "number"), view);
     assert.equal(rows.find((r) => r.player === earner)?.kPoints, 15, view); // 10 + 5
     assert.equal(rows.find((r) => r.player === none)?.kPoints, 0, view);
+  }
+});
+
+const LP_SOL = 1_000_000_000n;
+const lpPosition = (user: PublicKey, units: bigint, pendingUnits = 0n) =>
+  ({ user, units, pendingUnits, pendingUnlockSlot: pendingUnits ? 999n : 0n, createdSlot: 1n, bump: 255 });
+const utcHour = (d: number, h: number, min = 0) => new Date(Date.UTC(2026, 10, d, h, min, 30));
+/** runLpPointsHourly that must have run (not skipped). */
+async function lpRun(...args: Parameters<typeof import("../cron/lp-points-pass").runLpPointsHourly>) {
+  const r = await m.lpPoints.runLpPointsHourly(...args);
+  if (!("credited" in r)) throw new Error(`lp points pass skipped: ${r.skipped}`);
+  return r;
+}
+
+test("lp points: once per UTC hour (re-run, restart and replay add nothing); a pending hour earns nothing, cancel resumes", async () => {
+  const lp = m.lpPoints;
+  lp.resetLpPointsHour();
+  const user = pk();
+  const owner = user.toBase58();
+  // 0.15 SOL at unit value 1 = 1.5 K Points an hour at the default rate.
+  let snap = { positions: [lpPosition(user, (15n * LP_SOL) / 100n)], totalUnits: 10n * LP_SOL, assets: 10n * LP_SOL };
+  const read = async () => snap;
+  const ledger = () =>
+    query("select source_key, total_points from public.points_ledger where player = $1 and source = 'lp_hourly' order by source_key", [owner]);
+
+  const h10 = await lpRun(utcHour(5, 10), read);
+  assert.deepEqual([h10.credited, h10.points], [1, "1"]);
+  assert.deepEqual(await lp.runLpPointsHourly(utcHour(5, 10, 59), read), { skipped: "hour done", hour: "2026-11-05T10" });
+  lp.resetLpPointsHour(); // restart / another replica, same hour: the DB guard holds
+  const again = await lpRun(utcHour(5, 10, 59), read);
+  assert.deepEqual([again.earning, again.credited, again.points], [1, 0, "0"]);
+  assert.equal(await lp.creditLpHour(owner, 100n * LP_SOL, 10_000_000n, "2026-11-05T10"), null);
+
+  assert.equal((await lpRun(utcHour(5, 11), read)).points, "2"); // 3.0 total
+  snap = { ...snap, positions: [lpPosition(user, (5n * LP_SOL) / 100n, (10n * LP_SOL) / 100n)] }; // request_withdraw
+  const h12 = await lpRun(utcHour(5, 12), read);
+  assert.deepEqual([h12.positions, h12.earning, h12.credited], [1, 0, 0]);
+  snap = { ...snap, positions: [lpPosition(user, (15n * LP_SOL) / 100n)] }; // cancel_withdraw
+  lp.resetLpPointsHour(); // restart later in hour 12, after the cancel: still nothing for hour 12
+  const h12b = await lpRun(utcHour(5, 12, 59), read);
+  assert.deepEqual([h12b.earning, h12b.credited, h12b.points], [1, 0, "0"]);
+  assert.equal((await lpRun(utcHour(5, 13), read)).points, "1"); // 4.5 total
+  assert.equal(await lp.creditLpHour(owner, LP_SOL, 10_000_000n, "2026-11-05T11"), null, "an older hour cannot be replayed");
+
+  assert.deepEqual(await ledger(), [
+    { source_key: `lp:${owner}:2026-11-05T10`, total_points: 1 },
+    { source_key: `lp:${owner}:2026-11-05T11`, total_points: 2 },
+    { source_key: `lp:${owner}:2026-11-05T13`, total_points: 1 },
+  ]);
+  assert.deepEqual(
+    await query("select accrued_e15::text as acc, last_hour from public.lp_points_accrual where owner = $1", [owner]),
+    [{ acc: "4500000000000000", last_hour: "2026-11-05T13:00:00+00:00" }],
+  );
+});
+
+test("leaderboard kPoints includes LP K Points", async () => {
+  const { NextRequest } = await import("next/server");
+  const { GET } = await import("../../app/api/leaderboard/route");
+  const user = pk();
+  const owner = user.toBase58();
+  await m.pg.rpc("idx_apply_stats", {
+    p_player: owner, p_games_played: 1, p_games_won: 1, p_total_wagered: 1e16, p_total_payouts: 0,
+    p_biggest_win: 1e16, p_current_streak: 1, p_best_streak: 1000, p_last_played: new Date().toISOString(), p_event_slot: 1,
+  });
+  await m.points.awardPoints({ player: owner, sourceKey: sig(), source: "game_won", betLamports: 10_000_000n, edgeBps: 200 }); // 10
+  m.lpPoints.resetLpPointsHour();
+  const r = await lpRun(utcHour(6, 0), async () => ({
+    positions: [lpPosition(user, 2n * LP_SOL)],
+    totalUnits: 4n * LP_SOL,
+    assets: 6n * LP_SOL, // unit value 1.5: 3 SOL -> 30 K Points
+  }));
+  assert.equal(r.points, "30");
+  for (const view of ["alltime", "volume", "streak"]) {
+    const res = await GET(new NextRequest(`http://test/api/leaderboard?view=${view}`));
+    const { rows } = (await res.json()) as { rows: Array<{ player: string; kPoints: number }> };
+    assert.equal(rows.find((x) => x.player === owner)?.kPoints, 40, view);
   }
 });
 

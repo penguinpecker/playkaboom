@@ -4,6 +4,7 @@ import { indexProgramEvents } from "./indexer-pass";
 import { runVrfPasses } from "./vrf-passes";
 import { runLegacyPasses } from "./legacy-passes";
 import { runLpAutoComplete } from "./lp-pass";
+import { runLpPointsHourly } from "./lp-points-pass";
 import { runVaultHealth } from "./vault-health-pass";
 import { runInvariants } from "./invariants-pass";
 import { snapshotVaultUnitValue } from "../vault-history";
@@ -20,6 +21,8 @@ export const PASSES: CronPass[] = [
   { name: "vrf", everyMs: 0, run: runVrfPasses }, // 9.3 a, b, c, c'
   { name: "legacy", everyMs: 5 * MIN, run: runLegacyPasses }, // 9.3 d, e
   { name: "lp-complete", everyMs: 0, run: runLpAutoComplete }, // 9.3 f
+  // Hourly: credits once per UTC hour at its first tick; the other ticks return at once.
+  { name: "lp-points", everyMs: 0, run: () => runLpPointsHourly() },
   { name: "vault-health", everyMs: 15 * MIN, run: runVaultHealth },
   { name: "vault-snapshot", everyMs: 15 * MIN, run: () => snapshotVaultUnitValue() }, // LP return history
   { name: "invariants", everyMs: 24 * 60 * MIN, run: runInvariants },

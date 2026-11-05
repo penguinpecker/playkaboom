@@ -26,7 +26,7 @@ import { logger } from "../logger";
  * payer its wallet is not empty). Positions past the window
  * are only logged: the LP restarts them (cancel + request).
  */
-const LP_POSITION_DATASIZE = 121;
+export const LP_POSITION_DATASIZE = 121;
 const MAX_PER_PASS = 20;
 // Where the next pass starts in `due`, so positions that keep failing at the
 // head of the (stable) getProgramAccounts order cannot starve the rest.

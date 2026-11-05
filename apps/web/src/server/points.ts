@@ -37,7 +37,8 @@ export type PointsSource =
   | "streak_bonus"
   | "race_payout"
   | "referral"
-  | "manual_adjust";
+  | "manual_adjust"
+  | "lp_hourly"; // hourly LP K Points, written by cron/lp-points-pass.ts
 
 export interface AwardPointsInput {
   player: string;

@@ -85,6 +85,20 @@ export function vrfModeEnabled(): boolean {
   return process.env.VRF_MODE_ENABLED === "true";
 }
 
+/**
+ * LP K Points rate: K_POINTS_LP_PER_SOL_HOUR K Points per SOL of LP value per
+ * hour (default 10), returned in millionths so the hourly accrual is exact
+ * BigInt maths. Anything but a number > 0 throws (never a silent default).
+ */
+export function kPointsLpPerSolHourMicro(): bigint {
+  const raw = process.env.K_POINTS_LP_PER_SOL_HOUR?.trim();
+  const micro = Math.round((raw ? Number(raw) : 10) * 1e6);
+  if (!Number.isSafeInteger(micro) || micro <= 0) {
+    throw new Error(`K_POINTS_LP_PER_SOL_HOUR must be a number > 0 (got "${raw}")`);
+  }
+  return BigInt(micro);
+}
+
 export function logLevel(): string {
   return process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "info" : "debug");
 }
