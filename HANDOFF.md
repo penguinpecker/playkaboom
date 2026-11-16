@@ -17,13 +17,23 @@ A self-contained snapshot to pick up where the last session left off. Top sectio
 
 Total to `6zuP…` on 2026-11-16: **1.597408712 SOL**. Total back to `77QX…`: 0.073690764 SOL.
 
-What is left, and why:
-- **The 36-byte program account (0.00083312 SOL).** The loader's close never debits it. Permanent.
-- **Squads** (multisig `H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm`, 2-of-2, members `6wvv…` and `Echy…`): ~0.158 SOL of rent in 30 old transaction/proposal pairs and 0.0134 SOL in the Squads vault `464Fe…`. Recovering them needs both members: set a rent collector (open config proposals #28/#29 target `464Fe…`), cancel the 6 approved-but-unexecuted proposals, close the pairs, then one vault transfer. The multisig account itself holds 0.1223 SOL (0.12 SOL sent to it by mistake on 2026-05-07) and Squads v4 has no instruction to withdraw it.
-- **Old Turnkey house wallet** `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp`: 0.024 SOL, movable only from the Turnkey dashboard.
-- **Per-round session keys:** three hold 0.002 SOL each. They are created and funded by the player's browser and swept back to the player from that browser; the server never had them.
-- **Old program `9Xip2L…`:** ~0.090 SOL in 39 accounts and its program account, stranded since the 2026-10-05 close.
-- **Off-chain:** the Vercel frontend and the Railway API, Postgres and relay were still running when the program closed. The scheduled GitHub workflows were disabled on 2026-11-16.
+**SOL still on chain after the dissolve** (balances read 2026-11-16, after the last sweep):
+
+| Where | SOL | Can it come back? |
+|---|---|---|
+| Squads: 30 old transaction/proposal pairs (60 accounts) under multisig `H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm` | 0.157898080 | Yes, with both members (`6wvv…`, `Echy…`): set a rent collector (open config proposals #28/#29 point it at `464Fe…`; a new one pointing at `6zuP…` is better), cancel the 6 approved-but-unexecuted proposals (#2, 5, 7, 13, 16, 17), reject #29, then anyone can close the pairs |
+| Squads vault `464FeYivixKQ3azagAoKJDH6NTKGrQodYSeMyyPP8VP5` | 0.013394067 | Yes, one vault transaction created by `6wvv…` (`Echy…` holds only 0.00089 SOL), approved by both |
+| Old Turnkey house wallet `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp` | 0.024027573 | Yes, from the Turnkey dashboard (the owner already moved the rest) |
+| Two session keys of the owner wallet `497g…` | 0.004 | Only from the browser that played those rounds, and only while playkaboom.gg and its RPC proxy are up: opening the site there, logged in as `497g…`, sweeps them back. They are created and funded by the player's browser; the server never had them |
+| Squads multisig account `H8Md…` itself | 0.122288960 | No. 0.12 SOL was sent to it by mistake on 2026-05-07, and Squads v4 has no instruction to withdraw it |
+| Old program `9Xip2L…`: 39 accounts + its program account | 0.090345056 | No. Stranded since the 2026-10-05 close |
+| `Ednka8zj…` program account (36 bytes) | 0.000833120 | No. The loader's close never debits it |
+| Session key of QA wallet `BvGT…` | 0.002 | No. Its key was lost on 2026-11-05 |
+
+Open owner decisions:
+- **Off-chain teardown.** The Vercel frontend (`playkaboom.gg`, `www`, `status`) and the Railway API, Postgres and relay were still running when the program closed. They spend no SOL (the house key is empty, so the 60 s cron tick fails harmlessly), but Railway keeps billing. Back up Postgres (K Points history) before deleting it. Decide whether to keep the domain and the Solana dApp Store listing, and whether to post a closure notice on X.
+- **Squads recovery** (rows 1 and 2 above, 0.171 SOL) needs both member wallets.
+- The scheduled GitHub workflows (index, indexer tick, invariants, stuck obligations, vault health, VRF settle) were disabled on 2026-11-16 with `gh workflow disable`; CI and CodeQL stay on.
 - Keep `keypairs/program-keypair-mainnet-pinocchio.json`: if SIMD-0432 ships, it is the only key that can free the address.
 
 **Every section below this one is history.**
