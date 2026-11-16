@@ -1,6 +1,32 @@
 # PlayKaboom — Session Handoff
 
-A self-contained snapshot to pick up where the last session left off. Top section refreshed **2026-11-05** (relaunch, K Points); the rest was refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
+A self-contained snapshot to pick up where the last session left off. Top section refreshed **2026-11-16** (program dissolved and closed, all SOL recovered); the 2026-11-05 relaunch section below it was refreshed 2026-11-10; the rest was refreshed **2026-08-09** (security review, off-chain hardening deployed, footer + Terms rewrite). Full session-by-session log lives in `records.txt` (local-only, gitignored), durable lessons in `learnings.txt` (same).
+
+## STATUS — 2026-11-16: DISSOLVED (program closed, SOL recovered)
+
+**The relaunched program `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` was wound down and closed on 2026-11-16.** Every account it owned was closed before the program itself, so nothing is stranded under it. All operator SOL went to the owner wallet `6zuPtQg1rygxNgzZmjn13YB3bqMGiMLbPAWbrbvwJykg`; the one outside LP (`77QX…`) got its full vault share and its own account rent back. Every on-chain game and vault call now fails; the program ID can never be redeployed.
+
+| Step | Transaction | Result |
+|---|---|---|
+| 1. Pause and pay out the vault (current program, deployer signs) | `21taQLKQzWBiD3sj67d1P98FP8ve9o6tcj9udUx9H52goM6H2wocBLvPXQKyGRGJ7LrSraUwp9ru2DmzdxtXBCBo` | `paused = true`; `77QX…` got 0.070744364 SOL (its exact share, rounded up in its favour); the owner-held LP shares (0.030905986 SOL) went to `6zuP…`; vault left at its rent, allowlist empty |
+| 2. Upgrade in place to the drain program (`pinocchio/drain`) | `28RTksABiqcJgRfsNbL15L7pBL9EGLJpG9bcfdtgXuqLVeuKBMaME13EBF58XK7vZScXF8n3omFekRyVQ5kesQZF` | 13,008-byte build, sha256 `8b78236c…968ae84d`, verified on chain before use. The live build it replaced (sha256 `bb291333…9732023c`) is kept in the local archive |
+| 3. Drain every program-owned account | `32tfSvZuhZFhHRkqN5P3RuT6eoybSFUE1bHgbhzGvavsWcub8kRFUX2oQ2qMV9nWiKkmcmqPtUUhxrbydwGc9y4c` | closed all 10 accounts (Vault, VaultV2State, 3 LpPosition, 4 PlayerStats, 1 ReferralAccount), built from a live finalized scan: 0.013192760 SOL → `6zuP…`, 0.002946400 SOL (the rent of its own two accounts) → `77QX…`. Program then owned 0 accounts |
+| 4. `solana program close` | `2ybULFgrBzuy9n1a7BCHsS7HkRXorSjEeyC48JU3Z2R2kRwJUcpRDUgs5rfpvWkqT8VfohjVYDBDPTmJR9ECbyJn` | 1.03163116 SOL (ProgramData rent) → `6zuP…` |
+| 5. Close the deployer's OtterSec verify account for the old program | `3DAVBTgtZxjbDrRzoJM6VAxmFTbhet9uaPUi59VrC6v4yiB5M929vTcxB73cC78hVchKb3NGfRKpxn3YSUGs5s8J` | 0.00284664 SOL rent back to the deployer (missed by the 2026-10-05 close) |
+| 6. Sweep the wallets | house key `8h7a…`, the three QA wallets, then the deployer `qouU…` last | all five now hold 0 SOL |
+
+Total to `6zuP…` on 2026-11-16: **1.597408712 SOL**. Total back to `77QX…`: 0.073690764 SOL.
+
+What is left, and why:
+- **The 36-byte program account (0.00083312 SOL).** The loader's close never debits it. Permanent.
+- **Squads** (multisig `H8MdHx8pHvhrA5kTziSFszKNWMVJ1SUorR8hmezTdoUm`, 2-of-2, members `6wvv…` and `Echy…`): ~0.158 SOL of rent in 30 old transaction/proposal pairs and 0.0134 SOL in the Squads vault `464Fe…`. Recovering them needs both members: set a rent collector (open config proposals #28/#29 target `464Fe…`), cancel the 6 approved-but-unexecuted proposals, close the pairs, then one vault transfer. The multisig account itself holds 0.1223 SOL (0.12 SOL sent to it by mistake on 2026-05-07) and Squads v4 has no instruction to withdraw it.
+- **Old Turnkey house wallet** `7exwTWn1ChVyQZF5mTxZM1UNrPpj1nQKhhvXztR4prQp`: 0.024 SOL, movable only from the Turnkey dashboard.
+- **Per-round session keys:** three hold 0.002 SOL each. They are created and funded by the player's browser and swept back to the player from that browser; the server never had them.
+- **Old program `9Xip2L…`:** ~0.090 SOL in 39 accounts and its program account, stranded since the 2026-10-05 close.
+- **Off-chain:** the Vercel frontend and the Railway API, Postgres and relay were still running when the program closed. The scheduled GitHub workflows were disabled on 2026-11-16.
+- Keep `keypairs/program-keypair-mainnet-pinocchio.json`: if SIMD-0432 ships, it is the only key that can free the address.
+
+**Every section below this one is history.**
 
 ## STATUS — 2026-11-05: RELAUNCHED (Pinocchio, VRF-only, Railway API + Vercel frontend)
 
@@ -21,7 +47,9 @@ A self-contained snapshot to pick up where the last session left off. Top sectio
 | VRF validator | `MAS1Dt9qreoRMQ14YQuhg8UTZMMzDdKhmkZMECCzk57` | `as.magicblock.app` |
 | `vrf_max_payout_bps` | 5000 (50%) | an AGGREGATE cap over every open VRF game, not per game; set by the owner 2026-11-05 |
 | Min bet (UI) | 0.01 SOL | `GAME_CONFIG.MIN_BET_SOL`; MagicBlock keeps ~0.003 SOL per delegated round on top |
-| Vault | ~1.075 SOL on 2026-11-05 | owner rule: keep the vault at about 1 SOL; live values at `/api/vault/state` |
+| Vault | **~0.104 SOL on 2026-11-10, all of it user LP money**: `77QX…` 0.0707, `497g…` 0.0201, `94gF…` 0.0108 | the operator stake (1.0 SOL seed + house units) was withdrawn on 2026-11-09, see below; `seed_units` and house units are now 0. Owner rule: the owner's own money in the vault is at most ~1 SOL. Live values at `/api/vault/state` |
+| `min_house_share_bps` | 0 (off) | owner decision 2026-11-05: at 50% with ~0.01 SOL of house units every LP deposit reverted 6033 |
+| `max_user_position_bps` | 1000 (10%, scaled by health) | sets the max single deposit (~0.010 SOL on 2026-11-10) |
 
 **House key.** A raw keypair, held only as the sealed Railway variable `HOUSE_SECRET_KEY` on the kaboom-web service (`apps/web/src/server/house-signer.ts`). It can only do bounded cleanup and settlement: VRF settle, force-undelegate and refund, legacy wind-down, and LP auto-complete. Because the program is VRF-only, it cannot start a commit-reveal game. It is never on Vercel and never in the repo.
 
@@ -41,10 +69,22 @@ Runbook: `pinocchio/MIGRATION/DEPLOY.md` (DNS stays on Vercel; there is no DNS m
 - **Payout speed.** House txs use a confirmed blockhash and retry the empty-logs preflight case; `/api/vrf/settle` polls its own read before answering; the client retries settle on 409/429/5xx; the RPC proxy has its own 300/10 s budget per client (client IP forwarded by the Vercel middleware with a shared secret).
 - **Session keys** are kept until their gas sweep is confirmed; the LP deposit cap applies the house-share floor; `/api/verify` reports refunds; maintenance banner removed; link-preview image `og.png` is opaque on the brand background (`?v=2`).
 - **Real-money check:** 30 rounds (1 mine, 0.01 SOL): every payout, VRF replay, treasury cut and referral accrual matched the chain exactly; the referrer's claim paid in full.
+- **Vault deposits open** (house-share floor off, see table). The LP panel now refuses an amount above the vault's reported cap and shows decoded program errors (`decodeProgramError`), never the raw simulation log. After the change: 3 LP deposits and 6 games, all settled, 0 failed transactions (to 2026-11-05 22:03 IST).
+- **Hourly LP K Points verified:** the 12:00 UTC pass on 2026-11-05 ran, and the 0.01 SOL test position reached +5 points over two days. The pass logs nothing on success; read its outcome from `GET /api/cron/tick` (`passes["lp-points"]`).
+
+**2026-11-09: operator stake withdrawn** (owner request "pull the sol from kaboom vault", made during the fund/raise teardown):
+- One deployer transaction ran `AllowlistAdd` + `UnlockOperatorPosition` + `AllowlistRemove` (`yKdfPbW2WxgYQGPgi3EJGDUWYTu7zoJhFBoxEngXPffpNRUJABXsPVdMUv9JmH2jv75EybYfDJYi1jdNEQjrFH1`, 19:02 IST). 1.0930 SOL went from the vault to the deployer `qouU…`. User LP positions were not touched, and the allowlist is empty again.
+- That 1.0 SOL seed had come from fund/raise's wallet `6zuP…` on 2026-11-05, so the deployer sent 1.0 SOL back to fund/raise's deployer `CiYd…` (`4VYYYsBb…`, 22:48 IST).
+- Balances on 2026-11-10: deployer `qouU…` 0.379 SOL, house key `8h7a…` 0.0997 SOL.
+- **No round can start now.** The max bet is 2% of vault assets: 0.002 SOL, below the 0.01 SOL minimum bet, so the bet panel refuses every bet with its over-cap reason. A 0.01 SOL bet needs at least ~0.5 SOL in the vault. Last game: 2026-11-08 21:14 IST. Since 2026-11-05 22:03 IST there have been 8 program transactions and 0 failures.
+- Hourly LP K Points keep running: `77QX…` went from 54 to 102. Totals on 2026-11-10: `BvGT…` 244, `497g…` 213, `77QX…` 102, `94gF…` 54.
+- Address-poisoning dust reached the deployer on 2026-11-09 (`5ytPHDiow1…`, zero-value transfers from `421d21…`). Never copy an address from the deployer's history.
 
 Open owner decisions:
-- `min_house_share_bps` is 50% with tiny house units, so the LP max deposit is 0 (LP deposits revert). Lower it or keep LP closed.
+- **Reopen play or not.** With only ~0.10 SOL of LP money in the vault no bet fits. The route is a `house_deposit` (`buildHouseDeposit`) of up to ~1 SOL of the owner's money, signed by `vault.owner`. A plain LP deposit won't work because the 10% per-wallet cap limits one deposit to ~0.010 SOL today. Lowering the minimum bet doesn't help: MagicBlock alone keeps ~0.003 SOL per round.
 - Whether to show MagicBlock's ~0.003 SOL per-round fee in the game UI.
+- Whether `/logs` should list refunded rounds (today it shows settled games only, so a refunded round leaves no row).
+- One round on 2026-11-05 (20:14 IST, new wallet) had no tap reach the rollup and was refunded by the stall path after 5 minutes. Unexplained: no client logs. The same wallet's next round settled normally. Asked the owner whether it was their test.
 - Frontend shakedown (test browser + one Privy email login) still to run; MAX button and mine-count selection by vault capacity still pending.
 
 Owner to-dos:

@@ -24,6 +24,11 @@ before the first tap, with each reveal signed by the house key) is retired: the 
 program rejects new commit-reveal games (`start_game` returns 6057 `LegacyModeDisabled`) and
 keeps only the instructions that wind down old ones.
 
+> **Status — 2026-11-16: closed.** The program below was wound down and closed on 2026-11-16:
+> the vault was paid out (the outside LP got its full share back), every account the program
+> owned was closed, and then the program itself. On-chain play and vault deposits no longer
+> work. Details and transaction signatures are in [HANDOFF.md](HANDOFF.md).
+>
 > **Status — 2026-11-05.** Relaunched on mainnet under a new program ID,
 > `Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju` (a Pinocchio port, VRF-only). The old program
 > `9Xip2LRCgC8ucvkYuBQ8jzEsPV74YBnFG1BBeZa98QSh` was closed on 2026-10-05. Turnkey and Supabase
@@ -47,7 +52,7 @@ keeps only the instructions that wind down old ones.
 | Vault state (JSON) | <https://playkaboom.gg/api/vault/state> |
 | Cluster | `mainnet-beta` |
 | Rollup | MagicBlock ephemeral rollup, pinned validator + pinned VRF oracle queue |
-| Program | [`Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju`](https://solscan.io/account/Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju) (Pinocchio, VRF-only) |
+| Program | [`Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju`](https://solscan.io/account/Ednka8zjoYbE7T6iF9NHHXotaXCrbJn4Mta376cunhju) (Pinocchio, VRF-only; closed 2026-11-16) |
 
 The only key the server holds is the house key: a raw keypair kept only as a sealed variable
 on the Railway API service (never on Vercel, never in the repo). It is confined to bounded
